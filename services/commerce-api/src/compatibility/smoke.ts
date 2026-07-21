@@ -1,0 +1,462 @@
+/**
+ * Smoke: health + catalog + full checkout path against GRAPHQL_URL.
+ *
+ * Required for checkout steps:
+ *   SMOKE_USERNAME / SMOKE_PASSWORD  — WP customer credentials
+ *   API .env consumerKey / consumerSecret (or WC_CONSUMER_*) — for placeOrder (checkout)
+ *
+ * Optional:
+ *   GRAPHQL_URL=http://127.0.0.1:4000/graphql
+ *   SMOKE_PRODUCT_ID=<databaseId>  — skip catalog pick
+ *   SMOKE_SKIP_CHECKOUT=1          — stop before placeOrder
+ */
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
+const envPath = resolve(process.cwd(), ".env");
+if (existsSync(envPath)) process.loadEnvFile(envPath);
+
+const endpoint = process.env.GRAPHQL_URL || "http://127.0.0.1:4000/graphql";
+const username = process.env.SMOKE_USERNAME || "";
+const password = process.env.SMOKE_PASSWORD || "";
+const skipCheckout = process.env.SMOKE_SKIP_CHECKOUT === "1";
+
+type GqlError = { message: string; extensions?: { code?: string } };
+type GqlJson = { data?: Record<string, unknown> | null; errors?: GqlError[] };
+
+type Session = {
+  token: string | null;
+  auth: string | null;
+};
+
+type Timing = { step: string; ms: number; ok: boolean };
+const timings: Timing[] = [];
+
+function recordTiming(step: string, ms: number, succeeded: boolean) {
+  timings.push({ step, ms: Math.round(ms), ok: succeeded });
+}
+
+function fail(step: string, detail: unknown, ms?: number): never {
+  if (ms != null) recordTiming(step, ms, false);
+  const time = ms != null ? ` ${Math.round(ms)}ms` : "";
+  console.error(`FAIL${time} ${step}`, detail);
+  process.exitCode = 1;
+  throw new Error(`${step} failed`);
+}
+
+function ok(step: string, detail?: unknown, ms?: number) {
+  if (ms != null) recordTiming(step, ms, true);
+  const time = ms != null ? ` ${Math.round(ms)}ms` : "";
+  if (detail === undefined) console.log(`ok${time} ${step}`);
+  else
+    console.log(
+      `ok${time} ${step}`,
+      typeof detail === "string" ? detail : JSON.stringify(detail),
+    );
+}
+
+function printTimingSummary() {
+  if (!timings.length) return;
+  const requests = timings.filter((t) => t.step !== "wall");
+  const wall = timings.find((t) => t.step === "wall");
+  const sum = requests.reduce((s, t) => s + t.ms, 0);
+  const width = Math.max(...timings.map((t) => t.step.length), 8);
+  console.log("\n--- timings ---");
+  for (const t of requests) {
+    const mark = t.ok ? " " : "!";
+    console.log(`${mark} ${t.step.padEnd(width)}  ${String(t.ms).padStart(5)}ms`);
+  }
+  console.log(`  ${"sum".padEnd(width)}  ${String(sum).padStart(5)}ms`);
+  if (wall) {
+    console.log(`  ${"wall".padEnd(width)}  ${String(wall.ms).padStart(5)}ms`);
+  }
+}
+
+async function gql(
+  session: Session,
+  query: string,
+  variables?: Record<string, unknown>,
+): Promise<{ status: number; json: GqlJson; ms: number }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (session.token) headers["woocommerce-session"] = `Session ${session.token}`;
+  if (session.auth) headers.Authorization = `Bearer ${session.auth}`;
+
+  const started = performance.now();
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, variables }),
+  });
+
+  const rawSession = res.headers.get("woocommerce-session");
+  const m = rawSession?.match(/^\s*Session\s+(\S+)\s*$/i);
+  if (m) session.token = m[1];
+
+  const json = (await res.json()) as GqlJson;
+  return { status: res.status, json, ms: performance.now() - started };
+}
+
+async function mustGql<T>(
+  session: Session,
+  step: string,
+  query: string,
+  variables?: Record<string, unknown>,
+): Promise<{ data: T; ms: number }> {
+  const { status, json, ms } = await gql(session, query, variables);
+  if (status >= 500) fail(step, { status, json }, ms);
+  if (json.errors?.length) fail(step, json.errors, ms);
+  if (!json.data) fail(step, { message: "no data", json }, ms);
+  return { data: json.data as T, ms };
+}
+
+async function main() {
+  const session: Session = { token: null, auth: null };
+  const smokeStarted = performance.now();
+
+  {
+    const started = performance.now();
+    const health = await fetch(endpoint.replace(/\/graphql$/, "/health"));
+    const healthBody = await health.text();
+    const ms = performance.now() - started;
+    if (health.status !== 200) fail("health", { status: health.status, healthBody }, ms);
+    ok("health", healthBody, ms);
+  }
+
+  // --- catalog ---
+  type ProductNode = {
+    databaseId: number;
+    name: string;
+    __typename?: string;
+    price?: string | null;
+  };
+  type ProductsData = {
+    products: { nodes: Array<ProductNode | null> | null } | null;
+  };
+  const { data: productsData, ms: productsMs } = await mustGql<ProductsData>(
+    session,
+    "GetProducts",
+    `query GetProducts($first: Int = 10) {
+      products(first: $first, where: { status: "publish" }) {
+        nodes {
+          databaseId
+          name
+          __typename
+          ... on SimpleProduct { price }
+          ... on VariableProduct { price }
+        }
+      }
+    }`,
+  );
+  const nodes = (productsData.products?.nodes ?? []).filter(
+    (n): n is ProductNode => Boolean(n?.databaseId),
+  );
+  ok("GetProducts", { count: nodes.length }, productsMs);
+
+  const forcedId = process.env.SMOKE_PRODUCT_ID
+    ? Number(process.env.SMOKE_PRODUCT_ID)
+    : null;
+  const product =
+    (forcedId
+      ? nodes.find((n) => n.databaseId === forcedId)
+      : nodes.find((n) => n.__typename === "SimpleProduct")) ?? nodes[0];
+  if (!product?.databaseId) fail("pickProduct", "no publish products");
+  ok("pickProduct", { databaseId: product.databaseId, name: product.name });
+
+  if (!username || !password) {
+    fail(
+      "credentials",
+      "Set SMOKE_USERNAME and SMOKE_PASSWORD in .env for checkout smoke",
+    );
+  }
+
+  // --- login ---
+  type LoginData = {
+    login: {
+      authToken: string;
+      sessionToken: string | null;
+      customer: { id: string; databaseId: number; email: string } | null;
+    } | null;
+  };
+  const { data: loginData, ms: loginMs } = await mustGql<LoginData>(
+    session,
+    "login",
+    `mutation Login($input: LoginInput!) {
+      login(input: $input) {
+        authToken
+        sessionToken
+        customer { id databaseId email }
+      }
+    }`,
+    {
+      input: {
+        provider: "PASSWORD",
+        credentials: { username, password },
+      },
+    },
+  );
+  const authToken = loginData.login?.authToken;
+  const customerId = loginData.login?.customer?.databaseId;
+  const customerGid = loginData.login?.customer?.id;
+  if (!authToken || !customerId || !customerGid) fail("login", loginData, loginMs);
+  session.auth = authToken;
+  if (loginData.login?.sessionToken) session.token = loginData.login.sessionToken;
+  ok("login", { customerId, email: loginData.login?.customer?.email }, loginMs);
+
+  type CartContents = {
+    cart: {
+      contents: {
+        itemCount: number;
+        nodes: Array<{ key: string; quantity: number } | null> | null;
+      } | null;
+    } | null;
+  };
+  const cartQuery = `query GetCart {
+    cart {
+      contents {
+        itemCount
+        nodes { key quantity }
+      }
+    }
+  }`;
+  const cartFields = `
+    cart {
+      contents {
+        itemCount
+        nodes { key quantity }
+      }
+    }
+  `;
+
+  const { data: cartAfterLogin, ms: cartLoginMs } = await mustGql<CartContents>(
+    session,
+    "getCart(afterLogin)",
+    cartQuery,
+  );
+  ok(
+    "getCart(afterLogin)",
+    { itemCount: cartAfterLogin.cart?.contents?.itemCount ?? 0 },
+    cartLoginMs,
+  );
+
+  // --- addToCart ---
+  const { data: added, ms: addMs } = await mustGql<{ addToCart: CartContents }>(
+    session,
+    "addToCart",
+    `mutation AddToCart($input: AddToCartInput!) {
+      addToCart(input: $input) { ${cartFields} }
+    }`,
+    { input: { productId: product.databaseId, quantity: 1 } },
+  );
+  const afterAdd = added.addToCart?.cart?.contents;
+  const itemKey = afterAdd?.nodes?.find(Boolean)?.key;
+  if (!itemKey || (afterAdd?.itemCount ?? 0) < 1) fail("addToCart", added, addMs);
+  ok("addToCart", { itemCount: afterAdd?.itemCount, key: itemKey }, addMs);
+
+  const { data: cartAfterAdd, ms: cartAddMs } = await mustGql<CartContents>(
+    session,
+    "getCart(afterAdd)",
+    cartQuery,
+  );
+  ok(
+    "getCart(afterAdd)",
+    { itemCount: cartAfterAdd.cart?.contents?.itemCount ?? 0 },
+    cartAddMs,
+  );
+
+  // --- updateQuantity ---
+  const { data: updated, ms: updateMs } = await mustGql<{
+    updateItemQuantities: CartContents;
+  }>(
+    session,
+    "updateItemQuantities",
+    `mutation UpdateQty($input: UpdateItemQuantitiesInput!) {
+      updateItemQuantities(input: $input) { ${cartFields} }
+    }`,
+    { input: { items: [{ key: itemKey, quantity: 2 }] } },
+  );
+  const qty =
+    updated.updateItemQuantities?.cart?.contents?.nodes?.find((n) => n?.key === itemKey)
+      ?.quantity;
+  if (qty !== 2) fail("updateItemQuantities", updated, updateMs);
+  ok("updateItemQuantities", { quantity: qty }, updateMs);
+
+  // --- removeFromCart ---
+  const { data: removed, ms: removeMs } = await mustGql<{
+    removeItemsFromCart: CartContents;
+  }>(
+    session,
+    "removeItemsFromCart",
+    `mutation Remove($input: RemoveItemsFromCartInput!) {
+      removeItemsFromCart(input: $input) { ${cartFields} }
+    }`,
+    { input: { keys: [itemKey] } },
+  );
+  if ((removed.removeItemsFromCart?.cart?.contents?.itemCount ?? -1) !== 0) {
+    fail("removeItemsFromCart", removed, removeMs);
+  }
+  ok("removeItemsFromCart", { itemCount: 0 }, removeMs);
+
+  // Re-add for placeOrder
+  const { data: reAdded, ms: reAddMs } = await mustGql<{ addToCart: CartContents }>(
+    session,
+    "addToCart(re)",
+    `mutation AddToCart($input: AddToCartInput!) {
+      addToCart(input: $input) { ${cartFields} }
+    }`,
+    { input: { productId: product.databaseId, quantity: 1 } },
+  );
+  if ((reAdded.addToCart?.cart?.contents?.itemCount ?? 0) < 1) {
+    fail("addToCart(re)", reAdded, reAddMs);
+  }
+  ok("addToCart(re)", { itemCount: reAdded.addToCart?.cart?.contents?.itemCount }, reAddMs);
+
+  // Billing/shipping for checkout
+  const { ms: addressMs } = await mustGql(
+    session,
+    "updateCustomer(address)",
+    `mutation UpdateCustomer($input: UpdateCustomerInput!) {
+      updateCustomer(input: $input) {
+        customer { databaseId billing { country postcode } }
+      }
+    }`,
+    {
+      input: {
+        billing: {
+          firstName: "Smoke",
+          lastName: "Test",
+          address1: "1 Test St",
+          city: "Auckland",
+          state: "AUK",
+          postcode: "1010",
+          country: "NZ",
+          email: loginData.login?.customer?.email,
+          phone: "0210000000",
+          overwrite: true,
+        },
+        shipping: {
+          firstName: "Smoke",
+          lastName: "Test",
+          address1: "1 Test St",
+          city: "Auckland",
+          state: "AUK",
+          postcode: "1010",
+          country: "NZ",
+          overwrite: true,
+        },
+        shippingSameAsBilling: true,
+      },
+    },
+  );
+  ok("updateCustomer(address)", undefined, addressMs);
+
+  if (skipCheckout) {
+    ok("placeOrder", "skipped (SMOKE_SKIP_CHECKOUT=1)");
+  } else {
+    type CheckoutData = {
+      checkout: {
+        result: string | null;
+        order: { databaseId: number; status: string; total: string } | null;
+      } | null;
+    };
+    const { data: checkoutData, ms: checkoutMs } = await mustGql<CheckoutData>(
+      session,
+      "placeOrder",
+      `mutation Checkout($input: CheckoutInput!) {
+        checkout(input: $input) {
+          result
+          order { databaseId status total }
+        }
+      }`,
+      {
+        input: {
+          paymentMethod: "stripe",
+          customerNote: "commerce-api smoke test",
+          shipToDifferentAddress: false,
+        },
+      },
+    );
+    const order = checkoutData.checkout?.order;
+    if (!order?.databaseId) fail("placeOrder", checkoutData, checkoutMs);
+    ok(
+      "placeOrder",
+      {
+        orderId: order.databaseId,
+        status: order.status,
+        total: order.total,
+        result: checkoutData.checkout?.result,
+      },
+      checkoutMs,
+    );
+  }
+
+  // --- list orders ---
+  type OrdersData = {
+    customer: {
+      databaseId: number;
+      orders: { nodes: Array<{ databaseId: number; status: string; total: string } | null> | null };
+    } | null;
+  };
+  const { data: ordersData, ms: ordersMs } = await mustGql<OrdersData>(
+    session,
+    "listOrders",
+    `query CustomerOrders($id: ID!) {
+      customer(id: $id) {
+        databaseId
+        orders {
+          nodes { databaseId status total }
+        }
+      }
+    }`,
+    { id: customerGid },
+  );
+  const orderCount = ordersData.customer?.orders?.nodes?.filter(Boolean).length ?? 0;
+  ok("listOrders", { count: orderCount }, ordersMs);
+
+  // --- logout (client-side: drop JWT; API has no logout mutation) ---
+  session.auth = null;
+  {
+    const { json: afterLogout, ms: logoutMs } = await gql(
+      session,
+      `query CustomerOrders($id: ID!) {
+      customer(id: $id) { databaseId }
+    }`,
+      { id: customerGid },
+    );
+    const denied = (afterLogout.errors ?? []).some((e) =>
+      /auth/i.test(e.message),
+    );
+    if (!denied) fail("logout", afterLogout, logoutMs);
+    ok("logout", "auth cleared; customer requires Authentication", logoutMs);
+  }
+
+  // APQ handshake still useful
+  {
+    const started = performance.now();
+    const fakeHash = "a".repeat(64);
+    const apq = await fetch(
+      `${endpoint}?extensions=${encodeURIComponent(
+        JSON.stringify({ persistedQuery: { version: 1, sha256Hash: fakeHash } }),
+      )}`,
+    );
+    const apqJson = (await apq.json()) as GqlJson;
+    const ms = performance.now() - started;
+    const code = apqJson.errors?.[0]?.extensions?.code;
+    if (code === "PERSISTED_QUERY_NOT_SUPPORTED") {
+      fail("APQ", "must not return PersistedQueryNotSupported", ms);
+    }
+    ok("APQ", code ?? apqJson.errors?.[0]?.message, ms);
+  }
+
+  recordTiming("wall", performance.now() - smokeStarted, true);
+  printTimingSummary();
+  console.log("smoke done");
+}
+
+main().catch((err) => {
+  printTimingSummary();
+  if (process.exitCode) return;
+  console.error(err);
+  process.exit(1);
+});
