@@ -13,6 +13,8 @@
  *
  * Optional:
  *   SMOKE_PRODUCT_ID=<databaseId>
+ *   SMOKE_SUBSCRIPTION_PRODUCT_ID=<databaseId>  — second product for subscription cart/checkout
+ *   SMOKE_SUBSCRIPTION_FREQUENCY=monthly
  *   SMOKE_OOS_PRODUCT_ID=<databaseId>  — assert addToCart rejects out-of-stock
  *   SMOKE_OVERSTOCK_QTY=9              — assert addToCart rejects qty above stock
  *   SMOKE_SKIP_CHECKOUT=1
@@ -61,6 +63,11 @@ const overstockQty = Math.max(
   1,
   Number(process.env.SMOKE_OVERSTOCK_QTY || 9) || 9,
 );
+const subscriptionProductId = process.env.SMOKE_SUBSCRIPTION_PRODUCT_ID
+  ? Number(process.env.SMOKE_SUBSCRIPTION_PRODUCT_ID)
+  : null;
+const subscriptionFrequency =
+  process.env.SMOKE_SUBSCRIPTION_FREQUENCY?.trim() || "monthly";
 
 const STOCK_STATUSES = new Set([
   "IN_STOCK",
@@ -264,6 +271,39 @@ async function main() {
     manageStock: product.manageStock ?? false,
   });
 
+  const forcedSubId =
+    subscriptionProductId && Number.isFinite(subscriptionProductId)
+      ? subscriptionProductId
+      : null;
+  const subProduct: ProductNode | null =
+    (forcedSubId
+      ? nodes.find((n) => n.databaseId === forcedSubId) ?? {
+          databaseId: forcedSubId,
+          name: `product ${forcedSubId}`,
+          stockStatus: "IN_STOCK",
+        }
+      : null) ??
+    nodes.find(
+      (n) =>
+        n.databaseId !== product.databaseId &&
+        n.__typename === "SimpleProduct" &&
+        inStock(n),
+    ) ??
+    nodes.find((n) => n.databaseId !== product.databaseId && inStock(n)) ??
+    null;
+  if (subProduct) {
+    ok("pickSubscriptionProduct", {
+      databaseId: subProduct.databaseId,
+      name: subProduct.name,
+      frequency: subscriptionFrequency,
+    });
+  } else {
+    ok(
+      "pickSubscriptionProduct",
+      "skipped (need a second in-stock product or SMOKE_SUBSCRIPTION_PRODUCT_ID)",
+    );
+  }
+
   if (!username || !password) {
     fail(
       "credentials",
@@ -308,7 +348,12 @@ async function main() {
     cart: {
       contents: {
         itemCount: number;
-        nodes: Array<{ key: string; quantity: number } | null> | null;
+        nodes: Array<{
+          key: string;
+          quantity: number;
+          subtotal?: string | null;
+          extraData?: Array<{ key: string; value: string } | null> | null;
+        } | null> | null;
       } | null;
     } | null;
   };
@@ -325,6 +370,19 @@ async function main() {
       contents {
         itemCount
         nodes { key quantity }
+      }
+    }
+  `;
+  const cartFieldsWithExtra = `
+    cart {
+      contents {
+        itemCount
+        nodes {
+          key
+          quantity
+          subtotal
+          extraData { key value }
+        }
       }
     }
   `;
@@ -530,6 +588,81 @@ async function main() {
   }
   ok("addToCart(re)", { itemCount: reAdded.addToCart?.cart?.contents?.itemCount }, reAddMs);
 
+  // --- subscription product (second line with frequency) ---
+  {
+    const { data: settingsData, ms: settingsMs } = await mustGql<{
+      mielandSubscriptionSettings: {
+        discounts: Array<{ frequency: string; discountPercent: number } | null> | null;
+      } | null;
+    }>(
+      session,
+      "mielandSubscriptionSettings",
+      `query SubSettings {
+        mielandSubscriptionSettings {
+          discounts { frequency discountPercent }
+        }
+      }`,
+    );
+    const discounts = (settingsData.mielandSubscriptionSettings?.discounts ?? []).filter(
+      Boolean,
+    );
+    ok("mielandSubscriptionSettings", { discountCount: discounts.length }, settingsMs);
+  }
+
+  if (subProduct) {
+    const extraData = JSON.stringify({
+      subscription_frequency: subscriptionFrequency,
+    });
+    const { data: subAdded, ms: subAddMs } = await mustGql<{ addToCart: CartContents }>(
+      session,
+      "addToCart(subscription)",
+      `mutation AddToCart($input: AddToCartInput!) {
+        addToCart(input: $input) { ${cartFieldsWithExtra} }
+      }`,
+      {
+        input: {
+          productId: subProduct.databaseId,
+          quantity: 1,
+          extraData,
+        },
+      },
+    );
+    const subNodes = (subAdded.addToCart?.cart?.contents?.nodes ?? []).filter(Boolean);
+    const subLine = subNodes.find((n) =>
+      (n?.extraData ?? []).some(
+        (e) =>
+          e &&
+          (e.key === "subscription_frequency" || e.key === "_subscription_frequency") &&
+          e.value === subscriptionFrequency,
+      ),
+    );
+    if (!subLine) {
+      fail(
+        "addToCart(subscription)",
+        {
+          message: "expected cart line with subscription_frequency",
+          frequency: subscriptionFrequency,
+          productId: subProduct.databaseId,
+          nodes: subNodes,
+        },
+        subAddMs,
+      );
+    }
+    ok(
+      "addToCart(subscription)",
+      {
+        productId: subProduct.databaseId,
+        frequency: subscriptionFrequency,
+        itemCount: subAdded.addToCart?.cart?.contents?.itemCount,
+        key: subLine?.key,
+        subtotal: subLine?.subtotal ?? null,
+      },
+      subAddMs,
+    );
+  } else {
+    ok("addToCart(subscription)", "skipped (no second product)");
+  }
+
   // Billing/shipping for checkout
   const { ms: addressMs } = await mustGql(
     session,
@@ -607,6 +740,62 @@ async function main() {
       },
       checkoutMs,
     );
+  }
+
+  // --- subscriptions list (WP creates rows after order; soft if none yet) ---
+  if (subProduct && !skipCheckout) {
+    const { data: subsData, ms: subsMs } = await mustGql<{
+      mielandSubscriptions: Array<{
+        id: number;
+        productId: number;
+        frequency: string;
+        status: string;
+      } | null> | null;
+    }>(
+      session,
+      "mielandSubscriptions",
+      `query Subs($status: String) {
+        mielandSubscriptions(status: $status) {
+          id
+          productId
+          frequency
+          status
+        }
+      }`,
+      { status: "active" },
+    );
+    const subs = (subsData.mielandSubscriptions ?? []).filter(Boolean);
+    const match = subs.find(
+      (s) =>
+        s &&
+        s.productId === subProduct.databaseId &&
+        s.frequency === subscriptionFrequency,
+    );
+    if (match) {
+      ok(
+        "mielandSubscriptions",
+        {
+          id: match.id,
+          productId: match.productId,
+          frequency: match.frequency,
+          status: match.status,
+        },
+        subsMs,
+      );
+    } else {
+      ok(
+        "mielandSubscriptions",
+        {
+          note: "no matching active sub yet (WP owns capture after placeOrder)",
+          productId: subProduct.databaseId,
+          frequency: subscriptionFrequency,
+          listed: subs.length,
+        },
+        subsMs,
+      );
+    }
+  } else {
+    ok("mielandSubscriptions", "skipped");
   }
 
   // --- list orders ---
