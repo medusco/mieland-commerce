@@ -1,14 +1,19 @@
 /**
- * Smoke: health + catalog + full checkout path against GRAPHQL_URL.
+ * Smoke: health + catalog + full checkout path.
+ *
+ * Target (first match wins):
+ *   npm run smoke -- --url https://api.example.com
+ *   SMOKE_BASE_URL=https://api.example.com   (appends /graphql)
+ *   GRAPHQL_URL=https://api.example.com/graphql
+ *   default: http://127.0.0.1:4000/graphql
  *
  * Required for checkout steps:
  *   SMOKE_USERNAME / SMOKE_PASSWORD  — WP customer credentials
- *   API .env consumerKey / consumerSecret (or WC_CONSUMER_*) — for placeOrder (checkout)
+ *   API env consumerKey / consumerSecret — for placeOrder (on the server under test)
  *
  * Optional:
- *   GRAPHQL_URL=http://127.0.0.1:4000/graphql
- *   SMOKE_PRODUCT_ID=<databaseId>  — skip catalog pick
- *   SMOKE_SKIP_CHECKOUT=1          — stop before placeOrder
+ *   SMOKE_PRODUCT_ID=<databaseId>
+ *   SMOKE_SKIP_CHECKOUT=1
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -16,7 +21,34 @@ import { resolve } from "node:path";
 const envPath = resolve(process.cwd(), ".env");
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 
-const endpoint = process.env.GRAPHQL_URL || "http://127.0.0.1:4000/graphql";
+function normalizeGraphqlUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/$/, "");
+  if (!trimmed) return "http://127.0.0.1:4000/graphql";
+  if (/\/graphql$/i.test(trimmed)) return trimmed;
+  return `${trimmed}/graphql`;
+}
+
+function resolveEndpoint(): string {
+  const argvUrl = (() => {
+    const i = process.argv.indexOf("--url");
+    if (i >= 0 && process.argv[i + 1]) return process.argv[i + 1];
+    const eq = process.argv.find((a) => a.startsWith("--url="));
+    if (eq) return eq.slice("--url=".length);
+    // bare URL arg: npm run smoke -- https://...
+    const bare = process.argv.slice(2).find((a) => /^https?:\/\//i.test(a));
+    return bare;
+  })();
+
+  const fromEnv =
+    process.env.GRAPHQL_URL ||
+    process.env.SMOKE_BASE_URL ||
+    process.env.SMOKE_URL ||
+    "";
+
+  return normalizeGraphqlUrl(argvUrl || fromEnv || "http://127.0.0.1:4000/graphql");
+}
+
+const endpoint = resolveEndpoint();
 const username = process.env.SMOKE_USERNAME || "";
 const password = process.env.SMOKE_PASSWORD || "";
 const skipCheckout = process.env.SMOKE_SKIP_CHECKOUT === "1";
@@ -114,10 +146,11 @@ async function mustGql<T>(
 async function main() {
   const session: Session = { token: null, auth: null };
   const smokeStarted = performance.now();
+  console.log(`smoke target ${endpoint}`);
 
   {
     const started = performance.now();
-    const health = await fetch(endpoint.replace(/\/graphql$/, "/health"));
+    const health = await fetch(endpoint.replace(/\/graphql$/i, "/health"));
     const healthBody = await health.text();
     const ms = performance.now() - started;
     if (health.status !== 200) fail("health", { status: health.status, healthBody }, ms);

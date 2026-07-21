@@ -15,11 +15,27 @@ Requires MySQL (Woo `hy_` tables) and Redis. Point `GRAPHQL_ENDPOINT` in the mie
 
 ## Smoke
 
-With the API running (`npm run dev`), set `SMOKE_USERNAME` / `SMOKE_PASSWORD` (and `consumerKey` / `consumerSecret` for placeOrder) then:
+Set `SMOKE_USERNAME` / `SMOKE_PASSWORD` (server under test needs `consumerKey` / `consumerSecret` for placeOrder).
+
+Local (API on :4000):
 
 ```powershell
 npm run smoke
 ```
+
+Remote:
+
+```powershell
+npm run smoke -- --url https://your-commerce-api.up.railway.app
+# or
+$env:SMOKE_BASE_URL="https://your-commerce-api.up.railway.app"
+npm run smoke
+# or full GraphQL path
+$env:GRAPHQL_URL="https://your-commerce-api.up.railway.app/graphql"
+npm run smoke
+```
+
+`SMOKE_BASE_URL` / `--url` may be the service origin; `/graphql` is appended if missing.
 
 Covers login → addToCart → updateQuantity → removeFromCart → placeOrder → list orders → logout.
 
