@@ -165,6 +165,8 @@ export const typeDefs = /* GraphQL */ `
     reviewCount: Int
     onSale: Boolean
     stockStatus: String
+    stockQuantity: Int
+    manageStock: Boolean
     image: MediaItem
     thumbnailFields: ThumbnailFields
     attributes: ProductAttributeConnection
@@ -189,6 +191,8 @@ export const typeDefs = /* GraphQL */ `
     reviewCount: Int
     onSale: Boolean
     stockStatus: String
+    stockQuantity: Int
+    manageStock: Boolean
     image: MediaItem
     thumbnailFields: ThumbnailFields
     attributes: ProductAttributeConnection

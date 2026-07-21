@@ -19,6 +19,8 @@ import {
   createGraphqlRateLimiter,
 } from "./middleware/security.js";
 import { logJson, parseSessionHeader, randomToken } from "./utils/index.js";
+import swaggerUi from "swagger-ui-express";
+import { openApiSpec } from "./openapi/spec.js";
 
 const cfg = loadConfig();
 
@@ -96,6 +98,22 @@ app.get("/ready", async (_req, res) => {
   }
   res.status(200).json({ status: "ready", mysql: true, redis: true });
 });
+
+app.get("/openapi.json", (_req, res) => {
+  res.status(200).json(openApiSpec);
+});
+
+app.use(
+  "/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(openApiSpec, {
+    customSiteTitle: "Mieland Commerce API",
+    swaggerOptions: {
+      persistAuthorization: true,
+      displayRequestDuration: true,
+    },
+  }),
+);
 
 const gqlLimiter = createGraphqlRateLimiter();
 const authLimiter = createAuthMutationRateLimiter();
@@ -175,6 +193,7 @@ const server = app.listen(cfg.PORT, () => {
     port: cfg.PORT,
     env: cfg.NODE_ENV,
     endpoint: "/graphql",
+    docs: "/docs",
   });
 });
 

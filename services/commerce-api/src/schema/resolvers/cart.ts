@@ -134,7 +134,6 @@ export const cartResolvers = {
     ) => {
       const qty = input.quantity ?? 1;
       const extra = parseExtraDataString(input.extraData);
-      await assertInStock(input.productId, input.variationId ?? null, qty);
 
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
         const existing = findMergeableItem(
@@ -143,8 +142,10 @@ export const cartResolvers = {
           input.variationId ?? null,
           extra,
         );
+        const totalQty = (existing?.quantity ?? 0) + qty;
+        await assertInStock(input.productId, input.variationId ?? null, totalQty);
         if (existing) {
-          existing.quantity += qty;
+          existing.quantity = totalQty;
           if (extra.length) existing.extraData = extra;
         } else {
           c.items.push({
@@ -212,6 +213,7 @@ export const cartResolvers = {
             c.items = c.items.filter((i) => i.key !== item.key);
             continue;
           }
+          await assertInStock(item.productId, item.variationId, upd.quantity);
           item.quantity = upd.quantity;
           if (upd.extraData !== undefined) {
             item.extraData = parseExtraDataString(upd.extraData);

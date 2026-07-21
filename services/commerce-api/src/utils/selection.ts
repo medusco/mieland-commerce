@@ -184,7 +184,7 @@ export function productListNeedsFromInfo(
       names.has("reviews") ||
       names.has("averageRating") ||
       names.has("reviewCount"),
-    stock: names.has("stockStatus"),
+    stock: names.has("stockStatus") || names.has("stockQuantity") || names.has("manageStock"),
     featured: names.has("featured"),
   };
 }

@@ -13,6 +13,8 @@
  *
  * Optional:
  *   SMOKE_PRODUCT_ID=<databaseId>
+ *   SMOKE_OOS_PRODUCT_ID=<databaseId>  — assert addToCart rejects out-of-stock
+ *   SMOKE_OVERSTOCK_QTY=9              — assert addToCart rejects qty above stock
  *   SMOKE_SKIP_CHECKOUT=1
  */
 import { existsSync } from "node:fs";
@@ -52,6 +54,22 @@ const endpoint = resolveEndpoint();
 const username = process.env.SMOKE_USERNAME || "";
 const password = process.env.SMOKE_PASSWORD || "";
 const skipCheckout = process.env.SMOKE_SKIP_CHECKOUT === "1";
+const oosProductId = process.env.SMOKE_OOS_PRODUCT_ID
+  ? Number(process.env.SMOKE_OOS_PRODUCT_ID)
+  : null;
+const overstockQty = Math.max(
+  1,
+  Number(process.env.SMOKE_OVERSTOCK_QTY || 9) || 9,
+);
+
+const STOCK_STATUSES = new Set([
+  "IN_STOCK",
+  "OUT_OF_STOCK",
+  "ON_BACKORDER",
+  "INSTOCK",
+  "OUTOFSTOCK",
+  "ONBACKORDER",
+]);
 
 type GqlError = { message: string; extensions?: { code?: string } };
 type GqlJson = { data?: Record<string, unknown> | null; errors?: GqlError[] };
@@ -163,6 +181,9 @@ async function main() {
     name: string;
     __typename?: string;
     price?: string | null;
+    stockStatus?: string | null;
+    stockQuantity?: number | null;
+    manageStock?: boolean | null;
   };
   type ProductsData = {
     products: { nodes: Array<ProductNode | null> | null } | null;
@@ -176,8 +197,8 @@ async function main() {
           databaseId
           name
           __typename
-          ... on SimpleProduct { price }
-          ... on VariableProduct { price }
+          ... on SimpleProduct { price stockStatus stockQuantity manageStock }
+          ... on VariableProduct { price stockStatus stockQuantity manageStock }
         }
       }
     }`,
@@ -187,15 +208,61 @@ async function main() {
   );
   ok("GetProducts", { count: nodes.length }, productsMs);
 
+  // --- stock levels ---
+  const stockSummary = { inStock: 0, outOfStock: 0, other: 0, unknown: 0 };
+  for (const n of nodes) {
+    const status = (n.stockStatus ?? "").toUpperCase().replace(/-/g, "_");
+    if (!status) {
+      stockSummary.unknown += 1;
+      continue;
+    }
+    if (!STOCK_STATUSES.has(status)) {
+      fail("stockLevels", {
+        message: `unexpected stockStatus`,
+        productId: n.databaseId,
+        stockStatus: n.stockStatus,
+      });
+    }
+    if (status === "IN_STOCK" || status === "INSTOCK") stockSummary.inStock += 1;
+    else if (status === "OUT_OF_STOCK" || status === "OUTOFSTOCK") {
+      stockSummary.outOfStock += 1;
+    } else stockSummary.other += 1;
+  }
+  if (stockSummary.unknown > 0) {
+    fail("stockLevels", {
+      message: "products missing stockStatus",
+      ...stockSummary,
+    });
+  }
+  ok("stockLevels", stockSummary);
+
   const forcedId = process.env.SMOKE_PRODUCT_ID
     ? Number(process.env.SMOKE_PRODUCT_ID)
     : null;
+  const inStock = (n: ProductNode) => {
+    const s = (n.stockStatus ?? "").toUpperCase().replace(/-/g, "_");
+    return s === "IN_STOCK" || s === "INSTOCK" || s === "ON_BACKORDER" || s === "ONBACKORDER";
+  };
   const product =
-    (forcedId
-      ? nodes.find((n) => n.databaseId === forcedId)
-      : nodes.find((n) => n.__typename === "SimpleProduct")) ?? nodes[0];
+    (forcedId ? nodes.find((n) => n.databaseId === forcedId) : null) ??
+    nodes.find((n) => n.__typename === "SimpleProduct" && inStock(n)) ??
+    nodes.find((n) => inStock(n)) ??
+    nodes[0];
   if (!product?.databaseId) fail("pickProduct", "no publish products");
-  ok("pickProduct", { databaseId: product.databaseId, name: product.name });
+  if (!inStock(product)) {
+    fail("pickProduct", {
+      message: "no in-stock product for cart smoke (set SMOKE_PRODUCT_ID)",
+      stockStatus: product.stockStatus,
+      databaseId: product.databaseId,
+    });
+  }
+  ok("pickProduct", {
+    databaseId: product.databaseId,
+    name: product.name,
+    stockStatus: product.stockStatus,
+    stockQuantity: product.stockQuantity ?? null,
+    manageStock: product.manageStock ?? false,
+  });
 
   if (!username || !password) {
     fail(
@@ -272,6 +339,124 @@ async function main() {
     { itemCount: cartAfterLogin.cart?.contents?.itemCount ?? 0 },
     cartLoginMs,
   );
+
+  // --- out-of-stock rejection ---
+  const oosFromCatalog = nodes.find((n) => {
+    const s = (n.stockStatus ?? "").toUpperCase().replace(/-/g, "_");
+    return s === "OUT_OF_STOCK" || s === "OUTOFSTOCK";
+  });
+  const oosId =
+    (oosProductId && Number.isFinite(oosProductId) ? oosProductId : null) ??
+    oosFromCatalog?.databaseId ??
+    null;
+  if (oosId) {
+    const { status, json, ms } = await gql(
+      session,
+      `mutation AddToCart($input: AddToCartInput!) {
+        addToCart(input: $input) { ${cartFields} }
+      }`,
+      { input: { productId: oosId, quantity: 1 } },
+    );
+    const rejected = (json.errors ?? []).some((e) =>
+      /out of stock/i.test(e.message),
+    );
+    if (status >= 500) fail("addToCart(oos)", { status, json }, ms);
+    if (!rejected) {
+      fail(
+        "addToCart(oos)",
+        {
+          message: "expected out-of-stock error",
+          productId: oosId,
+          json,
+        },
+        ms,
+      );
+    }
+    ok("addToCart(oos)", { productId: oosId, rejected: true }, ms);
+  } else {
+    ok("addToCart(oos)", "skipped (no OUT_OF_STOCK product; set SMOKE_OOS_PRODUCT_ID)");
+  }
+
+  // --- overstock rejection (qty above managed stock) ---
+  const limited = nodes.find((n) => {
+    if (!inStock(n) || !n.manageStock) return false;
+    const qty = n.stockQuantity;
+    return qty != null && Number.isFinite(qty) && qty < overstockQty;
+  });
+  const overTarget = limited ?? product;
+  const tryQty = overstockQty;
+  const expectReject =
+    Boolean(overTarget.manageStock) &&
+    overTarget.stockQuantity != null &&
+    tryQty > Number(overTarget.stockQuantity);
+
+  {
+    const { status, json, ms } = await gql(
+      session,
+      `mutation AddToCart($input: AddToCartInput!) {
+        addToCart(input: $input) { ${cartFields} }
+      }`,
+      { input: { productId: overTarget.databaseId, quantity: tryQty } },
+    );
+    const rejected = (json.errors ?? []).some((e) =>
+      /out of stock|not enough stock/i.test(e.message),
+    );
+    if (status >= 500) fail("addToCart(overstock)", { status, json }, ms);
+
+    if (expectReject) {
+      if (!rejected) {
+        fail(
+          "addToCart(overstock)",
+          {
+            message: `expected stock rejection for qty ${tryQty}`,
+            productId: overTarget.databaseId,
+            stockQuantity: overTarget.stockQuantity,
+            json,
+          },
+          ms,
+        );
+      }
+      ok(
+        "addToCart(overstock)",
+        {
+          productId: overTarget.databaseId,
+          quantity: tryQty,
+          stockQuantity: overTarget.stockQuantity,
+          rejected: true,
+        },
+        ms,
+      );
+    } else if (rejected) {
+      ok(
+        "addToCart(overstock)",
+        {
+          productId: overTarget.databaseId,
+          quantity: tryQty,
+          rejected: true,
+        },
+        ms,
+      );
+    } else {
+      // Stock not managed / sufficient — clear any items so later steps stay clean
+      const keys = (json.data?.addToCart as CartContents | undefined)?.cart?.contents?.nodes
+        ?.map((n) => n?.key)
+        .filter((k): k is string => Boolean(k));
+      if (keys?.length) {
+        await gql(
+          session,
+          `mutation RemoveItems($input: RemoveItemsFromCartInput!) {
+            removeItemsFromCart(input: $input) { ${cartFields} }
+          }`,
+          { input: { keys } },
+        );
+      }
+      ok(
+        "addToCart(overstock)",
+        `skipped (qty ${tryQty} allowed; no managed stock < ${overstockQty})`,
+        ms,
+      );
+    }
+  }
 
   // --- addToCart ---
   const { data: added, ms: addMs } = await mustGql<{ addToCart: CartContents }>(

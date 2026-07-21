@@ -46,15 +46,17 @@ npm run smoke
 
 `SMOKE_BASE_URL` / `--url` may be the service origin; `/graphql` is appended if missing.
 
-Covers login → addToCart → updateQuantity → removeFromCart → placeOrder → list orders → logout.
+Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantity → removeFromCart → placeOrder → list orders → logout.
 
 ## Endpoints
 
 | Path | Purpose |
 |------|---------|
-| `POST/GET /graphql` | GraphQL (session + JWT + APQ) |
 | `GET /health` | Liveness |
 | `GET /ready` | MySQL + Redis readiness |
+| `GET /docs` | Swagger UI (OpenAPI) |
+| `GET /openapi.json` | OpenAPI 3 document |
+| `POST/GET /graphql` | GraphQL (session + JWT + APQ) |
 
 ## Session / auth
 

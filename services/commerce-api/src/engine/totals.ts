@@ -9,7 +9,7 @@ import {
 } from "./shipping.js";
 import {
   getProductPrices,
-  getStockStatus,
+  getStockInfo,
 } from "../repositories/products.js";
 import { moneyStr, roundMoney } from "../utils/index.js";
 
@@ -144,9 +144,17 @@ export async function assertInStock(
   quantity: number,
 ): Promise<void> {
   const id = variationId || productId;
-  const status = await getStockStatus(id);
-  if (status === "outofstock") {
+  const stock = await getStockInfo(id);
+  if (stock.status === "outofstock") {
     throw new Error("Product is out of stock");
   }
-  void quantity;
+  if (!stock.manageStock || stock.allowsBackorders) return;
+  const available = stock.stockQuantity ?? 0;
+  if (quantity > available) {
+    throw new Error(
+      available <= 0
+        ? "Product is out of stock"
+        : `Not enough stock (${available} available)`,
+    );
+  }
 }

@@ -152,6 +152,32 @@ export async function getStockStatus(productId: number): Promise<string> {
   return (meta._stock_status || "instock").toLowerCase();
 }
 
+export type StockInfo = {
+  status: string;
+  manageStock: boolean;
+  stockQuantity: number | null;
+  allowsBackorders: boolean;
+};
+
+export async function getStockInfo(productId: number): Promise<StockInfo> {
+  const meta = await getPostMeta(productId);
+  const manageStock = (meta._manage_stock || "no").toLowerCase() === "yes";
+  const backorders = (meta._backorders || "no").toLowerCase();
+  const raw = meta._stock;
+  const stockQuantity =
+    manageStock && raw !== undefined && raw !== ""
+      ? Number(raw)
+      : null;
+  return {
+    status: (meta._stock_status || "instock").toLowerCase(),
+    manageStock,
+    stockQuantity: stockQuantity != null && Number.isFinite(stockQuantity)
+      ? stockQuantity
+      : null,
+    allowsBackorders: backorders === "yes" || backorders === "notify",
+  };
+}
+
 export async function getAttachmentUrl(id: number): Promise<{
   sourceUrl: string;
   mediaItemUrl: string;
@@ -241,7 +267,7 @@ async function shapeProductsLean(
   const ids = rows.map((r) => r.ID);
   const metaKeys: string[] = [];
   if (needs.price) metaKeys.push("_price", "_regular_price", "_sale_price");
-  if (needs.stock) metaKeys.push("_stock_status");
+  if (needs.stock) metaKeys.push("_stock_status", "_stock", "_manage_stock");
   if (needs.featured) metaKeys.push("_featured");
 
   const [metaMap, variableIds] = await Promise.all([
@@ -257,6 +283,13 @@ async function shapeProductsLean(
     const price = meta._price ?? "";
     const regularPrice = meta._regular_price ?? price;
     const salePrice = meta._sale_price ?? "";
+    const manageStock = needs.stock
+      ? (meta._manage_stock || "no").toLowerCase() === "yes"
+      : false;
+    const stockQuantity =
+      needs.stock && manageStock && meta._stock !== undefined && meta._stock !== ""
+        ? Number(meta._stock)
+        : null;
     return {
       __typename: isVariable ? "VariableProduct" : "SimpleProduct",
       id: toGlobalId("product", row.ID),
@@ -273,6 +306,9 @@ async function shapeProductsLean(
       stockStatus: needs.stock
         ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
         : "IN_STOCK",
+      stockQuantity:
+        stockQuantity != null && Number.isFinite(stockQuantity) ? stockQuantity : null,
+      manageStock,
       image: null,
       thumbnailFields: { productThumbnailImage: null },
       attributes: { nodes: [] },
@@ -441,6 +477,13 @@ async function shapeProducts(
     const attrs = needs.attributes
       ? await getProductAttributesAsync(meta)
       : [];
+    const manageStock = needs.stock
+      ? (meta._manage_stock || "no").toLowerCase() === "yes"
+      : false;
+    const stockQtyRaw =
+      needs.stock && manageStock && meta._stock !== undefined && meta._stock !== ""
+        ? Number(meta._stock)
+        : null;
 
     const base = {
       __typename: isVariable ? "VariableProduct" : "SimpleProduct",
@@ -458,6 +501,9 @@ async function shapeProducts(
       stockStatus: needs.stock
         ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
         : "IN_STOCK",
+      stockQuantity:
+        stockQtyRaw != null && Number.isFinite(stockQtyRaw) ? stockQtyRaw : null,
+      manageStock,
       image,
       thumbnailFields: {
         productThumbnailImage: image
