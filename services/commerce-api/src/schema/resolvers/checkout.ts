@@ -1,16 +1,25 @@
 import { createHash } from "node:crypto";
+import type { GraphQLResolveInfo } from "graphql";
 import type { AppContext } from "../../context.js";
 import { requireUser } from "../../context.js";
 import { clearCart, loadCart, mutateCart, saveCart } from "../../engine/cart-store.js";
-import { calculateCart } from "../../engine/totals.js";
+import { assertInStock, calculateCart } from "../../engine/totals.js";
 import {
   buildWcOrderFromCart,
   createWcOrder,
 } from "../../clients/woocommerce-rest.js";
 import { getCustomer } from "../../repositories/customers.js";
-import { getOrderById, shapeOrder } from "../../repositories/orders.js";
+import {
+  getOrderById,
+  shapeOrder,
+  shapeOrderFromWc,
+} from "../../repositories/orders.js";
 import { getRedis } from "../../redis/client.js";
 import { logJson, parseDatabaseId } from "../../utils/index.js";
+import {
+  orderNeedsAreLean,
+  orderNeedsFromInfo,
+} from "../../utils/selection.js";
 import type { CartAddress } from "../../engine/types.js";
 
 function mapAddress(input?: CartAddress | null): CartAddress {
@@ -28,6 +37,15 @@ function mapAddress(input?: CartAddress | null): CartAddress {
     phone: input.phone,
     email: input.email,
   };
+}
+
+function wantsCustomer(info: GraphQLResolveInfo): boolean {
+  const fields = info.fieldNodes.flatMap(
+    (n) => n.selectionSet?.selections ?? [],
+  );
+  return fields.some(
+    (s) => s.kind === "Field" && s.name.value === "customer",
+  );
 }
 
 async function withCheckoutIdempotency<T>(
@@ -49,12 +67,21 @@ async function withCheckoutIdempotency<T>(
   return result;
 }
 
+async function assertCartInStock(
+  items: Array<{ productId: number; variationId: number | null; quantity: number }>,
+) {
+  for (const item of items) {
+    await assertInStock(item.productId, item.variationId, item.quantity);
+  }
+}
+
 export const checkoutResolvers = {
   Mutation: {
     createOrder: async (
       _: unknown,
       { input }: { input: { customerId: number; clientMutationId?: string } },
       ctx: AppContext,
+      info: GraphQLResolveInfo,
     ) => {
       const userId = requireUser(ctx);
       if (input.customerId !== userId) {
@@ -62,6 +89,9 @@ export const checkoutResolvers = {
       }
       const cart = await loadCart(ctx.sessionToken);
       if (!cart.items.length) throw new Error("Cart is empty");
+      await assertCartInStock(cart.items);
+
+      // WC prices line items; we only need totals for shipping_lines / coupons.
       const calculated = await calculateCart(cart, "full");
       await saveCart(ctx.sessionToken, calculated.cart);
 
@@ -89,7 +119,11 @@ export const checkoutResolvers = {
 
       await clearCart(ctx.sessionToken);
       const orderId = Number(payload.id);
-      const order = (await shapeOrder(orderId)) ?? (await getOrderById(orderId, userId));
+      const needs = orderNeedsFromInfo(info, ["order"]);
+      const order = orderNeedsAreLean(needs)
+        ? shapeOrderFromWc(payload)
+        : ((await shapeOrder(orderId, needs)) ??
+          (await getOrderById(orderId, userId)));
       return {
         clientMutationId: input.clientMutationId,
         orderId,
@@ -111,6 +145,7 @@ export const checkoutResolvers = {
         };
       },
       ctx: AppContext,
+      info: GraphQLResolveInfo,
     ) => {
       const userId = ctx.userId; // guest checkout allowed but Stripe meta usually needs account
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
@@ -124,6 +159,10 @@ export const checkoutResolvers = {
       });
 
       if (!cart.items.length) throw new Error("Cart is empty");
+      await assertCartInStock(cart.items);
+
+      // Line item prices are not sent to WC — it recalculates from catalog.
+      // calculateCart is still needed for shipping_lines / free-shipping thresholds.
       const calculated = await calculateCart(cart, "full");
       await saveCart(ctx.sessionToken, calculated.cart);
 
@@ -169,13 +208,27 @@ export const checkoutResolvers = {
 
       await clearCart(ctx.sessionToken);
       const orderId = Number(wcOrder.id);
-      const order = await shapeOrder(orderId);
-      const customer = userId
-        ? await getCustomer(userId, ctx.sessionToken)
-        : {
-            databaseId: null,
-            email: cart.billing.email ?? null,
-          };
+      const needs = orderNeedsFromInfo(info, ["order"]);
+      const shapeStarted = Date.now();
+      const order = orderNeedsAreLean(needs)
+        ? shapeOrderFromWc(wcOrder)
+        : await shapeOrder(orderId, needs);
+      logJson("info", {
+        msg: "checkout_shape_order",
+        requestId: ctx.requestId,
+        ms: Date.now() - shapeStarted,
+        lean: orderNeedsAreLean(needs),
+        orderId,
+      });
+
+      const customer = wantsCustomer(info)
+        ? userId
+          ? await getCustomer(userId, ctx.sessionToken)
+          : {
+              databaseId: null,
+              email: cart.billing.email ?? null,
+            }
+        : null;
 
       return {
         clientMutationId: input.clientMutationId,

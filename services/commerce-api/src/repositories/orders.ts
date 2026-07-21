@@ -131,7 +131,7 @@ async function itemMetaMany(itemIds: number[]) {
   return out;
 }
 
-async function orderLines(orderId: number) {
+async function orderLines(orderId: number, withProducts: boolean) {
   const items = await query<
     { order_item_id: number; order_item_name: string; order_item_type: string }[]
   >(
@@ -143,26 +143,29 @@ async function orderLines(orderId: number) {
   if (!items.length) return { nodes: [] };
 
   const metaMap = await itemMetaMany(items.map((i) => i.order_item_id));
-  const productIds: number[] = [];
-  for (const item of items) {
-    const meta = metaMap.get(item.order_item_id) ?? {};
-    const productId = Number(meta._product_id || 0);
-    const variationId = Number(meta._variation_id || 0);
-    if (productId) productIds.push(productId);
-    if (variationId) productIds.push(variationId);
-  }
-  const products = await getProductNodes(productIds);
-  const productById = new Map<number, unknown>();
-  for (let i = 0; i < productIds.length; i++) {
-    if (products[i]) productById.set(productIds[i], products[i]);
+  let productById = new Map<number, unknown>();
+  if (withProducts) {
+    const productIds: number[] = [];
+    for (const item of items) {
+      const meta = metaMap.get(item.order_item_id) ?? {};
+      const productId = Number(meta._product_id || 0);
+      const variationId = Number(meta._variation_id || 0);
+      if (productId) productIds.push(productId);
+      if (variationId) productIds.push(variationId);
+    }
+    const products = await getProductNodes(productIds);
+    for (let i = 0; i < productIds.length; i++) {
+      if (products[i]) productById.set(productIds[i], products[i]);
+    }
   }
 
   const nodes = items.map((item) => {
     const meta = metaMap.get(item.order_item_id) ?? {};
     const productId = Number(meta._product_id || 0);
     const variationId = Number(meta._variation_id || 0);
-    const product = productId ? productById.get(productId) : null;
-    const variation = variationId ? productById.get(variationId) : null;
+    const product = withProducts && productId ? productById.get(productId) : null;
+    const variation =
+      withProducts && variationId ? productById.get(variationId) : null;
     return {
       databaseId: item.order_item_id,
       productId,
@@ -456,8 +459,18 @@ export async function listCustomerOrders(
   return { nodes };
 }
 
-/** Detail view only — full hydrate for a single order. */
-export async function shapeOrder(orderId: number) {
+/** Detail view — hydrate only what the GraphQL selection needs. */
+export async function shapeOrder(
+  orderId: number,
+  needs: OrderListNeeds = {
+    addresses: true,
+    lineItems: true,
+    lineProducts: true,
+    shippingLines: true,
+    taxLines: true,
+    meta: true,
+  },
+) {
   const order = await queryOne<HposOrder>(
     `SELECT id, status, currency, total_amount, tax_amount, customer_id,
             payment_method, payment_method_title, transaction_id,
@@ -467,18 +480,23 @@ export async function shapeOrder(orderId: number) {
   );
   if (!order) return null;
 
-  const ops = await queryOne<{
-    shipping_total_amount: string;
-    discount_total_amount: string;
-    date_paid_gmt: Date | string | null;
-    order_key: string | null;
-  }>(
-    `SELECT shipping_total_amount, discount_total_amount, date_paid_gmt, order_key
-     FROM ${t("wc_order_operational_data")} WHERE order_id = ? LIMIT 1`,
-    [orderId],
-  );
-  const meta = await orderMeta(orderId);
-  const mcf = parseMcf(meta);
+  const [ops, meta] = await Promise.all([
+    queryOne<{
+      shipping_total_amount: string;
+      discount_total_amount: string;
+      date_paid_gmt: Date | string | null;
+      order_key: string | null;
+    }>(
+      `SELECT shipping_total_amount, discount_total_amount, date_paid_gmt, order_key
+       FROM ${t("wc_order_operational_data")} WHERE order_id = ? LIMIT 1`,
+      [orderId],
+    ),
+    needs.meta ? orderMeta(orderId) : Promise.resolve({} as Record<string, string>),
+  ]);
+  const mcf = needs.meta ? parseMcf(meta) : {
+    amazonMcfTrackingCode: null as string | null,
+    amazonMcfTracking: null as unknown,
+  };
 
   const subtotalNum =
     Number(order.total_amount) -
@@ -487,11 +505,17 @@ export async function shapeOrder(orderId: number) {
 
   const [billing, shipping, lineItems, shippingLineNodes, taxLineNodes] =
     await Promise.all([
-      orderAddress(order.id, "billing"),
-      orderAddress(order.id, "shipping"),
-      orderLines(order.id),
-      shippingLines(order.id),
-      taxLines(order.id),
+      needs.addresses ? orderAddress(order.id, "billing") : Promise.resolve(null),
+      needs.addresses ? orderAddress(order.id, "shipping") : Promise.resolve(null),
+      needs.lineItems
+        ? orderLines(order.id, needs.lineProducts)
+        : Promise.resolve({ nodes: [] as unknown[] }),
+      needs.shippingLines
+        ? shippingLines(order.id)
+        : Promise.resolve({ nodes: [] as unknown[] }),
+      needs.taxLines
+        ? taxLines(order.id)
+        : Promise.resolve({ nodes: [] as unknown[] }),
     ]);
 
   return {
@@ -519,6 +543,43 @@ export async function shapeOrder(orderId: number) {
     lineItems,
     shippingLines: shippingLineNodes,
     taxLines: taxLineNodes,
+  };
+}
+
+/** Map a fresh WC REST order create response — no MySQL (lean checkout path). */
+export function shapeOrderFromWc(wc: Record<string, unknown>) {
+  const id = Number(wc.id);
+  const status = String(wc.status ?? "pending");
+  const total = money(wc.total);
+  const shippingTotal = money(wc.shipping_total);
+  const totalTax = money(wc.total_tax);
+  const subtotalNum = Number(wc.total ?? 0) - Number(wc.shipping_total ?? 0) - Number(wc.total_tax ?? 0);
+  return {
+    id: toGlobalId("order", id),
+    databaseId: id,
+    orderNumber: String(wc.number ?? id),
+    orderKey: String(wc.order_key ?? ""),
+    status: statusGql(status),
+    currency: String(wc.currency ?? ""),
+    date: formatDate((wc.date_created_gmt as string) ?? null),
+    datePaid: formatDate((wc.date_paid_gmt as string) ?? null),
+    total,
+    subtotal: money(Math.max(0, subtotalNum)),
+    shippingTotal,
+    totalTax,
+    paymentMethod: String(wc.payment_method ?? ""),
+    paymentMethodTitle: String(wc.payment_method_title ?? ""),
+    transactionId: String(wc.transaction_id ?? ""),
+    needsPayment: ["pending", "on-hold", "failed"].includes(
+      status.replace(/^wc-/, ""),
+    ),
+    amazonMcfTrackingCode: null as string | null,
+    amazonMcfTracking: null as unknown,
+    billing: null,
+    shipping: null,
+    lineItems: { nodes: [] as unknown[] },
+    shippingLines: { nodes: [] as unknown[] },
+    taxLines: { nodes: [] as unknown[] },
   };
 }
 

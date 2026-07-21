@@ -118,9 +118,12 @@ export type OrderListNeeds = {
   meta: boolean;
 };
 
-/** Field needs under `orders { nodes { ... } }` (Customer.orders resolver). */
-export function orderListNeedsFromInfo(info: GraphQLResolveInfo): OrderListNeeds {
-  const nodeFields = selectionsAt(info, ["nodes"]) ?? [];
+/** Field needs under an Order selection (path e.g. `["order"]` or `["nodes"]`). */
+export function orderNeedsFromInfo(
+  info: GraphQLResolveInfo,
+  path: string[],
+): OrderListNeeds {
+  const nodeFields = selectionsAt(info, path) ?? [];
   const lineItemFields = expandSelections(
     nodeFields.find((f) => f.name.value === "lineItems")?.selectionSet
       ?.selections ?? [],
@@ -146,6 +149,22 @@ export function orderListNeedsFromInfo(info: GraphQLResolveInfo): OrderListNeeds
       "transactionId",
     ]),
   };
+}
+
+/** True when Order can be mapped from WC REST scalars (no MySQL hydrate). */
+export function orderNeedsAreLean(needs: OrderListNeeds): boolean {
+  return (
+    !needs.addresses &&
+    !needs.lineItems &&
+    !needs.shippingLines &&
+    !needs.taxLines &&
+    !needs.meta
+  );
+}
+
+/** Field needs under `orders { nodes { ... } }` (Customer.orders resolver). */
+export function orderListNeedsFromInfo(info: GraphQLResolveInfo): OrderListNeeds {
+  return orderNeedsFromInfo(info, ["nodes"]);
 }
 
 export type ProductListNeeds = {
