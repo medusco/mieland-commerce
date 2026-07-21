@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+# When this directory is Railway Root Directory, Dockerfile COPYs are local.
 
 [deploy]
 healthcheckPath = "/health"

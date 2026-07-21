@@ -13,6 +13,15 @@ npm run dev
 
 Requires MySQL (Woo `hy_` tables) and Redis. Point `GRAPHQL_ENDPOINT` in the mieland shop at `http://localhost:4000/graphql`.
 
+## Deploy (Railway)
+
+Railpack fails if it analyzes the monorepo root (no root `package.json`). Use Docker:
+
+1. **Repo root** — root `railway.toml` + `Dockerfile` build `services/commerce-api`, or
+2. **Root Directory** = `services/commerce-api` — uses that folder’s `Dockerfile` / `railway.toml`.
+
+Redeploy after this config is on the branch Railway builds.
+
 ## Smoke
 
 Set `SMOKE_USERNAME` / `SMOKE_PASSWORD` (server under test needs `consumerKey` / `consumerSecret` for placeOrder).

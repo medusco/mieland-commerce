@@ -1,0 +1,13 @@
+# Builds commerce-api from monorepo root (avoids Railpack scanning an empty root).
+# Alternative: set Railway Root Directory to `services/commerce-api`.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["services/commerce-api/**"]
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
