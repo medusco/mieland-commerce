@@ -7,6 +7,7 @@ import { assertInStock, calculateCart } from "../../engine/totals.js";
 import {
   buildWcOrderFromCart,
   createWcOrder,
+  updateWcOrder,
 } from "../../clients/woocommerce-rest.js";
 import {
   processStoreCheckoutOrder,
@@ -112,6 +113,33 @@ async function assertCartInStock(
 ) {
   for (const item of items) {
     await assertInStock(item.productId, item.variationId, item.quantity);
+  }
+}
+
+function isPaymentFailureStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  return normalized === "failure" || normalized === "error" || normalized === "failed";
+}
+
+async function markOrderPaymentFailed(
+  orderId: number,
+  requestId: string | undefined,
+): Promise<void> {
+  try {
+    await updateWcOrder(orderId, { status: "failed" });
+    logJson("info", {
+      msg: "process_order_payment_marked_failed",
+      requestId,
+      orderId,
+    });
+  } catch (err) {
+    logJson("error", {
+      msg: "process_order_payment_mark_failed_error",
+      requestId,
+      orderId,
+      err: String(err),
+    });
   }
 }
 
@@ -391,10 +419,16 @@ export const checkoutResolvers = {
           orderId,
           err: String(err),
         });
+        await markOrderPaymentFailed(orderId, ctx.requestId);
         throw err;
       }
 
       const paymentResult = storeRes.payment_result;
+      const paymentStatus = paymentResult?.payment_status ?? null;
+      if (isPaymentFailureStatus(paymentStatus)) {
+        await markOrderPaymentFailed(orderId, ctx.requestId);
+      }
+
       const needs = orderNeedsFromInfo(info, ["order"]);
       const order =
         (await shapeOrder(orderId, needs)) ??
@@ -403,9 +437,9 @@ export const checkoutResolvers = {
       return {
         clientMutationId: input.clientMutationId,
         order,
-        result: paymentResult?.payment_status ?? "unknown",
+        result: paymentStatus ?? "unknown",
         redirect: paymentResult?.redirect_url || null,
-        paymentStatus: paymentResult?.payment_status ?? null,
+        paymentStatus,
         paymentDetails: (paymentResult?.payment_details ?? []).map((d) => ({
           key: d.key,
           value: String(d.value ?? ""),

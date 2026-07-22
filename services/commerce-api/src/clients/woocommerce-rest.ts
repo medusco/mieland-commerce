@@ -105,9 +105,7 @@ export function buildWcOrderFromCart(args: {
   };
 }
 
-export async function createWcOrder(
-  payload: WcOrderPayload,
-): Promise<Record<string, unknown>> {
+function wcRestOrdersUrl(orderId?: number): URL {
   const cfg = loadConfig();
   if (!cfg.WC_CONSUMER_KEY || !cfg.WC_CONSUMER_SECRET) {
     throw new Error(
@@ -115,16 +113,29 @@ export async function createWcOrder(
     );
   }
   const base = cfg.WORDPRESS_URL.replace(/\/$/, "");
-  const url = new URL(`${base}/wp-json/wc/v3/orders`);
+  const path =
+    orderId != null
+      ? `${base}/wp-json/wc/v3/orders/${orderId}`
+      : `${base}/wp-json/wc/v3/orders`;
+  const url = new URL(path);
   url.searchParams.set("consumer_key", cfg.WC_CONSUMER_KEY);
   url.searchParams.set("consumer_secret", cfg.WC_CONSUMER_SECRET);
+  return url;
+}
 
+async function wcRestOrderRequest(
+  method: "POST" | "PUT",
+  url: URL,
+  payload: Record<string, unknown>,
+  logMsg: string,
+): Promise<Record<string, unknown>> {
+  const cfg = loadConfig();
   const started = Date.now();
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(url, {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
@@ -137,7 +148,7 @@ export async function createWcOrder(
         body = { message: text };
       }
       logJson("info", {
-        msg: "wc_rest_create_order",
+        msg: logMsg,
         status: res.status,
         ms: Date.now() - started,
         attempt,
@@ -154,4 +165,23 @@ export async function createWcOrder(
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+export async function createWcOrder(
+  payload: WcOrderPayload,
+): Promise<Record<string, unknown>> {
+  return wcRestOrderRequest("POST", wcRestOrdersUrl(), payload, "wc_rest_create_order");
+}
+
+/** Update an existing WC order (e.g. set status to failed after payment failure). */
+export async function updateWcOrder(
+  orderId: number,
+  payload: { status?: string } & Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return wcRestOrderRequest(
+    "PUT",
+    wcRestOrdersUrl(orderId),
+    payload,
+    "wc_rest_update_order",
+  );
 }
