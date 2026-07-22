@@ -17,13 +17,13 @@ export type StoreAddress = {
   [key: string]: string | boolean | undefined;
 };
 
-export type StorePaymentDatum = { key: string; value: string };
+export type StorePaymentDatum = { key: string; value: string | boolean };
 
 export type StoreCheckoutOrderPayload = {
   key: string;
   billing_email?: string;
-  billing_address?: StoreAddress;
-  shipping_address?: StoreAddress;
+  billing_address: StoreAddress;
+  shipping_address: StoreAddress;
   payment_method: string;
   payment_data?: StorePaymentDatum[];
 };
@@ -88,18 +88,30 @@ export async function getStoreCartToken(): Promise<string> {
 
 function storeErrorMessage(body: Record<string, unknown>, fallback: string): string {
   const data = body.data as
-    | { message?: string; params?: Record<string, string>; details?: unknown }
+    | {
+        message?: string;
+        params?: string[] | Record<string, string>;
+        details?: Record<string, { message?: string; code?: string }>;
+      }
     | undefined;
   const base = String(
     body.message || data?.message || body.code || fallback,
   );
-  if (data?.params && typeof data.params === "object") {
-    const detail = Object.entries(data.params)
-      .map(([key, value]) => `${key}: ${value}`)
-      .join("; ");
-    if (detail) return `${base} (${detail})`;
+  const parts: string[] = [];
+  if (Array.isArray(data?.params)) {
+    if (data.params.length) parts.push(data.params.join(", "));
+  } else if (data?.params && typeof data.params === "object") {
+    for (const [key, value] of Object.entries(data.params)) {
+      parts.push(`${key}: ${value}`);
+    }
   }
-  return base;
+  if (data?.details && typeof data.details === "object") {
+    for (const [key, detail] of Object.entries(data.details)) {
+      const msg = detail?.message || detail?.code;
+      if (msg) parts.push(`${key}: ${msg}`);
+    }
+  }
+  return parts.length ? `${base} (${parts.join("; ")})` : base;
 }
 
 /**
@@ -129,14 +141,10 @@ export async function processStoreCheckoutOrder(
         body: JSON.stringify({
           key: payload.key,
           payment_method: payload.payment_method,
+          billing_address: payload.billing_address,
+          shipping_address: payload.shipping_address,
           ...(payload.billing_email
             ? { billing_email: payload.billing_email }
-            : {}),
-          ...(payload.billing_address
-            ? { billing_address: payload.billing_address }
-            : {}),
-          ...(payload.shipping_address
-            ? { shipping_address: payload.shipping_address }
             : {}),
           ...(payload.payment_data?.length
             ? { payment_data: payload.payment_data }
@@ -182,7 +190,7 @@ export function toStorePaymentData(
   const out: StorePaymentDatum[] = [];
   const seen = new Set<string>();
 
-  const push = (key: string, value: string) => {
+  const push = (key: string, value: string | boolean) => {
     if (!key || seen.has(key)) return;
     seen.add(key);
     out.push({ key, value });
@@ -190,9 +198,19 @@ export function toStorePaymentData(
 
   for (const entry of entries) {
     const key = entry.key;
-    const value = String(entry.value ?? "");
+    const raw = entry.value;
     if (!key) continue;
 
+    // Store API / Stripe expect a real boolean for this flag.
+    if (
+      key === "wc-stripe-new-payment-method" &&
+      (raw === "true" || raw === "false" || raw === "1" || raw === "0")
+    ) {
+      push(key, raw === "true" || raw === "1");
+      continue;
+    }
+
+    const value = String(raw ?? "");
     push(key, value);
 
     // WPGraphQL / WC Stripe order meta → Store API Stripe payment_data aliases

@@ -400,15 +400,25 @@ export const checkoutResolvers = {
         }
       }
 
-      // Use addresses already written by checkout (MySQL), not Store API re-fetch.
+      // Use addresses already written by checkout (MySQL). Store API requires both.
       let billing_address = toStoreAddress(ctxOrder.billing, {
         emailFallback: billingEmail,
       });
-      const shipping_address = toStoreAddress(ctxOrder.shipping, {
+      let shipping_address = toStoreAddress(ctxOrder.shipping, {
         includeEmail: false,
       });
       if (billingEmail) {
         billing_address = { ...billing_address, email: billingEmail };
+      }
+      if (!billing_address.address_1 || !billing_address.country) {
+        throw new Error(
+          "Order is missing billing address; cannot process payment",
+        );
+      }
+      // Pay-for-order requires shipping_address; fall back to billing when empty.
+      if (!shipping_address.address_1 || !shipping_address.country) {
+        const { email: _omit, ...billingAsShipping } = billing_address;
+        shipping_address = billingAsShipping;
       }
 
       const started = Date.now();
@@ -421,27 +431,6 @@ export const checkoutResolvers = {
           shipping_address,
           payment_method: paymentMethod,
           payment_data: paymentData,
-        }).catch(async (firstErr) => {
-          const msg = String(firstErr);
-          // Some WC versions reject address args on checkout/{id}; retry payment-only.
-          if (
-            /Invalid parameter\(s\):\s*billing_address/i.test(msg) ||
-            /Invalid parameter\(s\):\s*shipping_address/i.test(msg)
-          ) {
-            logJson("warn", {
-              msg: "process_order_payment_retry_without_addresses",
-              requestId: ctx.requestId,
-              orderId,
-              err: msg,
-            });
-            return processStoreCheckoutOrder(orderId, {
-              key: orderKey,
-              billing_email: billingEmail,
-              payment_method: paymentMethod,
-              payment_data: paymentData,
-            });
-          }
-          throw firstErr;
         });
         logJson("info", {
           msg: "process_order_payment_ok",
