@@ -942,6 +942,8 @@ export const typeDefs = /* GraphQL */ `
   type RefreshTokenPayload {
     authToken: String
     authTokenExpiration: String
+    refreshToken: String
+    refreshTokenExpiration: String
     clientMutationId: String
     success: Boolean
   }

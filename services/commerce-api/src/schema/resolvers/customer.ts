@@ -271,6 +271,8 @@ export const customerResolvers = {
           success: false,
           authToken: null,
           authTokenExpiration: null,
+          refreshToken: null,
+          refreshTokenExpiration: null,
         };
       }
       return {

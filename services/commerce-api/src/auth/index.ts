@@ -269,6 +269,8 @@ export async function verifyAccessToken(
 export async function refreshAuthToken(refreshToken: string): Promise<{
   authToken: string;
   authTokenExpiration: string;
+  refreshToken: string;
+  refreshTokenExpiration: string;
 } | null> {
   try {
     const secret = await loadJwtSecret();
@@ -284,12 +286,9 @@ export async function refreshAuthToken(refreshToken: string): Promise<{
     const user = await findUserById(userId);
     if (!user) return null;
     const tokens = await issueTokens(user);
-    // rotate: delete old refresh
+    // rotate: delete old refresh after issuing the replacement
     await redis.del(`refresh:${userId}:${jti}`);
-    return {
-      authToken: tokens.authToken,
-      authTokenExpiration: tokens.authTokenExpiration,
-    };
+    return tokens;
   } catch {
     return null;
   }
