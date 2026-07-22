@@ -28,7 +28,7 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 \`cart\`, \`products\`, \`customer\`, \`order\`, \`loginClients\`, \`mielandSubscriptionSettings\`, \`mielandSubscriptions\`, \`mielandSubscription\`, \`posts\`, \`post\`, \`categories\`, \`pages\`, \`page\`, \`navigation\`, \`labResults\`
 
 ### Mutations
-\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`createOrder\`, \`checkout\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`
+\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`
 
 Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/graphql\` in non-production.
 `.trim(),
@@ -223,6 +223,29 @@ Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/gra
                         paymentMethod: "stripe",
                         customerNote: "api docs example",
                         shipToDifferentAddress: false,
+                      },
+                    },
+                  },
+                },
+                processOrderPayment: {
+                  summary: "processOrderPayment (Store API)",
+                  value: {
+                    query: `mutation Pay($input: ProcessOrderPaymentInput!) {
+  processOrderPayment(input: $input) {
+    result
+    redirect
+    paymentStatus
+    order { databaseId status needsPayment total }
+  }
+}`,
+                    variables: {
+                      input: {
+                        orderId: 123,
+                        paymentMethod: "stripe",
+                        paymentData: [
+                          { key: "stripe_source", value: "pm_xxx" },
+                          { key: "wc-stripe-new-payment-method", value: "true" },
+                        ],
                       },
                     },
                   },

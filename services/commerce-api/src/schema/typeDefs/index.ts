@@ -800,6 +800,25 @@ export const typeDefs = /* GraphQL */ `
     shipToDifferentAddress: Boolean
   }
 
+  """
+  Pay an existing unpaid order via WooCommerce Store API
+  POST /wc/store/v1/checkout/{orderId} (runs gateway process_payment).
+  """
+  input ProcessOrderPaymentInput {
+    clientMutationId: String
+    orderId: Int!
+    """Order key (wc_order_…). Optional when the API can load it from MySQL."""
+    orderKey: String
+    """Guest verification email when the order has no customer account."""
+    billingEmail: String
+    paymentMethod: String
+    """
+    Store API payment_data key/values (e.g. stripe_source, wc-stripe-payment-method).
+    WPGraphQL-style keys like _stripe_source_id are also accepted and mapped.
+    """
+    paymentData: [MetaDataInput]
+  }
+
   input UpdateCustomerInput {
     clientMutationId: String
     id: ID
@@ -881,6 +900,16 @@ export const typeDefs = /* GraphQL */ `
     clientMutationId: String
   }
 
+  type ProcessOrderPaymentPayload {
+    clientMutationId: String
+    order: Order
+    """Gateway result: success | failure | pending | error (from Store API)."""
+    result: String
+    redirect: String
+    paymentStatus: String
+    paymentDetails: [MetaData]
+  }
+
   type UpdateCustomerPayload {
     customer: Customer
     clientMutationId: String
@@ -954,6 +983,7 @@ export const typeDefs = /* GraphQL */ `
     removeCoupons(input: RemoveCouponsInput!): CartPayload
     createOrder(input: CreateOrderInput!): CreateOrderPayload
     checkout(input: CheckoutInput!): CheckoutPayload
+    processOrderPayment(input: ProcessOrderPaymentInput!): ProcessOrderPaymentPayload
     updateCustomer(input: UpdateCustomerInput!): UpdateCustomerPayload
     registerCustomer(input: RegisterCustomerInput!): RegisterCustomerPayload
     sendPasswordResetEmail(input: SendPasswordResetEmailInput!): SendPasswordResetEmailPayload

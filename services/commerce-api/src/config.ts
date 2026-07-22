@@ -23,6 +23,8 @@ const envSchema = z.object({
   CART_TTL_SECONDS: z.coerce.number().default(604800),
   APQ_TTL_SECONDS: z.coerce.number().default(2592000),
   WORDPRESS_URL: z.string().default("http://localhost:8000"),
+  /** Public uploads/CDN base (WP `S3_UPLOADS_BUCKET_URL`, e.g. https://img.mieland.com). */
+  MEDIA_BASE_URL: z.string().default(""),
   WC_CONSUMER_KEY: z.string().default(""),
   WC_CONSUMER_SECRET: z.string().default(""),
   WC_REST_TIMEOUT_MS: z.coerce.number().default(15000),
@@ -66,10 +68,18 @@ function normalizeWcRestCredentials(): void {
   if (secret) process.env.WC_CONSUMER_SECRET = secret;
 }
 
+/** Prefer MEDIA_BASE_URL; accept WP S3 Uploads env name as alias. */
+function normalizeMediaBaseUrl(): void {
+  const media =
+    process.env.MEDIA_BASE_URL || process.env.S3_UPLOADS_BUCKET_URL || "";
+  if (media) process.env.MEDIA_BASE_URL = media;
+}
+
 export function loadConfig(): AppConfig {
   if (cached) return cached;
   loadDotEnv();
   normalizeWcRestCredentials();
+  normalizeMediaBaseUrl();
   const parsed = envSchema.parse(process.env);
   cached = {
     ...parsed,

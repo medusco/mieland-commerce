@@ -13,6 +13,8 @@ npm run dev
 
 Requires MySQL (Woo `hy_` tables) and Redis. Point `GRAPHQL_ENDPOINT` in the mieland shop at `http://localhost:4000/graphql`.
 
+Set `MEDIA_BASE_URL` (or `S3_UPLOADS_BUCKET_URL`) to the same public uploads CDN WordPress uses — e.g. `https://img.mieland.com` — so product/media `sourceUrl` values match the media library instead of frozen `posts.guid` hosts.
+
 ## Deploy (Railway)
 
 Railpack fails if it analyzes the monorepo root (no root `package.json`). Use Docker:
@@ -67,6 +69,8 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 ## Checkout
 
 `checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`). Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
+
+`processOrderPayment` pays an existing unpaid order via WooCommerce Store API `POST /wc/store/v1/checkout/{orderId}` (runs the Stripe gateway). Pass Store API `paymentData` (e.g. `stripe_source`) or WPGraphQL-style `_stripe_source_id`.
 
 `updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 

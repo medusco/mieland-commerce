@@ -8,9 +8,15 @@ import {
   buildWcOrderFromCart,
   createWcOrder,
 } from "../../clients/woocommerce-rest.js";
+import {
+  processStoreCheckoutOrder,
+  toStorePaymentData,
+  type StoreAddress,
+} from "../../clients/woocommerce-store.js";
 import { getCustomer } from "../../repositories/customers.js";
 import {
   getOrderById,
+  getOrderPaymentContext,
   shapeOrder,
   shapeOrderFromWc,
 } from "../../repositories/orders.js";
@@ -37,6 +43,40 @@ function mapAddress(input?: CartAddress | null): CartAddress {
     phone: input.phone,
     email: input.email,
   };
+}
+
+function toStoreAddress(
+  a: {
+    firstName?: string | null;
+    lastName?: string | null;
+    company?: string | null;
+    address1?: string | null;
+    address2?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postcode?: string | null;
+    country?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  } | null | undefined,
+  opts?: { includeEmail?: boolean },
+): StoreAddress {
+  const base: StoreAddress = {
+    first_name: a?.firstName ?? "",
+    last_name: a?.lastName ?? "",
+    company: a?.company ?? "",
+    address_1: a?.address1 ?? "",
+    address_2: a?.address2 ?? "",
+    city: a?.city ?? "",
+    state: a?.state ?? "",
+    postcode: a?.postcode ?? "",
+    country: a?.country ?? "",
+    phone: a?.phone ?? "",
+  };
+  if (opts?.includeEmail !== false) {
+    base.email = a?.email ?? "";
+  }
+  return base;
 }
 
 function wantsCustomer(info: GraphQLResolveInfo): boolean {
@@ -236,6 +276,140 @@ export const checkoutResolvers = {
         order,
         redirect: null,
         result: "success",
+      };
+    },
+
+    processOrderPayment: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input: {
+          clientMutationId?: string;
+          orderId: number;
+          orderKey?: string | null;
+          billingEmail?: string | null;
+          paymentMethod?: string | null;
+          paymentData?: Array<{ key: string; value?: string | null }>;
+        };
+      },
+      ctx: AppContext,
+      info: GraphQLResolveInfo,
+    ) => {
+      const orderId = Number(input.orderId);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        throw new Error("Invalid orderId");
+      }
+
+      const ctxOrder = await getOrderPaymentContext(orderId);
+      if (!ctxOrder) throw new Error("Order not found");
+
+      if (ctx.userId != null) {
+        if (ctxOrder.customerId > 0 && ctxOrder.customerId !== ctx.userId) {
+          throw new Error("Order not found");
+        }
+      } else if (ctxOrder.customerId > 0) {
+        throw new Error("Authentication required");
+      }
+
+      if (!ctxOrder.needsPayment) {
+        throw new Error(`Order does not need payment (status: ${ctxOrder.status})`);
+      }
+
+      const orderKey = (input.orderKey || ctxOrder.orderKey || "").trim();
+      if (!orderKey) {
+        throw new Error("orderKey is required");
+      }
+      if (ctxOrder.orderKey && input.orderKey && input.orderKey !== ctxOrder.orderKey) {
+        throw new Error("Invalid orderKey");
+      }
+
+      const billingEmail =
+        input.billingEmail || ctxOrder.billing?.email || undefined;
+      if (ctxOrder.customerId === 0 && !billingEmail) {
+        throw new Error("billingEmail is required for guest orders");
+      }
+
+      const paymentMethod =
+        input.paymentMethod || ctxOrder.paymentMethod || "stripe";
+      const paymentData = toStorePaymentData(input.paymentData);
+
+      // Stripe Store API usually expects billing fields inside payment_data too.
+      if (paymentMethod === "stripe") {
+        const billing = ctxOrder.billing;
+        if (billingEmail && !paymentData.some((p) => p.key === "billing_email")) {
+          paymentData.push({ key: "billing_email", value: billingEmail });
+        }
+        if (
+          billing?.firstName &&
+          !paymentData.some((p) => p.key === "billing_first_name")
+        ) {
+          paymentData.push({
+            key: "billing_first_name",
+            value: billing.firstName,
+          });
+        }
+        if (
+          billing?.lastName &&
+          !paymentData.some((p) => p.key === "billing_last_name")
+        ) {
+          paymentData.push({
+            key: "billing_last_name",
+            value: billing.lastName,
+          });
+        }
+        if (!paymentData.some((p) => p.key === "paymentMethod")) {
+          paymentData.push({ key: "paymentMethod", value: "stripe" });
+        }
+      }
+
+      const started = Date.now();
+      let storeRes;
+      try {
+        storeRes = await processStoreCheckoutOrder(orderId, {
+          key: orderKey,
+          billing_email: billingEmail,
+          billing_address: toStoreAddress(ctxOrder.billing),
+          shipping_address: toStoreAddress(ctxOrder.shipping, {
+            includeEmail: false,
+          }),
+          payment_method: paymentMethod,
+          payment_data: paymentData,
+        });
+        logJson("info", {
+          msg: "process_order_payment_ok",
+          requestId: ctx.requestId,
+          ms: Date.now() - started,
+          orderId,
+          paymentStatus: storeRes.payment_result?.payment_status,
+        });
+      } catch (err) {
+        logJson("error", {
+          msg: "process_order_payment_fail",
+          requestId: ctx.requestId,
+          ms: Date.now() - started,
+          orderId,
+          err: String(err),
+        });
+        throw err;
+      }
+
+      const paymentResult = storeRes.payment_result;
+      const needs = orderNeedsFromInfo(info, ["order"]);
+      const order =
+        (await shapeOrder(orderId, needs)) ??
+        (await getOrderById(orderId, ctx.userId));
+
+      return {
+        clientMutationId: input.clientMutationId,
+        order,
+        result: paymentResult?.payment_status ?? "unknown",
+        redirect: paymentResult?.redirect_url || null,
+        paymentStatus: paymentResult?.payment_status ?? null,
+        paymentDetails: (paymentResult?.payment_details ?? []).map((d) => ({
+          key: d.key,
+          value: String(d.value ?? ""),
+        })),
       };
     },
   },

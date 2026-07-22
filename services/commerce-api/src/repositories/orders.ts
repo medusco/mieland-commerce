@@ -596,5 +596,42 @@ export async function getOrderById(id: number, customerId?: number | null) {
   return order;
 }
 
+/** Lean load for Store API checkout/{id} payment — key + addresses + ownership. */
+export async function getOrderPaymentContext(orderId: number) {
+  const order = await queryOne<{
+    id: number;
+    status: string;
+    customer_id: number;
+    payment_method: string;
+  }>(
+    `SELECT id, status, customer_id, payment_method
+     FROM ${t("wc_orders")} WHERE id = ? AND type = 'shop_order' LIMIT 1`,
+    [orderId],
+  );
+  if (!order) return null;
+
+  const [ops, meta, billing, shipping] = await Promise.all([
+    queryOne<{ order_key: string | null }>(
+      `SELECT order_key FROM ${t("wc_order_operational_data")} WHERE order_id = ? LIMIT 1`,
+      [orderId],
+    ),
+    orderMeta(orderId),
+    orderAddress(orderId, "billing"),
+    orderAddress(orderId, "shipping"),
+  ]);
+
+  const status = order.status.replace(/^wc-/, "");
+  return {
+    id: order.id,
+    customerId: Number(order.customer_id),
+    status,
+    paymentMethod: order.payment_method || "stripe",
+    orderKey: ops?.order_key || meta._order_key || "",
+    needsPayment: ["pending", "on-hold", "failed"].includes(status),
+    billing,
+    shipping,
+  };
+}
+
 void getAttachmentUrl;
 void getPostMeta;

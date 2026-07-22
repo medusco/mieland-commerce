@@ -6,6 +6,7 @@ import {
   productListIsLean,
   type ProductListNeeds,
 } from "../utils/selection.js";
+import { buildMediaItemUrl, getMediaBaseUrl } from "./media.js";
 
 export type ProductRow = {
   ID: number;
@@ -199,16 +200,20 @@ async function getAttachmentUrls(
   if (!unique.length) return out;
 
   const placeholders = unique.map(() => "?").join(",");
-  const rows = await query<{ ID: number; guid: string; post_title: string }[]>(
-    `SELECT ID, guid, post_title FROM ${t("posts")} WHERE ID IN (${placeholders})`,
-    unique,
-  );
-  const metaMap = await getPostMetaMany(unique);
+  const [rows, metaMap, mediaBaseUrl] = await Promise.all([
+    query<{ ID: number; guid: string; post_title: string }[]>(
+      `SELECT ID, guid, post_title FROM ${t("posts")} WHERE ID IN (${placeholders})`,
+      unique,
+    ),
+    getPostMetaMany(unique),
+    getMediaBaseUrl(),
+  ]);
   for (const row of rows) {
     const meta = metaMap.get(row.ID) ?? {};
+    const url = buildMediaItemUrl(meta._wp_attached_file, row.guid, mediaBaseUrl);
     out.set(row.ID, {
-      sourceUrl: row.guid,
-      mediaItemUrl: row.guid,
+      sourceUrl: url,
+      mediaItemUrl: url,
       altText: meta._wp_attachment_image_alt || row.post_title || "",
     });
   }
