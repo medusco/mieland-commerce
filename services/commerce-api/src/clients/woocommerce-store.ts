@@ -13,6 +13,8 @@ export type StoreAddress = {
   country: string;
   email?: string;
   phone: string;
+  /** Custom checkout address fields (Store API schema). */
+  [key: string]: string | boolean | undefined;
 };
 
 export type StorePaymentDatum = { key: string; value: string };
@@ -20,8 +22,8 @@ export type StorePaymentDatum = { key: string; value: string };
 export type StoreCheckoutOrderPayload = {
   key: string;
   billing_email?: string;
-  billing_address: StoreAddress;
-  shipping_address: StoreAddress;
+  billing_address?: StoreAddress;
+  shipping_address?: StoreAddress;
   payment_method: string;
   payment_data?: StorePaymentDatum[];
 };
@@ -84,6 +86,22 @@ export async function getStoreCartToken(): Promise<string> {
   return token;
 }
 
+function storeErrorMessage(body: Record<string, unknown>, fallback: string): string {
+  const data = body.data as
+    | { message?: string; params?: Record<string, string>; details?: unknown }
+    | undefined;
+  const base = String(
+    body.message || data?.message || body.code || fallback,
+  );
+  if (data?.params && typeof data.params === "object") {
+    const detail = Object.entries(data.params)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join("; ");
+    if (detail) return `${base} (${detail})`;
+  }
+  return base;
+}
+
 /**
  * Pay an existing unpaid order via Store API:
  * POST /wc/store/v1/checkout/{ORDER_ID}
@@ -108,7 +126,22 @@ export async function processStoreCheckoutOrder(
           "Content-Type": "application/json",
           "Cart-Token": token,
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          key: payload.key,
+          payment_method: payload.payment_method,
+          ...(payload.billing_email
+            ? { billing_email: payload.billing_email }
+            : {}),
+          ...(payload.billing_address
+            ? { billing_address: payload.billing_address }
+            : {}),
+          ...(payload.shipping_address
+            ? { shipping_address: payload.shipping_address }
+            : {}),
+          ...(payload.payment_data?.length
+            ? { payment_data: payload.payment_data }
+            : {}),
+        }),
         signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
       });
       const text = await res.text();
@@ -126,13 +159,9 @@ export async function processStoreCheckoutOrder(
         orderId,
       });
       if (!res.ok) {
-        const message = String(
-          body.message ||
-            (body.data as { message?: string } | undefined)?.message ||
-            body.code ||
-            `WC Store checkout ${res.status}`,
+        throw new Error(
+          storeErrorMessage(body, `WC Store checkout ${res.status}`),
         );
-        throw new Error(message);
       }
       return body as StoreCheckoutOrderResponse;
     } catch (err) {

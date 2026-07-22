@@ -60,8 +60,17 @@ function toStoreAddress(
     phone?: string | null;
     email?: string | null;
   } | null | undefined,
-  opts?: { includeEmail?: boolean },
+  opts?: { includeEmail?: boolean; emailFallback?: string | null },
 ): StoreAddress {
+  const country = (a?.country ?? "").trim().toUpperCase();
+  let state = (a?.state ?? "").trim();
+  // Store API expects ISO state codes for US (e.g. CA, not California).
+  if (country === "US" && state.length > 2) {
+    // keep as-is; WC format_state usually maps names — prefer uppercase codes when 2 letters
+    state = state;
+  } else if (country === "US") {
+    state = state.toUpperCase();
+  }
   const base: StoreAddress = {
     first_name: a?.firstName ?? "",
     last_name: a?.lastName ?? "",
@@ -69,13 +78,13 @@ function toStoreAddress(
     address_1: a?.address1 ?? "",
     address_2: a?.address2 ?? "",
     city: a?.city ?? "",
-    state: a?.state ?? "",
+    state,
     postcode: a?.postcode ?? "",
-    country: a?.country ?? "",
+    country,
     phone: a?.phone ?? "",
   };
   if (opts?.includeEmail !== false) {
-    base.email = a?.email ?? "";
+    base.email = (a?.email || opts?.emailFallback || "").trim();
   }
   return base;
 }
@@ -240,7 +249,7 @@ export const checkoutResolvers = {
 
       const idempKey = createHash("sha256")
         .update(
-          `${ctx.sessionToken}:${JSON.stringify(cart.items)}:${JSON.stringify(meta)}:checkout`,
+          `${ctx.sessionToken}:${JSON.stringify(cart.items)}:${JSON.stringify(meta)}:${JSON.stringify({ billing: cart.billing, shipping: cart.shipping })}:checkout`,
         )
         .digest("hex");
 
@@ -391,18 +400,48 @@ export const checkoutResolvers = {
         }
       }
 
+      // Use addresses already written by checkout (MySQL), not Store API re-fetch.
+      let billing_address = toStoreAddress(ctxOrder.billing, {
+        emailFallback: billingEmail,
+      });
+      const shipping_address = toStoreAddress(ctxOrder.shipping, {
+        includeEmail: false,
+      });
+      if (billingEmail) {
+        billing_address = { ...billing_address, email: billingEmail };
+      }
+
       const started = Date.now();
       let storeRes;
       try {
         storeRes = await processStoreCheckoutOrder(orderId, {
           key: orderKey,
           billing_email: billingEmail,
-          billing_address: toStoreAddress(ctxOrder.billing),
-          shipping_address: toStoreAddress(ctxOrder.shipping, {
-            includeEmail: false,
-          }),
+          billing_address,
+          shipping_address,
           payment_method: paymentMethod,
           payment_data: paymentData,
+        }).catch(async (firstErr) => {
+          const msg = String(firstErr);
+          // Some WC versions reject address args on checkout/{id}; retry payment-only.
+          if (
+            /Invalid parameter\(s\):\s*billing_address/i.test(msg) ||
+            /Invalid parameter\(s\):\s*shipping_address/i.test(msg)
+          ) {
+            logJson("warn", {
+              msg: "process_order_payment_retry_without_addresses",
+              requestId: ctx.requestId,
+              orderId,
+              err: msg,
+            });
+            return processStoreCheckoutOrder(orderId, {
+              key: orderKey,
+              billing_email: billingEmail,
+              payment_method: paymentMethod,
+              payment_data: paymentData,
+            });
+          }
+          throw firstErr;
         });
         logJson("info", {
           msg: "process_order_payment_ok",
