@@ -239,6 +239,18 @@ export async function issueTokens(user: AuthUser): Promise<{
   };
 }
 
+function userIdFromJwtPayload(payload: jose.JWTPayload): number | null {
+  const fromSub = Number(payload.sub);
+  if (Number.isFinite(fromSub) && fromSub > 0) return fromSub;
+
+  // WPGraphQL JWT / Headless Login access tokens use data.user.id (not `sub`).
+  const data = payload.data as { user?: { id?: string | number } } | undefined;
+  const fromWp = Number(data?.user?.id);
+  if (Number.isFinite(fromWp) && fromWp > 0) return fromWp;
+
+  return null;
+}
+
 export async function verifyAccessToken(
   token: string,
 ): Promise<{ userId: number } | null> {
@@ -246,7 +258,7 @@ export async function verifyAccessToken(
     const secret = await loadJwtSecret();
     const { payload } = await jose.jwtVerify(token, secret);
     if (payload.typ === "refresh") return null;
-    const userId = Number(payload.sub);
+    const userId = userIdFromJwtPayload(payload);
     if (!userId) return null;
     return { userId };
   } catch {
