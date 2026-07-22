@@ -109,9 +109,10 @@ function isStripeWalletPayment(
 
 /**
  * Resolve billing/shipping for order create.
- * Google Pay / Apple Pay / Link: wallet address is authoritative — prefer shipping*
- * (where the storefront puts the wallet address) and copy it to billing + shipping.
- * shipToDifferentAddress only matters for non-wallet checkouts.
+ * Express / wallet checkouts send the wallet-selected address on shipping (and
+ * usually mirror it on billing). Prefer shipping when present so a stale cart
+ * customer billing address cannot win. shipToDifferentAddress false copies
+ * billing → shipping for regular card checkout.
  */
 function resolveCheckoutAddresses(input: {
   billing?: CartAddress | null;
@@ -125,11 +126,11 @@ function resolveCheckoutAddresses(input: {
   const wallet = isStripeWalletPayment(input.metaData);
   const singleAddress = input.shipToDifferentAddress !== true;
 
-  // Wallet (Google Pay etc.) or single-address checkout: prefer shipping when present.
+  // Wallet or single-address: shipping (wallet selection) is authoritative.
   if ((wallet || singleAddress) && shippingIn.address1) {
     const shared = { ...shippingIn };
     return {
-      billing: { ...billingIn, ...shared, ...(email ? { email } : {}) },
+      billing: { ...shared, ...(email ? { email } : {}) },
       shipping: { ...shared },
     };
   }
@@ -139,6 +140,15 @@ function resolveCheckoutAddresses(input: {
     return {
       billing: billingIn,
       shipping: { ...ship },
+    };
+  }
+
+  // Distinct shipping + billing (express with shipToDifferentAddress true).
+  // Prefer shipping for any missing billing street so profile billing cannot linger.
+  if (shippingIn.address1 && !billingIn.address1) {
+    return {
+      billing: { ...shippingIn, ...(email ? { email } : {}) },
+      shipping: shippingIn,
     };
   }
 
@@ -288,8 +298,9 @@ export const checkoutResolvers = {
           shipToDifferentAddress: input.shipToDifferentAddress,
           metaData: input.metaData,
         });
-        c.billing = { ...c.billing, ...resolved.billing };
-        c.shipping = { ...c.shipping, ...resolved.shipping };
+        // Replace (don't merge) so stale cart/profile billing cannot linger.
+        c.billing = { ...resolved.billing };
+        c.shipping = { ...resolved.shipping };
         if (userId) c.customerId = userId;
         return { cart: c, result: c };
       });
@@ -313,13 +324,24 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const wcOrder = await withCheckoutIdempotency(idempKey, async () => {
+        // Create as guest (customer_id 0). Store API pay-for-order only allows
+        // registered orders when the WP user matches; our Cart-Token calls are
+        // anonymous, so a logged-in customer_id always fails with
+        // "This order belongs to a different customer." Attach user after pay.
+        const metaWithCustomer =
+          userId != null
+            ? [
+                ...meta,
+                { key: "_mieland_customer_id", value: String(userId) },
+              ]
+            : meta;
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: input.paymentMethod || "stripe",
           customerNote: input.customerNote,
-          metaData: meta,
-          customerId: userId,
+          metaData: metaWithCustomer,
+          customerId: 0,
         });
         const started = Date.now();
         try {
@@ -329,6 +351,7 @@ export const checkoutResolvers = {
             requestId: ctx.requestId,
             ms: Date.now() - started,
             orderId: order.id,
+            pendingCustomerId: userId ?? null,
           });
           return order;
         } catch (err) {
@@ -421,7 +444,10 @@ export const checkoutResolvers = {
       }
 
       const billingEmail =
-        input.billingEmail || ctxOrder.billing?.email || undefined;
+        // Guest Store API auth requires this to match the order billing email.
+        // Prefer the order over the client (Google Pay wallet email often differs).
+        (ctxOrder.billing?.email || input.billingEmail || "").trim() ||
+        undefined;
       if (ctxOrder.customerId === 0 && !billingEmail) {
         throw new Error("billingEmail is required for guest orders");
       }
@@ -514,6 +540,19 @@ export const checkoutResolvers = {
       const paymentStatus = paymentResult?.payment_status ?? null;
       if (isPaymentFailureStatus(paymentStatus)) {
         await markOrderPaymentFailed(orderId, ctx.requestId);
+      } else if (ctx.userId) {
+        // Attach the logged-in customer now that Store API payment succeeded.
+        try {
+          await updateWcOrder(orderId, { customer_id: ctx.userId });
+        } catch (err) {
+          logJson("warn", {
+            msg: "process_order_payment_attach_customer_fail",
+            requestId: ctx.requestId,
+            orderId,
+            customerId: ctx.userId,
+            err: String(err),
+          });
+        }
       }
 
       const needs = orderNeedsFromInfo(info, ["order"]);

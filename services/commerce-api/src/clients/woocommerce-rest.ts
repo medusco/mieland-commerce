@@ -94,7 +94,10 @@ export function buildWcOrderFromCart(args: {
   return {
     payment_method: paymentMethod || "stripe",
     payment_method_title: "Credit Card (Stripe)",
-    customer_id: customerId || cart.customerId || undefined,
+    customer_id:
+      customerId !== undefined && customerId !== null
+        ? customerId
+        : cart.customerId || undefined,
     customer_note: customerNote || undefined,
     billing: addr(cart.billing),
     shipping: addr(cart.shipping),
