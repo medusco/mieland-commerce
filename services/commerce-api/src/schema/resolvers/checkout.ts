@@ -89,6 +89,62 @@ function toStoreAddress(
   return base;
 }
 
+function isStripeWalletPayment(
+  metaData?: Array<{ key: string; value?: string | null }> | null,
+): boolean {
+  if (!metaData?.length) return false;
+  const upe = metaData.find(
+    (m) =>
+      m.key === "_stripe_upe_payment_type" ||
+      m.key === "stripe_upe_payment_type" ||
+      m.key === "upePaymentType",
+  )?.value;
+  const normalized = String(upe ?? "").toLowerCase();
+  return (
+    normalized === "google_pay" ||
+    normalized === "apple_pay" ||
+    normalized === "link"
+  );
+}
+
+/**
+ * Resolve billing/shipping for order create.
+ * Google Pay / Apple Pay / Link: wallet address is authoritative — prefer shipping*
+ * (where the storefront puts the wallet address) and copy it to billing + shipping.
+ * shipToDifferentAddress only matters for non-wallet checkouts.
+ */
+function resolveCheckoutAddresses(input: {
+  billing?: CartAddress | null;
+  shipping?: CartAddress | null;
+  shipToDifferentAddress?: boolean | null;
+  metaData?: Array<{ key: string; value?: string | null }> | null;
+}): { billing: CartAddress; shipping: CartAddress } {
+  const billingIn = mapAddress(input.billing);
+  const shippingIn = mapAddress(input.shipping);
+  const email = billingIn.email;
+  const wallet = isStripeWalletPayment(input.metaData);
+  const singleAddress = input.shipToDifferentAddress !== true;
+
+  // Wallet (Google Pay etc.) or single-address checkout: prefer shipping when present.
+  if ((wallet || singleAddress) && shippingIn.address1) {
+    const shared = { ...shippingIn };
+    return {
+      billing: { ...billingIn, ...shared, ...(email ? { email } : {}) },
+      shipping: { ...shared },
+    };
+  }
+
+  if (singleAddress && billingIn.address1) {
+    const { email: _e, ...ship } = billingIn;
+    return {
+      billing: billingIn,
+      shipping: { ...ship },
+    };
+  }
+
+  return { billing: billingIn, shipping: shippingIn };
+}
+
 function wantsCustomer(info: GraphQLResolveInfo): boolean {
   const fields = info.fieldNodes.flatMap(
     (n) => n.selectionSet?.selections ?? [],
@@ -226,11 +282,14 @@ export const checkoutResolvers = {
     ) => {
       const userId = ctx.userId; // guest checkout allowed but Stripe meta usually needs account
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
-        if (input.billing) c.billing = { ...c.billing, ...mapAddress(input.billing) };
-        if (input.shipping) c.shipping = { ...c.shipping, ...mapAddress(input.shipping) };
-        if (input.shipToDifferentAddress === false && input.billing) {
-          c.shipping = { ...c.shipping, ...mapAddress(input.billing) };
-        }
+        const resolved = resolveCheckoutAddresses({
+          billing: input.billing,
+          shipping: input.shipping,
+          shipToDifferentAddress: input.shipToDifferentAddress,
+          metaData: input.metaData,
+        });
+        c.billing = { ...c.billing, ...resolved.billing };
+        c.shipping = { ...c.shipping, ...resolved.shipping };
         if (userId) c.customerId = userId;
         return { cart: c, result: c };
       });
