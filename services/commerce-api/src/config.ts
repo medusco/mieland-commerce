@@ -28,6 +28,8 @@ const envSchema = z.object({
   WC_CONSUMER_KEY: z.string().default(""),
   WC_CONSUMER_SECRET: z.string().default(""),
   WC_REST_TIMEOUT_MS: z.coerce.number().default(15000),
+  /** Store API POST /checkout/{id} (Stripe); longer than WC_REST_TIMEOUT_MS. */
+  WC_STORE_PAYMENT_TIMEOUT_MS: z.coerce.number().default(60_000),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   JWT_SECRET: z.string().optional(),
   GRAPHQL_SECRET: z.string().optional(),

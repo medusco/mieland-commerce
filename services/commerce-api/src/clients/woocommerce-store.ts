@@ -182,7 +182,7 @@ export async function processStoreCheckoutOrder(
         ? { payment_data: payload.payment_data }
         : {}),
     }),
-    signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(cfg.WC_STORE_PAYMENT_TIMEOUT_MS),
   });
   const text = await res.text();
   let body: Record<string, unknown>;
