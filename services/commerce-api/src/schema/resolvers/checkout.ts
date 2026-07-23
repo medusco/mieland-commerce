@@ -13,6 +13,8 @@ import {
   processStoreCheckoutOrder,
   toStorePaymentData,
   type StoreAddress,
+  type StoreCheckoutOrderResponse,
+  type StorePaymentDatum,
 } from "../../clients/woocommerce-store.js";
 import { requireWpAuthCookie } from "../../auth/wp-session.js";
 import { getCustomer } from "../../repositories/customers.js";
@@ -182,6 +184,97 @@ async function withCheckoutIdempotency<T>(
     60 * 60,
   );
   return result;
+}
+
+const PAYMENT_IDEMP_TTL_SEC = 60 * 60;
+/** Cover Store API timeout + Stripe processing; unlock early in finally. */
+const PAYMENT_LOCK_TTL_MS = 90_000;
+
+function paymentFingerprint(
+  paymentMethod: string,
+  paymentData: StorePaymentDatum[],
+): string {
+  const source =
+    paymentData.find(
+      (p) =>
+        (p.key === "wc-stripe-payment-method" ||
+          p.key === "stripe_source" ||
+          p.key === "_stripe_source_id") &&
+        typeof p.value === "string" &&
+        /^(pm_|src_|tok_|card_)/i.test(p.value),
+    )?.value ?? JSON.stringify(paymentData);
+  return createHash("sha256")
+    .update(`${paymentMethod}:${String(source)}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * Per-order lock + result cache for Store API payment.
+ * Prevents concurrent processOrderPayment from double-hitting Stripe's order lock.
+ * Failures are not cached so the shopper can retry (usually with a new pm_ id).
+ */
+async function withPaymentIdempotency(
+  orderId: number,
+  fingerprint: string,
+  fn: () => Promise<StoreCheckoutOrderResponse>,
+): Promise<StoreCheckoutOrderResponse> {
+  const redis = getRedis();
+  const resultKey = `payment:idemp:${orderId}:${fingerprint}`;
+  const lockKey = `payment:lock:${orderId}`;
+
+  const cached = await redis.get(resultKey);
+  if (cached) {
+    return JSON.parse(cached) as StoreCheckoutOrderResponse;
+  }
+
+  const token = `${Date.now()}-${Math.random()}`;
+  let acquired = (await redis.set(lockKey, token, "PX", PAYMENT_LOCK_TTL_MS, "NX")) === "OK";
+
+  if (!acquired) {
+    // Wait for the in-flight payment to finish and publish a result.
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const again = await redis.get(resultKey);
+      if (again) {
+        return JSON.parse(again) as StoreCheckoutOrderResponse;
+      }
+      const lockHeld = await redis.get(lockKey);
+      if (!lockHeld) {
+        acquired =
+          (await redis.set(lockKey, token, "PX", PAYMENT_LOCK_TTL_MS, "NX")) ===
+          "OK";
+        if (acquired) break;
+      }
+    }
+  }
+
+  if (!acquired) {
+    const late = await redis.get(resultKey);
+    if (late) {
+      return JSON.parse(late) as StoreCheckoutOrderResponse;
+    }
+    throw new Error("Your payment is already being processed. Please wait.");
+  }
+
+  try {
+    const again = await redis.get(resultKey);
+    if (again) {
+      return JSON.parse(again) as StoreCheckoutOrderResponse;
+    }
+
+    const result = await fn();
+    const status = result.payment_result?.payment_status;
+    if (!isPaymentFailureStatus(status)) {
+      await redis.set(resultKey, JSON.stringify(result), "EX", PAYMENT_IDEMP_TTL_SEC);
+    }
+    return result;
+  } finally {
+    const current = await redis.get(lockKey);
+    if (current === token) {
+      await redis.del(lockKey);
+    }
+  }
 }
 
 async function assertCartInStock(
@@ -514,17 +607,20 @@ export const checkoutResolvers = {
       try {
         const wpCookie =
           ctx.userId != null ? await requireWpAuthCookie(ctx.userId) : null;
-        storeRes = await processStoreCheckoutOrder(
-          orderId,
-          {
-            key: orderKey,
-            billing_email: billingEmail,
-            billing_address,
-            shipping_address,
-            payment_method: paymentMethod,
-            payment_data: paymentData,
-          },
-          wpCookie ? { cookie: wpCookie } : undefined,
+        const fingerprint = paymentFingerprint(paymentMethod, paymentData);
+        storeRes = await withPaymentIdempotency(orderId, fingerprint, () =>
+          processStoreCheckoutOrder(
+            orderId,
+            {
+              key: orderKey,
+              billing_email: billingEmail,
+              billing_address,
+              shipping_address,
+              payment_method: paymentMethod,
+              payment_data: paymentData,
+            },
+            wpCookie ? { cookie: wpCookie } : undefined,
+          ),
         );
         logJson("info", {
           msg: "process_order_payment_ok",
@@ -542,7 +638,11 @@ export const checkoutResolvers = {
           orderId,
           err: String(err),
         });
-        await markOrderPaymentFailed(orderId, ctx.requestId);
+        const message = err instanceof Error ? err.message : String(err);
+        // Concurrent pay — do not flip the order to failed while the other request finishes.
+        if (!/already being processed/i.test(message)) {
+          await markOrderPaymentFailed(orderId, ctx.requestId);
+        }
         throw err;
       }
 

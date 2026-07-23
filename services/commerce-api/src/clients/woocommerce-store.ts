@@ -167,55 +167,41 @@ export async function processStoreCheckoutOrder(
   };
   if (cookie) headers.Cookie = cookie;
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          key: payload.key,
-          payment_method: payload.payment_method,
-          billing_address: payload.billing_address,
-          shipping_address: payload.shipping_address,
-          ...(payload.billing_email
-            ? { billing_email: payload.billing_email }
-            : {}),
-          ...(payload.payment_data?.length
-            ? { payment_data: payload.payment_data }
-            : {}),
-        }),
-        signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
-      });
-      const text = await res.text();
-      let body: Record<string, unknown>;
-      try {
-        body = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        body = { message: text };
-      }
-      logJson("info", {
-        msg: "wc_store_checkout_order",
-        status: res.status,
-        ms: Date.now() - started,
-        attempt,
-        orderId,
-        hasCookie: Boolean(cookie),
-      });
-      if (!res.ok) {
-        throw new Error(
-          storeErrorMessage(body, `WC Store checkout ${res.status}`),
-        );
-      }
-      return body as StoreCheckoutOrderResponse;
-    } catch (err) {
-      lastErr = err;
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    }
+  // Single attempt only — retrying POST /checkout/{id} while Stripe still holds
+  // the order payment lock causes "Your payment is already being processed".
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      key: payload.key,
+      payment_method: payload.payment_method,
+      billing_address: payload.billing_address,
+      shipping_address: payload.shipping_address,
+      ...(payload.billing_email ? { billing_email: payload.billing_email } : {}),
+      ...(payload.payment_data?.length
+        ? { payment_data: payload.payment_data }
+        : {}),
+    }),
+    signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    body = { message: text };
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  logJson("info", {
+    msg: "wc_store_checkout_order",
+    status: res.status,
+    ms: Date.now() - started,
+    orderId,
+    hasCookie: Boolean(cookie),
+  });
+  if (!res.ok) {
+    throw new Error(storeErrorMessage(body, `WC Store checkout ${res.status}`));
+  }
+  return body as StoreCheckoutOrderResponse;
 }
 
 /** Stripe PaymentMethod / Source / Token ids (not UPE type slugs like "card"). */
