@@ -7,7 +7,7 @@ import { loadConfig } from "../config.js";
 import { getOption } from "../repositories/options.js";
 import { query, queryOne, t } from "../db/mysql.js";
 import { getRedis } from "../redis/client.js";
-import { randomToken, toGlobalId } from "../utils/index.js";
+import { randomToken, toGlobalId, logJson } from "../utils/index.js";
 
 export type LoginProviderSettings = {
   isEnabled?: boolean | string | number;
@@ -256,12 +256,25 @@ export async function verifyAccessToken(
 ): Promise<{ userId: number } | null> {
   try {
     const secret = await loadJwtSecret();
-    const { payload } = await jose.jwtVerify(token, secret);
+    // Match WP firebase/php-jwt leeway (TokenManager::$leeway = 60).
+    const { payload } = await jose.jwtVerify(token, secret, {
+      clockTolerance: 60,
+    });
     if (payload.typ === "refresh") return null;
+    // WP refresh tokens carry data.user.user_secret — reject as access tokens.
+    const data = payload.data as
+      | { user?: { id?: string | number; user_secret?: string } }
+      | undefined;
+    if (data?.user?.user_secret) return null;
+
     const userId = userIdFromJwtPayload(payload);
     if (!userId) return null;
     return { userId };
-  } catch {
+  } catch (err) {
+    logJson("warn", {
+      msg: "jwt_verify_failed",
+      err: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

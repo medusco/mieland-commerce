@@ -2,16 +2,15 @@ import type { AppContext } from "../../context.js";
 import { requireUser } from "../../context.js";
 import {
   createUser,
+  findUserById,
   issueTokens,
   listEnabledLoginClients,
   loadProvider,
+  refreshAuthToken,
   toGraphqlUser,
 } from "../../auth/index.js";
 import { saveWpAuthCookie } from "../../auth/wp-session.js";
-import {
-  wpGraphqlLogin,
-  wpGraphqlRefreshToken,
-} from "../../clients/wordpress-graphql.js";
+import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
   requestWpPasswordReset,
@@ -241,7 +240,9 @@ export const customerResolvers = {
       }
 
       // Proxy to WPGraphQL Headless Login so WP sets a real auth cookie.
-      // JWT is returned to the shop; the cookie stays server-side in Redis.
+      // Vault the cookie server-side; mint commerce JWTs for Bearer auth so
+      // verifyAccessToken works even when WP signs with GRAPHQL_LOGIN_JWT_SECRET_KEY
+      // (or another secret that differs from commerce JWT_SECRET / MySQL settings).
       const origin =
         ctx.req.headers.get("origin") ||
         ctx.req.headers.get("Origin") ||
@@ -261,6 +262,21 @@ export const customerResolvers = {
       }
       await saveWpAuthCookie(userId, wp.cookieHeader, wp.cookieTtlSeconds);
 
+      const user =
+        (await findUserById(userId)) ?? {
+          id: userId,
+          email: wp.user.email ?? "",
+          username: wp.user.username ?? "",
+          firstName: wp.user.firstName ?? "",
+          lastName: wp.user.lastName ?? "",
+          displayName:
+            [wp.user.firstName, wp.user.lastName].filter(Boolean).join(" ") ||
+            wp.user.username ||
+            wp.user.email ||
+            "",
+        };
+
+      const tokens = await issueTokens(user);
       await bindCartToCustomer(ctx.sessionToken, userId);
 
       const customer =
@@ -275,41 +291,21 @@ export const customerResolvers = {
 
       return {
         clientMutationId: input.clientMutationId,
-        authToken: wp.authToken,
-        authTokenExpiration: wp.authTokenExpiration,
-        refreshToken: wp.refreshToken,
-        refreshTokenExpiration: wp.refreshTokenExpiration,
+        ...tokens,
         sessionToken: ctx.sessionToken,
         customer,
-        user: toGraphqlUser({
-          id: userId,
-          email: wp.user.email ?? "",
-          username: wp.user.username ?? "",
-          firstName: wp.user.firstName ?? "",
-          lastName: wp.user.lastName ?? "",
-          displayName:
-            [wp.user.firstName, wp.user.lastName].filter(Boolean).join(" ") ||
-            wp.user.username ||
-            wp.user.email ||
-            "",
-        }),
+        user: toGraphqlUser(user),
       };
     },
 
     refreshToken: async (
       _: unknown,
       { input }: { input: { refreshToken: string; clientMutationId?: string } },
-      ctx: AppContext,
     ) => {
-      // Proxy to WP; keep existing Redis WP auth cookie (do not clear on refresh).
-      const origin =
-        ctx.req.headers.get("origin") ||
-        ctx.req.headers.get("Origin") ||
-        null;
-      const refreshed = await wpGraphqlRefreshToken(input.refreshToken, {
-        origin,
-      });
-      if (!refreshed.success || !refreshed.authToken) {
+      // Commerce-issued refresh tokens (login mints these after WP auth).
+      // WP auth cookie in Redis is left untouched.
+      const refreshed = await refreshAuthToken(input.refreshToken);
+      if (!refreshed) {
         return {
           clientMutationId: input.clientMutationId,
           success: false,
@@ -322,10 +318,7 @@ export const customerResolvers = {
       return {
         clientMutationId: input.clientMutationId,
         success: true,
-        authToken: refreshed.authToken,
-        authTokenExpiration: refreshed.authTokenExpiration,
-        refreshToken: refreshed.refreshToken,
-        refreshTokenExpiration: refreshed.refreshTokenExpiration,
+        ...refreshed,
       };
     },
   },

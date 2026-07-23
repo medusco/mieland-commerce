@@ -63,12 +63,14 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 ## Session / auth
 
 - `woocommerce-session: Session <token>` — Redis cart key; echoed on every response
-- `Authorization: Bearer <JWT>` — WPGraphQL Headless Login JWT (login/refresh are proxied to `{WORDPRESS_URL}/graphql`)
-- On login, commerce captures the WordPress auth `Set-Cookie` headers and stores them **server-side only** in Redis (`wpAuthCookie:{userId}`). The cookie is never returned to the shop.
+- `Authorization: Bearer <JWT>` — commerce-issued JWT after a successful WPGraphQL login (WP auth cookie is stored server-side only)
+- On login, commerce proxies to WPGraphQL, captures WordPress auth `Set-Cookie` headers into Redis (`wpAuthCookie:{userId}`), then mints its own access/refresh JWTs so Bearer verification always matches `JWT_SECRET` / `wpgraphql_login_settings.jwt_secret_key`
 - Logged-in `checkout` / `createOrder` / `processOrderPayment` attach that cookie on WC REST and Store API calls so WordPress sees the real user
 - Optional `x-graphql-secret` when `GRAPHQL_SECRET` is set
 
 **WP prerequisite:** Headless Login → enable “Set authentication cookie” on the password/Google providers so login responses include `wordpress_logged_in_*` cookies.
+
+**Note:** If WP defines `GRAPHQL_LOGIN_JWT_SECRET_KEY`, that can differ from the MySQL `jwt_secret_key`. Commerce therefore issues its own JWTs after WP authenticates the user, instead of returning WP’s `authToken` directly.
 
 ## Checkout
 
