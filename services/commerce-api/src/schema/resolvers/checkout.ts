@@ -244,7 +244,9 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const payload = await withCheckoutIdempotency(idempKey, async () => {
-        const wpCookie = await requireWpAuthCookie(userId);
+        // Ensure WP session exists for later Store API payment; do not send the
+        // cookie on WC REST — a customer Cookie demotes admin consumer keys.
+        await requireWpAuthCookie(userId);
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
@@ -252,7 +254,7 @@ export const checkoutResolvers = {
           customerId: userId,
         });
         const started = Date.now();
-        const wcOrder = await createWcOrder(wcPayload, { cookie: wpCookie });
+        const wcOrder = await createWcOrder(wcPayload);
         logJson("info", {
           msg: "create_order_ok",
           requestId: ctx.requestId,
@@ -326,10 +328,13 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const wcOrder = await withCheckoutIdempotency(idempKey, async () => {
-        // Logged-in: create as that customer and attach WP auth cookie so Store
-        // API pay-for-order sees the same user. Guest: customer_id 0.
-        const wpCookie =
-          userId != null ? await requireWpAuthCookie(userId) : null;
+        // WC REST uses consumer key/secret (admin). Do not attach the WP auth
+        // cookie — WordPress would run as the customer and reject create with
+        // "Sorry, you are not allowed to create resources." Cookie is only for
+        // Store API payment. Still require it now so pay won't fail after place.
+        if (userId != null) {
+          await requireWpAuthCookie(userId);
+        }
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
@@ -340,10 +345,7 @@ export const checkoutResolvers = {
         });
         const started = Date.now();
         try {
-          const order = await createWcOrder(
-            wcPayload,
-            wpCookie ? { cookie: wpCookie } : undefined,
-          );
+          const order = await createWcOrder(wcPayload);
           logJson("info", {
             msg: "checkout_ok",
             requestId: ctx.requestId,
