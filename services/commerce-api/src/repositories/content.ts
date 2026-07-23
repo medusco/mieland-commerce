@@ -127,7 +127,7 @@ export async function listCategories(first = 50) {
      FROM ${t("term_taxonomy")} tt
      JOIN ${t("terms")} terms ON terms.term_id = tt.term_id
      WHERE tt.taxonomy = 'category'
-     ORDER BY terms.name ASC
+     ORDER BY terms.term_order ASC, terms.name ASC
      LIMIT ?`,
     [first],
   );
