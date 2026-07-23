@@ -107,7 +107,14 @@ export async function calculateCart(
     const c = await loadCoupon(code);
     if (c) couponRows.push(c);
   }
-  const { discountTotal, applied } = applyCoupons(subtotalNum, couponRows);
+  const { discountTotal, applied } = applyCoupons(
+    subtotalNum,
+    couponRows,
+    lines.map((line) => ({
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+    })),
+  );
   const afterDiscount = roundMoney(Math.max(0, subtotalNum - discountTotal));
 
   let shippingTotal = 0;

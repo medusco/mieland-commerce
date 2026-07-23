@@ -257,9 +257,15 @@ export async function loadCoupon(code: string): Promise<{
   };
 }
 
+export type CouponCartLine = {
+  quantity: number;
+  unitPrice: number;
+};
+
 export function applyCoupons(
   subtotal: number,
   coupons: Array<{ discountType: string; amount: number; code: string; description: string }>,
+  lines: CouponCartLine[] = [],
 ): { discountTotal: number; applied: Array<{ code: string; description: string; discountAmount: string; discountTax: string }> } {
   let remaining = subtotal;
   let discountTotal = 0;
@@ -268,8 +274,18 @@ export function applyCoupons(
     let d = 0;
     if (c.discountType === "percent") {
       d = roundMoney(remaining * (c.amount / 100));
-    } else if (c.discountType === "fixed_cart" || c.discountType === "fixed_product") {
+    } else if (c.discountType === "fixed_cart") {
       d = roundMoney(Math.min(remaining, c.amount));
+    } else if (c.discountType === "fixed_product") {
+      // WooCommerce: fixed amount off each matching unit (all lines here).
+      let productDiscount = 0;
+      for (const line of lines) {
+        const perUnit = Math.min(c.amount, line.unitPrice);
+        productDiscount = roundMoney(
+          productDiscount + perUnit * line.quantity,
+        );
+      }
+      d = roundMoney(Math.min(remaining, productDiscount));
     }
     discountTotal = roundMoney(discountTotal + d);
     remaining = roundMoney(Math.max(0, remaining - d));

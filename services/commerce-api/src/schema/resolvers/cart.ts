@@ -99,6 +99,15 @@ function modeFromArgs(
   return "lightweight";
 }
 
+/** Full totals when coupons are applied so discount/shipping refresh after item changes. */
+function modeForCart(
+  cart: CartState,
+  args: { calculateShippingTax?: boolean; recalculateTotals?: boolean },
+  forceFull = false,
+): CartTotalsMode {
+  return modeFromArgs(args, forceFull || cart.coupons.length > 0);
+}
+
 export const cartResolvers = {
   Query: {
     cart: async (
@@ -159,7 +168,7 @@ export const cartResolvers = {
         return { cart: c, result: c };
       });
 
-      const mode = modeFromArgs(input);
+      const mode = modeForCart(cart, input);
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
@@ -187,7 +196,7 @@ export const cartResolvers = {
         cart: await shapeCartGraphql(
           ctx,
           cart,
-          modeFromArgs(input),
+          modeForCart(cart, input),
           cartNeedsFromInfo(info, "payload"),
         ),
       };
@@ -226,7 +235,7 @@ export const cartResolvers = {
         cart: await shapeCartGraphql(
           ctx,
           cart,
-          modeFromArgs(input),
+          modeForCart(cart, input),
           cartNeedsFromInfo(info, "payload"),
         ),
       };
