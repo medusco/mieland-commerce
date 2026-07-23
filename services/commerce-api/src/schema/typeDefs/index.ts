@@ -813,8 +813,9 @@ export const typeDefs = /* GraphQL */ `
     billingEmail: String
     paymentMethod: String
     """
-    Store API payment_data key/values (e.g. stripe_source, wc-stripe-payment-method).
-    WPGraphQL-style keys like _stripe_source_id are also accepted and mapped.
+    Store API payment_data key/values. Prefer _stripe_source_id (pm_…) from the shop;
+    it is mapped to wc-stripe-payment-method + stripe_source. Do not put UPE type
+    slugs like "card" in wc-stripe-payment-method — that key must be the pm_ id.
     """
     paymentData: [MetaDataInput]
   }

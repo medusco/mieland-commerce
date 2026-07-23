@@ -218,7 +218,23 @@ export async function processStoreCheckoutOrder(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-/** Map GraphQL / WPGraphQL-style Stripe meta onto Store API payment_data keys. */
+/** Stripe PaymentMethod / Source / Token ids (not UPE type slugs like "card"). */
+function isStripePaymentObjectId(value: string): boolean {
+  return /^(pm_|src_|tok_|card_)/i.test(value);
+}
+
+/**
+ * Map GraphQL / WPGraphQL-style Stripe meta onto Store API payment_data keys.
+ *
+ * WooCommerce Store API replaces $_POST with payment_data only. Modern Stripe UPE
+ * expects:
+ * - payment_method: gateway id ("stripe") — used to derive UPE type ("card")
+ * - wc-stripe-payment-method: PaymentMethod id (pm_…)
+ * - stripe_source: same id (legacy / dual support)
+ *
+ * Shop clients often still send WPGraphQL-style keys where
+ * wc-stripe-payment-method is the UPE type ("card") and _stripe_source_id is pm_….
+ */
 export function toStorePaymentData(
   entries: Array<{ key: string; value?: string | null }> | undefined,
 ): StorePaymentDatum[] {
@@ -231,6 +247,9 @@ export function toStorePaymentData(
     seen.add(key);
     out.push({ key, value });
   };
+
+  let sourceId: string | undefined;
+  let gatewayId: string | undefined;
 
   for (const entry of entries) {
     const key = entry.key;
@@ -247,19 +266,58 @@ export function toStorePaymentData(
     }
 
     const value = String(raw ?? "");
-    push(key, value);
 
-    // WPGraphQL / WC Stripe order meta → Store API Stripe payment_data aliases
-    if (key === "_stripe_source_id" || key === "stripe_source_id") {
-      push("stripe_source", value);
+    // WPGraphQL / shop: pm id lives on _stripe_source_id
+    if (
+      key === "_stripe_source_id" ||
+      key === "stripe_source_id" ||
+      key === "stripe_source"
+    ) {
+      if (value) sourceId = value;
+      continue;
     }
+
     if (key === "_stripe_intent_id" || key === "stripe_intent_id") {
-      push("stripe_intent_id", value);
+      if (value) push("stripe_intent_id", value);
+      continue;
     }
-    if (key === "wc-stripe-payment-method" || key === "payment_method") {
-      push("wc-stripe-payment-method", value);
+
+    // UPE type slug only (card, google_pay, …) — not forwarded as the pm id.
+    if (
+      key === "_stripe_upe_payment_type" ||
+      key === "stripe_upe_payment_type" ||
+      key === "upePaymentType"
+    ) {
+      continue;
     }
+
+    // Modern Store API: this key must be the pm_/src_ id.
+    // Older shop payloads put the UPE type ("card") here instead.
+    if (key === "wc-stripe-payment-method") {
+      if (value && isStripePaymentObjectId(value)) {
+        sourceId = sourceId || value;
+      }
+      continue;
+    }
+
+    // Gateway id for UPE (must be snake_case in $_POST). Do not treat as pm id.
+    if (key === "payment_method" || key === "paymentMethod") {
+      if (value) gatewayId = value;
+      continue;
+    }
+
+    push(key, value);
   }
+
+  if (sourceId) {
+    push("wc-stripe-payment-method", sourceId);
+    push("stripe_source", sourceId);
+  }
+
+  // Store API $_POST is payment_data only; UPE reads payment_method (snake_case).
+  const gateway = gatewayId || "stripe";
+  push("payment_method", gateway);
+  push("paymentMethod", gateway);
 
   return out;
 }

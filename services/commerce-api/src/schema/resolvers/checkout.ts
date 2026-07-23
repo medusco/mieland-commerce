@@ -454,10 +454,16 @@ export const checkoutResolvers = {
 
       const paymentMethod =
         input.paymentMethod || ctxOrder.paymentMethod || "stripe";
-      const paymentData = toStorePaymentData(input.paymentData);
+      // Prefill gateway id so toStorePaymentData writes payment_method (snake_case)
+      // into Store API payment_data — UPE reads that from $_POST, which is only
+      // payment_data (top-level payment_method is not copied into $_POST).
+      const paymentData = toStorePaymentData([
+        ...(input.paymentData ?? []),
+        { key: "payment_method", value: paymentMethod },
+      ]);
 
       // Stripe Store API usually expects billing fields inside payment_data too.
-      if (paymentMethod === "stripe") {
+      if (paymentMethod === "stripe" || paymentMethod.startsWith("stripe")) {
         const billing = ctxOrder.billing;
         if (billingEmail && !paymentData.some((p) => p.key === "billing_email")) {
           paymentData.push({ key: "billing_email", value: billingEmail });
@@ -479,9 +485,6 @@ export const checkoutResolvers = {
             key: "billing_last_name",
             value: billing.lastName,
           });
-        }
-        if (!paymentData.some((p) => p.key === "paymentMethod")) {
-          paymentData.push({ key: "paymentMethod", value: "stripe" });
         }
       }
 

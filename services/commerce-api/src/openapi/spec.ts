@@ -243,7 +243,7 @@ Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/gra
                         orderId: 123,
                         paymentMethod: "stripe",
                         paymentData: [
-                          { key: "stripe_source", value: "pm_xxx" },
+                          { key: "_stripe_source_id", value: "pm_xxx" },
                           { key: "wc-stripe-new-payment-method", value: "true" },
                         ],
                       },

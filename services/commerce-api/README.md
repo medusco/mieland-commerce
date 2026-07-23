@@ -76,7 +76,7 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 `checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`) using consumer key/secret only (no WP user cookie — a customer cookie would demote the request and return “not allowed to create resources”). Logged-in orders still set the real `customer_id`. Guests use `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
 
-`processOrderPayment` pays via Store API `POST /wc/store/v1/checkout/{orderId}` and attaches the vaulted WP auth cookie for logged-in payers so ownership matches. Pass Store API `paymentData` (e.g. `stripe_source`) or WPGraphQL-style `_stripe_source_id`.
+`processOrderPayment` pays via Store API `POST /wc/store/v1/checkout/{orderId}` and attaches the vaulted WP auth cookie for logged-in payers so ownership matches. Pass WPGraphQL-style `_stripe_source_id` (`pm_…`); commerce maps it to Store API `wc-stripe-payment-method` + `stripe_source` and injects `payment_method: stripe` into `payment_data` (required because Store API replaces `$_POST` with `payment_data` only).
 
 `updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
