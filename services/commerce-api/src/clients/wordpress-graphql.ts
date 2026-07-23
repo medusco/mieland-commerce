@@ -194,16 +194,28 @@ async function postGraphql<T>(
   query: string,
   variables: Record<string, unknown>,
   logMsg: string,
+  opts?: { origin?: string | null },
 ): Promise<{ body: GraphqlEnvelope<T>; setCookies: string[] }> {
   const cfg = loadConfig();
   const url = graphqlUrl();
   const started = Date.now();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  // WP Headless Login access control checks Origin against allowedOrigins.
+  const origin =
+    opts?.origin?.trim() ||
+    cfg.corsOrigins.find((o) => o && o !== "*") ||
+    "";
+  if (origin) {
+    headers.Origin = origin;
+    headers.Referer = origin.endsWith("/") ? origin : `${origin}/`;
+  }
+
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+    headers,
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
   });
@@ -221,6 +233,7 @@ async function postGraphql<T>(
     ms: Date.now() - started,
     hasSetCookie: setCookies.length > 0,
     hasErrors: Boolean(body.errors?.length),
+    hasOrigin: Boolean(origin),
   });
   if (!res.ok && !body.data) {
     throw new Error(
@@ -245,6 +258,8 @@ export async function wpGraphqlLogin(input: {
   provider: string;
   credentials?: { username: string; password: string };
   oauthResponse?: { code: string; state?: string };
+  /** Shop request Origin — required by WP Headless Login access control. */
+  origin?: string | null;
 }): Promise<WpGraphqlLoginResult> {
   const provider = String(input.provider).toUpperCase();
   const loginInput: Record<string, unknown> = { provider };
@@ -274,7 +289,9 @@ export async function wpGraphqlLogin(input: {
       user?: WpGraphqlLoginUser | null;
       customer?: WpGraphqlLoginResult["customer"];
     } | null;
-  }>(LOGIN_MUTATION, { input: loginInput }, "wp_graphql_login");
+  }>(LOGIN_MUTATION, { input: loginInput }, "wp_graphql_login", {
+    origin: input.origin,
+  });
 
   if (body.errors?.length && !body.data?.login?.authToken) {
     const msg = firstGraphqlError(body.errors);
@@ -316,6 +333,7 @@ export async function wpGraphqlLogin(input: {
 
 export async function wpGraphqlRefreshToken(
   refreshToken: string,
+  opts?: { origin?: string | null },
 ): Promise<WpGraphqlRefreshResult> {
   const { body } = await postGraphql<{
     refreshToken: {
@@ -329,6 +347,7 @@ export async function wpGraphqlRefreshToken(
     REFRESH_MUTATION,
     { input: { refreshToken } },
     "wp_graphql_refresh_token",
+    { origin: opts?.origin },
   );
 
   const payload = body.data?.refreshToken;

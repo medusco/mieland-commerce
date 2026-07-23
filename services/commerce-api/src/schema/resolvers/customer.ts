@@ -242,10 +242,15 @@ export const customerResolvers = {
 
       // Proxy to WPGraphQL Headless Login so WP sets a real auth cookie.
       // JWT is returned to the shop; the cookie stays server-side in Redis.
+      const origin =
+        ctx.req.headers.get("origin") ||
+        ctx.req.headers.get("Origin") ||
+        null;
       const wp = await wpGraphqlLogin({
         provider,
         credentials: input.credentials,
         oauthResponse: input.oauthResponse,
+        origin,
       });
 
       const userId = wp.user.databaseId;
@@ -294,9 +299,16 @@ export const customerResolvers = {
     refreshToken: async (
       _: unknown,
       { input }: { input: { refreshToken: string; clientMutationId?: string } },
+      ctx: AppContext,
     ) => {
       // Proxy to WP; keep existing Redis WP auth cookie (do not clear on refresh).
-      const refreshed = await wpGraphqlRefreshToken(input.refreshToken);
+      const origin =
+        ctx.req.headers.get("origin") ||
+        ctx.req.headers.get("Origin") ||
+        null;
+      const refreshed = await wpGraphqlRefreshToken(input.refreshToken, {
+        origin,
+      });
       if (!refreshed.success || !refreshed.authToken) {
         return {
           clientMutationId: input.clientMutationId,
