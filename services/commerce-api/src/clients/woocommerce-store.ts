@@ -59,14 +59,29 @@ function headerValue(
   return null;
 }
 
+export type StoreRequestAuth = {
+  /** WP auth Cookie header (wordpress_logged_in_* …). */
+  cookie?: string | null;
+  cartToken?: string;
+};
+
 /** Obtain a Cart-Token so checkout routes accept our POST without a browser nonce. */
-export async function getStoreCartToken(): Promise<string> {
+export async function getStoreCartToken(
+  auth?: StoreRequestAuth | string | null,
+): Promise<string> {
   const cfg = loadConfig();
+  const cookie =
+    typeof auth === "string"
+      ? auth
+      : auth?.cookie?.trim() || null;
   const url = `${storeBase()}/cart`;
   const started = Date.now();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (cookie) headers.Cookie = cookie;
+
   const res = await fetch(url, {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers,
     signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
   });
   const token = headerValue(res.headers, "Cart-Token", "cart-token");
@@ -75,6 +90,7 @@ export async function getStoreCartToken(): Promise<string> {
     status: res.status,
     ms: Date.now() - started,
     hasToken: Boolean(token),
+    hasCookie: Boolean(cookie),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -114,30 +130,49 @@ function storeErrorMessage(body: Record<string, unknown>, fallback: string): str
   return parts.length ? `${base} (${parts.join("; ")})` : base;
 }
 
+export type ProcessStoreCheckoutOrderOptions = {
+  cartToken?: string;
+  /** WP auth Cookie header so Store API runs as the paying user. */
+  cookie?: string | null;
+};
+
 /**
  * Pay an existing unpaid order via Store API:
  * POST /wc/store/v1/checkout/{ORDER_ID}
+ *
+ * Pass the WP auth cookie (from login vault) so registered orders are owned
+ * by the same user as get_current_user_id().
  */
 export async function processStoreCheckoutOrder(
   orderId: number,
   payload: StoreCheckoutOrderPayload,
-  cartToken?: string,
+  cartTokenOrOptions?: string | ProcessStoreCheckoutOrderOptions,
 ): Promise<StoreCheckoutOrderResponse> {
   const cfg = loadConfig();
-  const token = cartToken || (await getStoreCartToken());
+  const options: ProcessStoreCheckoutOrderOptions =
+    typeof cartTokenOrOptions === "string"
+      ? { cartToken: cartTokenOrOptions }
+      : (cartTokenOrOptions ?? {});
+  const cookie = options.cookie?.trim() || null;
+  const token =
+    options.cartToken ||
+    (await getStoreCartToken(cookie ? { cookie } : undefined));
   const url = `${storeBase()}/checkout/${orderId}`;
   const started = Date.now();
+
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "Cart-Token": token,
+  };
+  if (cookie) headers.Cookie = cookie;
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "Cart-Token": token,
-        },
+        headers,
         body: JSON.stringify({
           key: payload.key,
           payment_method: payload.payment_method,
@@ -165,6 +200,7 @@ export async function processStoreCheckoutOrder(
         ms: Date.now() - started,
         attempt,
         orderId,
+        hasCookie: Boolean(cookie),
       });
       if (!res.ok) {
         throw new Error(

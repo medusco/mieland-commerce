@@ -30,7 +30,8 @@ export function redactPii(value: unknown): unknown {
         key.includes("password") ||
         key.includes("secret") ||
         key.includes("token") ||
-        key.includes("authorization")
+        key.includes("authorization") ||
+        key.includes("cookie")
       ) {
         out[k] = "[redacted]";
       } else if (key.includes("email")) {

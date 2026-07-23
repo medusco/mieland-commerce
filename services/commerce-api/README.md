@@ -63,14 +63,18 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 ## Session / auth
 
 - `woocommerce-session: Session <token>` — Redis cart key; echoed on every response
-- `Authorization: Bearer <JWT>` — signed with `wpgraphql_login_settings.jwt_secret_key` from MySQL (or `JWT_SECRET` override)
+- `Authorization: Bearer <JWT>` — WPGraphQL Headless Login JWT (login/refresh are proxied to `{WORDPRESS_URL}/graphql`)
+- On login, commerce captures the WordPress auth `Set-Cookie` headers and stores them **server-side only** in Redis (`wpAuthCookie:{userId}`). The cookie is never returned to the shop.
+- Logged-in `checkout` / `createOrder` / `processOrderPayment` attach that cookie on WC REST and Store API calls so WordPress sees the real user
 - Optional `x-graphql-secret` when `GRAPHQL_SECRET` is set
+
+**WP prerequisite:** Headless Login → enable “Set authentication cookie” on the password/Google providers so login responses include `wordpress_logged_in_*` cookies.
 
 ## Checkout
 
-`checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`). Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
+`checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`). Logged-in orders use the real `customer_id` plus the vaulted WP cookie. Guests still create as `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
 
-`processOrderPayment` pays an existing unpaid order via WooCommerce Store API `POST /wc/store/v1/checkout/{orderId}` (runs the Stripe gateway). Pass Store API `paymentData` (e.g. `stripe_source`) or WPGraphQL-style `_stripe_source_id`.
+`processOrderPayment` pays an existing unpaid order via WooCommerce Store API `POST /wc/store/v1/checkout/{orderId}` (runs the Stripe gateway), with the vaulted WP cookie when the payer is logged in. Pass Store API `paymentData` (e.g. `stripe_source`) or WPGraphQL-style `_stripe_source_id`.
 
 `updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 

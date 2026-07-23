@@ -2,15 +2,16 @@ import type { AppContext } from "../../context.js";
 import { requireUser } from "../../context.js";
 import {
   createUser,
-  findUserByLoginOrEmail,
   issueTokens,
   listEnabledLoginClients,
   loadProvider,
-  loginWithGoogleCode,
-  refreshAuthToken,
   toGraphqlUser,
-  verifyWpPassword,
 } from "../../auth/index.js";
+import { saveWpAuthCookie } from "../../auth/wp-session.js";
+import {
+  wpGraphqlLogin,
+  wpGraphqlRefreshToken,
+} from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
   requestWpPasswordReset,
@@ -232,31 +233,61 @@ export const customerResolvers = {
         throw new Error(`Provider ${provider} is disabled`);
       }
 
-      let user;
-      if (provider === "password") {
-        if (!input.credentials) throw new Error("credentials required");
-        const found = await findUserByLoginOrEmail(input.credentials.username);
-        if (!found || !verifyWpPassword(input.credentials.password, found.user_pass)) {
-          throw new Error("Invalid username or password");
-        }
-        user = found;
-      } else {
-        if (!input.oauthResponse?.code) throw new Error("oauthResponse.code required");
-        user = await loginWithGoogleCode(
-          input.oauthResponse.code,
-          input.oauthResponse.state,
-        );
+      if (provider === "password" && !input.credentials) {
+        throw new Error("credentials required");
+      }
+      if (provider === "google" && !input.oauthResponse?.code) {
+        throw new Error("oauthResponse.code required");
       }
 
-      const tokens = await issueTokens(user);
-      await bindCartToCustomer(ctx.sessionToken, user.id);
+      // Proxy to WPGraphQL Headless Login so WP sets a real auth cookie.
+      // JWT is returned to the shop; the cookie stays server-side in Redis.
+      const wp = await wpGraphqlLogin({
+        provider,
+        credentials: input.credentials,
+        oauthResponse: input.oauthResponse,
+      });
+
+      const userId = wp.user.databaseId;
+      if (!wp.cookieHeader) {
+        throw new Error(
+          "WordPress login did not return an auth cookie — enable “Set authentication cookie” on the Headless Login provider",
+        );
+      }
+      await saveWpAuthCookie(userId, wp.cookieHeader, wp.cookieTtlSeconds);
+
+      await bindCartToCustomer(ctx.sessionToken, userId);
+
+      const customer =
+        (await getCustomer(userId, ctx.sessionToken)) ??
+        (wp.customer
+          ? {
+              ...wp.customer,
+              databaseId: wp.customer.databaseId ?? userId,
+              sessionToken: ctx.sessionToken,
+            }
+          : null);
 
       return {
         clientMutationId: input.clientMutationId,
-        ...tokens,
+        authToken: wp.authToken,
+        authTokenExpiration: wp.authTokenExpiration,
+        refreshToken: wp.refreshToken,
+        refreshTokenExpiration: wp.refreshTokenExpiration,
         sessionToken: ctx.sessionToken,
-        customer: await getCustomer(user.id, ctx.sessionToken),
-        user: toGraphqlUser(user),
+        customer,
+        user: toGraphqlUser({
+          id: userId,
+          email: wp.user.email ?? "",
+          username: wp.user.username ?? "",
+          firstName: wp.user.firstName ?? "",
+          lastName: wp.user.lastName ?? "",
+          displayName:
+            [wp.user.firstName, wp.user.lastName].filter(Boolean).join(" ") ||
+            wp.user.username ||
+            wp.user.email ||
+            "",
+        }),
       };
     },
 
@@ -264,8 +295,9 @@ export const customerResolvers = {
       _: unknown,
       { input }: { input: { refreshToken: string; clientMutationId?: string } },
     ) => {
-      const refreshed = await refreshAuthToken(input.refreshToken);
-      if (!refreshed) {
+      // Proxy to WP; keep existing Redis WP auth cookie (do not clear on refresh).
+      const refreshed = await wpGraphqlRefreshToken(input.refreshToken);
+      if (!refreshed.success || !refreshed.authToken) {
         return {
           clientMutationId: input.clientMutationId,
           success: false,
@@ -278,7 +310,10 @@ export const customerResolvers = {
       return {
         clientMutationId: input.clientMutationId,
         success: true,
-        ...refreshed,
+        authToken: refreshed.authToken,
+        authTokenExpiration: refreshed.authTokenExpiration,
+        refreshToken: refreshed.refreshToken,
+        refreshTokenExpiration: refreshed.refreshTokenExpiration,
       };
     },
   },

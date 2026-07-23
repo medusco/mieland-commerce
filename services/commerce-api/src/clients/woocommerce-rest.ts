@@ -131,15 +131,21 @@ async function wcRestOrderRequest(
   url: URL,
   payload: Record<string, unknown>,
   logMsg: string,
+  options?: { cookie?: string | null },
 ): Promise<Record<string, unknown>> {
   const cfg = loadConfig();
   const started = Date.now();
+  const cookie = options?.cookie?.trim() || null;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (cookie) headers.Cookie = cookie;
       const res = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
       });
@@ -155,6 +161,7 @@ async function wcRestOrderRequest(
         status: res.status,
         ms: Date.now() - started,
         attempt,
+        hasCookie: Boolean(cookie),
       });
       if (!res.ok) {
         throw new Error(
@@ -172,19 +179,28 @@ async function wcRestOrderRequest(
 
 export async function createWcOrder(
   payload: WcOrderPayload,
+  options?: { cookie?: string | null },
 ): Promise<Record<string, unknown>> {
-  return wcRestOrderRequest("POST", wcRestOrdersUrl(), payload, "wc_rest_create_order");
+  return wcRestOrderRequest(
+    "POST",
+    wcRestOrdersUrl(),
+    payload,
+    "wc_rest_create_order",
+    options,
+  );
 }
 
 /** Update an existing WC order (e.g. set status to failed after payment failure). */
 export async function updateWcOrder(
   orderId: number,
   payload: { status?: string } & Record<string, unknown>,
+  options?: { cookie?: string | null },
 ): Promise<Record<string, unknown>> {
   return wcRestOrderRequest(
     "PUT",
     wcRestOrdersUrl(orderId),
     payload,
     "wc_rest_update_order",
+    options,
   );
 }

@@ -14,6 +14,7 @@ import {
   toStorePaymentData,
   type StoreAddress,
 } from "../../clients/woocommerce-store.js";
+import { requireWpAuthCookie } from "../../auth/wp-session.js";
 import { getCustomer } from "../../repositories/customers.js";
 import {
   getOrderById,
@@ -243,6 +244,7 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const payload = await withCheckoutIdempotency(idempKey, async () => {
+        const wpCookie = await requireWpAuthCookie(userId);
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
@@ -250,7 +252,7 @@ export const checkoutResolvers = {
           customerId: userId,
         });
         const started = Date.now();
-        const wcOrder = await createWcOrder(wcPayload);
+        const wcOrder = await createWcOrder(wcPayload, { cookie: wpCookie });
         logJson("info", {
           msg: "create_order_ok",
           requestId: ctx.requestId,
@@ -324,34 +326,30 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const wcOrder = await withCheckoutIdempotency(idempKey, async () => {
-        // Create as guest (customer_id 0). Store API pay-for-order only allows
-        // registered orders when the WP user matches; our Cart-Token calls are
-        // anonymous, so a logged-in customer_id always fails with
-        // "This order belongs to a different customer." Attach user after pay.
-        const metaWithCustomer =
-          userId != null
-            ? [
-                ...meta,
-                { key: "_mieland_customer_id", value: String(userId) },
-              ]
-            : meta;
+        // Logged-in: create as that customer and attach WP auth cookie so Store
+        // API pay-for-order sees the same user. Guest: customer_id 0.
+        const wpCookie =
+          userId != null ? await requireWpAuthCookie(userId) : null;
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: input.paymentMethod || "stripe",
           customerNote: input.customerNote,
-          metaData: metaWithCustomer,
-          customerId: 0,
+          metaData: meta,
+          customerId: userId ?? 0,
         });
         const started = Date.now();
         try {
-          const order = await createWcOrder(wcPayload);
+          const order = await createWcOrder(
+            wcPayload,
+            wpCookie ? { cookie: wpCookie } : undefined,
+          );
           logJson("info", {
             msg: "checkout_ok",
             requestId: ctx.requestId,
             ms: Date.now() - started,
             orderId: order.id,
-            pendingCustomerId: userId ?? null,
+            customerId: userId ?? null,
           });
           return order;
         } catch (err) {
@@ -509,20 +507,27 @@ export const checkoutResolvers = {
       const started = Date.now();
       let storeRes;
       try {
-        storeRes = await processStoreCheckoutOrder(orderId, {
-          key: orderKey,
-          billing_email: billingEmail,
-          billing_address,
-          shipping_address,
-          payment_method: paymentMethod,
-          payment_data: paymentData,
-        });
+        const wpCookie =
+          ctx.userId != null ? await requireWpAuthCookie(ctx.userId) : null;
+        storeRes = await processStoreCheckoutOrder(
+          orderId,
+          {
+            key: orderKey,
+            billing_email: billingEmail,
+            billing_address,
+            shipping_address,
+            payment_method: paymentMethod,
+            payment_data: paymentData,
+          },
+          wpCookie ? { cookie: wpCookie } : undefined,
+        );
         logJson("info", {
           msg: "process_order_payment_ok",
           requestId: ctx.requestId,
           ms: Date.now() - started,
           orderId,
           paymentStatus: storeRes.payment_result?.payment_status,
+          hasCookie: Boolean(wpCookie),
         });
       } catch (err) {
         logJson("error", {
@@ -540,19 +545,6 @@ export const checkoutResolvers = {
       const paymentStatus = paymentResult?.payment_status ?? null;
       if (isPaymentFailureStatus(paymentStatus)) {
         await markOrderPaymentFailed(orderId, ctx.requestId);
-      } else if (ctx.userId) {
-        // Attach the logged-in customer now that Store API payment succeeded.
-        try {
-          await updateWcOrder(orderId, { customer_id: ctx.userId });
-        } catch (err) {
-          logJson("warn", {
-            msg: "process_order_payment_attach_customer_fail",
-            requestId: ctx.requestId,
-            orderId,
-            customerId: ctx.userId,
-            err: String(err),
-          });
-        }
       }
 
       const needs = orderNeedsFromInfo(info, ["order"]);
