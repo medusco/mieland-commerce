@@ -28,7 +28,7 @@ function metaCacheKey(postId: number): string {
 }
 
 function productCacheKey(productId: number): string {
-  return `product:${productId}`;
+  return `product:v2:${productId}`;
 }
 
 async function cachedJson<T>(key: string, ttl: number, loader: () => Promise<T>): Promise<T> {
@@ -220,6 +220,39 @@ async function getAttachmentUrls(
   return out;
 }
 
+/** Woo `_product_image_gallery` is a comma-separated list of attachment IDs. */
+function parseGalleryAttachmentIds(meta: Record<string, string>): number[] {
+  const raw = meta._product_image_gallery?.trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((part) => Number(part.trim()))
+    .filter((id) => Number.isFinite(id) && id > 0);
+}
+
+/**
+ * Variation attributes live in postmeta as `attribute_pa_*` / `attribute_*`.
+ * Shape matches WPGraphQL VariationAttribute { name label value }.
+ */
+function variationAttributesFromMeta(
+  meta: Record<string, string>,
+): Array<{ name: string; label: string; value: string }> {
+  const nodes: Array<{ name: string; label: string; value: string }> = [];
+  for (const [key, raw] of Object.entries(meta)) {
+    if (!key.startsWith("attribute_")) continue;
+    const value = String(raw ?? "").trim();
+    if (!value) continue;
+    const name = key.slice("attribute_".length);
+    if (!name) continue;
+    nodes.push({
+      name,
+      label: name.replace(/^pa_/, ""),
+      value,
+    });
+  }
+  return nodes;
+}
+
 export async function listProducts(args: {
   first?: number;
   include?: number[] | null;
@@ -241,7 +274,7 @@ export async function listProducts(args: {
     featured: true,
   };
   const lean = productListIsLean(needs);
-  const cacheKey = `products:${lean ? "lean" : "full"}:${status}:${(args.include ?? []).join(",")}:${first}`;
+  const cacheKey = `products:v2:${lean ? "lean" : "full"}:${status}:${(args.include ?? []).join(",")}:${first}`;
 
   return cachedJson(cacheKey, cfg.CATALOG_CACHE_TTL_SECONDS, async () => {
     let sql = lean
@@ -259,7 +292,20 @@ export async function listProducts(args: {
     sql += ` ORDER BY post_date DESC LIMIT ?`;
     params.push(first);
     const rows = await query<ProductRow[]>(sql, params);
-    return lean ? shapeProductsLean(rows, needs) : shapeProducts(rows, needs);
+    const shaped = lean
+      ? await shapeProductsLean(rows, needs)
+      : await shapeProducts(rows, needs);
+
+    // Preserve caller order when looking up by database IDs.
+    if (args.include?.length) {
+      const order = new Map(args.include.map((id, index) => [id, index]));
+      shaped.sort((a, b) => {
+        const aId = (a as { databaseId?: number }).databaseId ?? 0;
+        const bId = (b as { databaseId?: number }).databaseId ?? 0;
+        return (order.get(aId) ?? 0) - (order.get(bId) ?? 0);
+      });
+    }
+    return shaped;
   });
 }
 
@@ -405,6 +451,7 @@ async function getVariationsMany(
       salePrice: meta._sale_price || null,
       onSale: Boolean(meta._sale_price),
       image: imageId ? images.get(imageId) ?? null : null,
+      attributes: { nodes: variationAttributesFromMeta(meta) },
     });
     out.set(r.post_parent, list);
   }
@@ -445,16 +492,21 @@ async function shapeProducts(
   const metaMap = await getPostMetaMany(ids);
   const variableIds = await variableParentIds(ids);
 
+  const galleryIds = needs.images
+    ? ids.flatMap((id) => parseGalleryAttachmentIds(metaMap.get(id) ?? {}))
+    : [];
+  const thumbIds = needs.images
+    ? ids
+        .map((id) => Number((metaMap.get(id) ?? {})._thumbnail_id || 0))
+        .filter((id) => id > 0)
+    : [];
+
   const [categories, images, variations] = await Promise.all([
     needs.categories
       ? getProductCategoriesMany(ids)
       : Promise.resolve(new Map<number, Array<{ name: string; slug: string }>>()),
     needs.images
-      ? getAttachmentUrls(
-          ids
-            .map((id) => Number((metaMap.get(id) ?? {})._thumbnail_id || 0))
-            .filter((id) => id > 0),
-        )
+      ? getAttachmentUrls([...thumbIds, ...galleryIds])
       : Promise.resolve(
           new Map<
             number,
@@ -489,6 +541,20 @@ async function shapeProducts(
       needs.stock && manageStock && meta._stock !== undefined && meta._stock !== ""
         ? Number(meta._stock)
         : null;
+
+    const galleryNodes = needs.images
+      ? parseGalleryAttachmentIds(meta)
+          .map((id) => images.get(id) ?? null)
+          .filter(
+            (
+              node,
+            ): node is {
+              sourceUrl: string;
+              mediaItemUrl: string;
+              altText: string;
+            } => Boolean(node),
+          )
+      : [];
 
     const base = {
       __typename: isVariable ? "VariableProduct" : "SimpleProduct",
@@ -526,7 +592,7 @@ async function shapeProducts(
       regularPrice: needs.price ? regularPrice : "",
       salePrice: needs.price && salePrice ? salePrice : null,
       productCategories: { nodes: categories.get(row.ID) ?? [] },
-      galleryImages: { nodes: [] as unknown[] },
+      galleryImages: { nodes: galleryNodes },
       reviews: {
         averageRating: needs.reviews ? Number(meta._wc_average_rating || 0) : 0,
         edges: [],
@@ -615,6 +681,7 @@ export async function getProductNodes(
         regularPrice: meta._regular_price ?? "",
         salePrice: meta._sale_price || null,
         onSale: Boolean(meta._sale_price),
+        attributes: { nodes: variationAttributesFromMeta(meta) },
       });
     }
   }

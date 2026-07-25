@@ -77,6 +77,17 @@ export const typeDefs = /* GraphQL */ `
     nodes: [ProductAttribute]
   }
 
+  """WooCommerce variation attribute (e.g. weight=250g). Matches WPGraphQL shape."""
+  type VariationAttribute {
+    name: String
+    label: String
+    value: String
+  }
+
+  type ProductVariationToVariationAttributeConnection {
+    nodes: [VariationAttribute]
+  }
+
   type ProductCategory {
     name: String
     slug: String
@@ -147,6 +158,7 @@ export const typeDefs = /* GraphQL */ `
     salePrice(format: PricingFieldFormatEnum): String
     onSale: Boolean
     image: MediaItem
+    attributes: ProductVariationToVariationAttributeConnection
   }
 
   type ProductVariationConnection {

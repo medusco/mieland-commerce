@@ -50,5 +50,8 @@ export const productResolvers = {
     price: (p: { price?: string }) => p.price ?? null,
     regularPrice: (p: { regularPrice?: string }) => p.regularPrice ?? null,
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
+    attributes: (p: {
+      attributes?: { nodes?: Array<{ name: string; label: string; value: string }> };
+    }) => ({ nodes: p.attributes?.nodes ?? [] }),
   },
 };
