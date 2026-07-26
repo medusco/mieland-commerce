@@ -98,8 +98,8 @@ export async function updateCustomerProfile(
 }
 
 /**
- * Ask WordPress to mint a password-reset key (no email).
- * Storefront builds/sends the branded HTML email over SMTP.
+ * Ask WordPress REST to send the lost-password email (retrieve_password → key + wp_mail).
+ * Commerce does not mint tokens or send mail itself.
  */
 export async function requestWpPasswordReset(
   username: string,
@@ -112,46 +112,16 @@ export async function requestWpPasswordReset(
   const { loadConfig } = await import("../config.js");
   const cfg = loadConfig();
 
-  const user = await queryOne<{
-    ID: number;
-    user_login: string;
-    user_email: string;
-    display_name: string;
-  }>(
-    `SELECT ID, user_login, user_email, display_name FROM ${t("users")}
-     WHERE user_login = ? OR user_email = ? LIMIT 1`,
-    [username, username],
-  );
-  if (!user) {
-    // Do not reveal existence
-    return { success: true, token: null, login: null, user: null };
-  }
-
-  let token: string | null = null;
-  let login: string | null = user.user_login;
-
   try {
     const url = `${cfg.WORDPRESS_URL.replace(/\/$/, "")}/wp-json/mieland/v1/password-reset`;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    const internalSecret =
-      process.env.MIELAND_INTERNAL_REST_SECRET?.trim() || "";
-    if (internalSecret) {
-      headers["x-mieland-internal-secret"] = internalSecret;
-    }
-
     const res = await fetch(url, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(15_000),
     });
     const payload = (await res.json()) as {
       success?: boolean;
-      token?: string | null;
-      login?: string | null;
-      email?: string | null;
       message?: string;
     };
 
@@ -160,9 +130,6 @@ export async function requestWpPasswordReset(
         payload.message || `WordPress password-reset failed (${res.status})`,
       );
     }
-
-    token = payload.token ?? null;
-    login = payload.login ?? user.user_login;
   } catch (error) {
     throw new Error(
       error instanceof Error
@@ -171,23 +138,11 @@ export async function requestWpPasswordReset(
     );
   }
 
-  const names = await queryOne<{ first_name: string | null }>(
-    `SELECT meta_value AS first_name FROM ${t("usermeta")}
-     WHERE user_id = ? AND meta_key = 'first_name' LIMIT 1`,
-    [user.ID],
-  );
-
+  // Always success to GraphQL callers (WP also hides unknown users).
   return {
     success: true,
-    token,
-    login,
-    user: {
-      id: toGlobalId("user", user.ID),
-      databaseId: user.ID,
-      email: user.user_email,
-      username: user.user_login,
-      firstName: names?.first_name ?? "",
-      name: user.display_name,
-    },
+    token: null,
+    login: null,
+    user: null,
   };
 }

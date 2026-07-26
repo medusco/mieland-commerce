@@ -27,7 +27,18 @@ import { logJson, parseSessionHeader, randomToken } from "./utils/index.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
 
-const cfg = loadConfig();
+let cfg: ReturnType<typeof loadConfig>;
+try {
+  cfg = loadConfig();
+} catch (err) {
+  console.error(
+    JSON.stringify({
+      msg: "boot_failed",
+      err: err instanceof Error ? err.message : String(err),
+    }),
+  );
+  process.exit(1);
+}
 
 const schema = createSchema<AppContext>({
   typeDefs,
@@ -209,14 +220,21 @@ app.use(
   },
 );
 
-const server = app.listen(cfg.PORT, () => {
+// Bind 0.0.0.0 so Railway healthchecks (IPv4) reach the process on Alpine.
+const server = app.listen(cfg.PORT, "0.0.0.0", () => {
   logJson("info", {
     msg: "listening",
     port: cfg.PORT,
+    host: "0.0.0.0",
     env: cfg.NODE_ENV,
     endpoint: "/graphql",
     docs: "/docs",
   });
+});
+
+server.on("error", (err) => {
+  logJson("error", { msg: "listen_failed", err: String(err), port: cfg.PORT });
+  process.exit(1);
 });
 
 async function shutdown(signal: string) {

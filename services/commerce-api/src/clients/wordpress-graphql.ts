@@ -194,7 +194,11 @@ async function postGraphql<T>(
   query: string,
   variables: Record<string, unknown>,
   logMsg: string,
-  opts?: { origin?: string | null },
+  opts?: {
+    origin?: string | null;
+    /** Extra request headers (e.g. x-mieland-internal-secret). */
+    headers?: Record<string, string>;
+  },
 ): Promise<{ body: GraphqlEnvelope<T>; setCookies: string[] }> {
   const cfg = loadConfig();
   const url = graphqlUrl();
@@ -202,6 +206,7 @@ async function postGraphql<T>(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
+    ...opts?.headers,
   };
   // WP Headless Login access control checks Origin against allowedOrigins.
   const origin =

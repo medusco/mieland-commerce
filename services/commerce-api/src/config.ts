@@ -2,47 +2,107 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 
-const boolFromEnv = z
-  .string()
-  .optional()
-  .transform((v) => v === "1" || v?.toLowerCase() === "true");
+/** Railway/UI often sets env vars to "" — treat as unset so Zod defaults apply. */
+const emptyToUndefined = (v: unknown) =>
+  v === "" || v === null || v === undefined ? undefined : v;
+
+const boolFromEnv = z.preprocess(
+  emptyToUndefined,
+  z
+    .string()
+    .optional()
+    .transform((v) => v === "1" || v?.toLowerCase() === "true"),
+);
 
 const envSchema = z.object({
-  PORT: z.coerce.number().default(4000),
-  NODE_ENV: z
-    .enum(["development", "production", "test"])
-    .default("development"),
-  MYSQL_HOST: z.string().default("127.0.0.1"),
-  MYSQL_PORT: z.coerce.number().default(3306),
-  MYSQL_USER: z.string().default("wordpress"),
+  PORT: z.preprocess(emptyToUndefined, z.coerce.number().default(4000)),
+  NODE_ENV: z.preprocess(
+    emptyToUndefined,
+    z.enum(["development", "production", "test"]).default("development"),
+  ),
+  MYSQL_HOST: z.preprocess(
+    emptyToUndefined,
+    z.string().default("127.0.0.1"),
+  ),
+  MYSQL_PORT: z.preprocess(emptyToUndefined, z.coerce.number().default(3306)),
+  MYSQL_USER: z.preprocess(emptyToUndefined, z.string().default("wordpress")),
   MYSQL_PASSWORD: z.string().default(""),
-  MYSQL_DATABASE: z.string().default("wordpress"),
-  MYSQL_TABLE_PREFIX: z.string().default("hy_"),
-  MYSQL_POOL_SIZE: z.coerce.number().default(10),
-  REDIS_URL: z.string().default("redis://127.0.0.1:6379"),
-  CART_TTL_SECONDS: z.coerce.number().default(604800),
-  APQ_TTL_SECONDS: z.coerce.number().default(2592000),
-  WORDPRESS_URL: z.string().default("http://localhost:8000"),
+  MYSQL_DATABASE: z.preprocess(
+    emptyToUndefined,
+    z.string().default("wordpress"),
+  ),
+  MYSQL_TABLE_PREFIX: z.preprocess(
+    emptyToUndefined,
+    z.string().default("hy_"),
+  ),
+  MYSQL_POOL_SIZE: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(10),
+  ),
+  REDIS_URL: z.preprocess(
+    emptyToUndefined,
+    z.string().default("redis://127.0.0.1:6379"),
+  ),
+  CART_TTL_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(604800),
+  ),
+  APQ_TTL_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(2592000),
+  ),
+  WORDPRESS_URL: z.preprocess(
+    emptyToUndefined,
+    z.string().default("http://localhost:8000"),
+  ),
   /** Public uploads/CDN base (WP `S3_UPLOADS_BUCKET_URL`, e.g. https://img.mieland.com). */
   MEDIA_BASE_URL: z.string().default(""),
   WC_CONSUMER_KEY: z.string().default(""),
   WC_CONSUMER_SECRET: z.string().default(""),
-  WC_REST_TIMEOUT_MS: z.coerce.number().default(15000),
+  WC_REST_TIMEOUT_MS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(15000),
+  ),
   /** Store API POST /checkout/{id} (Stripe); longer than WC_REST_TIMEOUT_MS. */
-  WC_STORE_PAYMENT_TIMEOUT_MS: z.coerce.number().default(60_000),
+  WC_STORE_PAYMENT_TIMEOUT_MS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(60_000),
+  ),
   /** Personal one-time coupon issued via `requestPersonalCoupon`. */
-  PERSONAL_COUPON_AMOUNT: z.coerce.number().default(10),
-  PERSONAL_COUPON_DISCOUNT_TYPE: z
-    .enum(["percent", "fixed_cart", "fixed_product"])
-    .default("percent"),
-  PERSONAL_COUPON_CODE_PREFIX: z.string().default("MIELAND"),
-  CORS_ORIGIN: z.string().default("http://localhost:3000"),
-  JWT_SECRET: z.string().optional(),
-  GRAPHQL_SECRET: z.string().optional(),
-  MAX_BODY_BYTES: z.coerce.number().default(1_048_576),
-  GRAPHQL_MAX_DEPTH: z.coerce.number().default(12),
-  GRAPHQL_MAX_COMPLEXITY: z.coerce.number().default(500),
-  CATALOG_CACHE_TTL_SECONDS: z.coerce.number().default(60),
+  PERSONAL_COUPON_AMOUNT: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(10),
+  ),
+  PERSONAL_COUPON_DISCOUNT_TYPE: z.preprocess(
+    emptyToUndefined,
+    z.enum(["percent", "fixed_cart", "fixed_product"]).default("percent"),
+  ),
+  PERSONAL_COUPON_CODE_PREFIX: z.preprocess(
+    emptyToUndefined,
+    z.string().default("MIELAND"),
+  ),
+  CORS_ORIGIN: z.preprocess(
+    emptyToUndefined,
+    z.string().default("http://localhost:3000"),
+  ),
+  JWT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
+  GRAPHQL_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
+  MAX_BODY_BYTES: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(1_048_576),
+  ),
+  GRAPHQL_MAX_DEPTH: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(12),
+  ),
+  GRAPHQL_MAX_COMPLEXITY: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(500),
+  ),
+  CATALOG_CACHE_TTL_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(60),
+  ),
   DISABLE_INTROSPECTION: boolFromEnv,
 });
 
@@ -88,7 +148,21 @@ export function loadConfig(): AppConfig {
   loadDotEnv();
   normalizeWcRestCredentials();
   normalizeMediaBaseUrl();
-  const parsed = envSchema.parse(process.env);
+  const result = envSchema.safeParse(process.env);
+  if (!result.success) {
+    const details = result.error.issues.map(
+      (i) => `${i.path.join(".") || "(root)"}: ${i.message}`,
+    );
+    console.error(
+      JSON.stringify({
+        msg: "config_invalid",
+        err: "Invalid environment configuration",
+        details,
+      }),
+    );
+    throw new Error(`Invalid environment configuration: ${details.join("; ")}`);
+  }
+  const parsed = result.data;
   cached = {
     ...parsed,
     isProd: parsed.NODE_ENV === "production",

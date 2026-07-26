@@ -970,10 +970,11 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type SendPasswordResetEmailPayload {
+    """Always true — WordPress sends the reset email (no user enumeration)."""
     success: Boolean
-    """Raw WordPress password-reset key for the storefront email link."""
+    """Unused — reset mail is sent by WordPress."""
     token: String
-    """WP user_login to pair with token on /reset-password."""
+    """Unused — reset mail is sent by WordPress."""
     login: String
     user: User
     clientMutationId: String
