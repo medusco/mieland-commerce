@@ -106,7 +106,10 @@ export function cartNeedsPricing(needs: CartFieldNeeds): boolean {
     needs.cartTotals ||
     needs.lineSubtotal ||
     needs.shippingMethods ||
-    needs.coupons
+    needs.coupons ||
+    // Product/variation price fields in cart must include subscription discount.
+    needs.products ||
+    needs.variations
   );
 }
 

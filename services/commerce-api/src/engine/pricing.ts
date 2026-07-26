@@ -1,6 +1,6 @@
 import { getOption } from "../repositories/options.js";
 import { FREQUENCIES, getItemFrequency, isValidFrequency, type CartItem } from "./types.js";
-import { roundMoney } from "../utils/index.js";
+import { moneyStr, roundMoney } from "../utils/index.js";
 
 export async function getSubscriptionDiscounts(): Promise<
   Record<string, number>
@@ -38,3 +38,31 @@ export function lineUnitPrice(
 ): number {
   return applyFrequencyDiscount(basePrice, getItemFrequency(item), discounts);
 }
+
+type PricedProductNode = {
+  price?: string | null;
+  salePrice?: string | null;
+  onSale?: boolean | null;
+  [key: string]: unknown;
+};
+
+/**
+ * Clone a cart-line product/variation node so `price` / promo `salePrice`
+ * reflect the subscription-discounted unit price (matches line subtotal).
+ * Leaves catalog nodes in the DataLoader cache untouched.
+ */
+export function withCartSubscriptionDisplayPrices<T extends PricedProductNode>(
+  node: T,
+  unitPrice: number,
+): T {
+  if (!(unitPrice > 0)) return node;
+  const money = moneyStr(unitPrice);
+  const onSale = Boolean(node.onSale) || Boolean(node.salePrice);
+  return {
+    ...node,
+    price: money,
+    ...(onSale ? { salePrice: money } : {}),
+  };
+}
+
+export type { PricedProductNode };

@@ -8,6 +8,7 @@ import {
   saveCart,
 } from "../../engine/cart-store.js";
 import { parseExtraDataString, type CartState } from "../../engine/types.js";
+import { withCartSubscriptionDisplayPrices, type PricedProductNode } from "../../engine/pricing.js";
 import { assertInStock, calculateCart, type CartTotalsMode } from "../../engine/totals.js";
 import { loadCoupon, assertCouponEmailAllowed, normalizeApplicantEmails } from "../../engine/shipping.js";
 import { findUserById } from "../../auth/index.js";
@@ -72,12 +73,23 @@ async function shapeCartGraphql(
     if (node && !(node instanceof Error)) productById.set(productIds[i], node);
   }
 
+  const pricing = cartNeedsPricing(needs);
   const nodes = calculated.lines.map((line) => {
-    const product = needs.products ? productById.get(line.productId) : null;
-    const variation =
+    const productRaw = needs.products
+      ? (productById.get(line.productId) as PricedProductNode | undefined)
+      : null;
+    const variationRaw =
       needs.variations && line.variationId
-        ? productById.get(line.variationId)
+        ? (productById.get(line.variationId) as PricedProductNode | undefined)
         : null;
+    const product =
+      productRaw && pricing
+        ? withCartSubscriptionDisplayPrices(productRaw, line.unitPrice)
+        : productRaw;
+    const variation =
+      variationRaw && pricing
+        ? withCartSubscriptionDisplayPrices(variationRaw, line.unitPrice)
+        : variationRaw;
     return {
       key: line.key,
       quantity: line.quantity,

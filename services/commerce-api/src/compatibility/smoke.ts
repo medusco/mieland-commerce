@@ -367,6 +367,20 @@ async function main() {
           quantity: number;
           subtotal?: string | null;
           extraData?: Array<{ key: string; value: string } | null> | null;
+          product?: {
+            node?: {
+              price?: string | null;
+              salePrice?: string | null;
+              onSale?: boolean | null;
+            } | null;
+          } | null;
+          variation?: {
+            node?: {
+              price?: string | null;
+              salePrice?: string | null;
+              onSale?: boolean | null;
+            } | null;
+          } | null;
         } | null> | null;
       } | null;
     } | null;
@@ -396,6 +410,15 @@ async function main() {
           quantity
           subtotal
           extraData { key value }
+          product {
+            node {
+              ... on SimpleProduct { price salePrice onSale }
+              ... on VariableProduct { price salePrice onSale }
+            }
+          }
+          variation {
+            node { price salePrice onSale }
+          }
         }
       }
     }
@@ -662,6 +685,51 @@ async function main() {
         subAddMs,
       );
     }
+    const qty = Math.max(1, subLine?.quantity ?? 1);
+    const unitFromSubtotal =
+      subLine?.subtotal != null ? Number(subLine.subtotal) / qty : NaN;
+    const displayPrice = Number(
+      subLine?.variation?.node?.price ?? subLine?.product?.node?.price ?? NaN,
+    );
+    const displaySale = subLine?.variation?.node?.onSale
+      ? Number(subLine.variation.node.salePrice ?? NaN)
+      : subLine?.product?.node?.onSale
+        ? Number(subLine.product.node.salePrice ?? NaN)
+        : null;
+    if (
+      Number.isFinite(unitFromSubtotal) &&
+      Number.isFinite(displayPrice) &&
+      Math.abs(displayPrice - unitFromSubtotal) > 0.015
+    ) {
+      fail(
+        "addToCart(subscription)",
+        {
+          message: "expected cart line price to include subscription discount",
+          unitFromSubtotal,
+          displayPrice,
+          displaySale,
+          subtotal: subLine?.subtotal,
+          quantity: qty,
+        },
+        subAddMs,
+      );
+    }
+    if (
+      displaySale != null &&
+      Number.isFinite(displaySale) &&
+      Number.isFinite(unitFromSubtotal) &&
+      Math.abs(displaySale - unitFromSubtotal) > 0.015
+    ) {
+      fail(
+        "addToCart(subscription)",
+        {
+          message: "expected cart line salePrice to include subscription discount",
+          unitFromSubtotal,
+          displaySale,
+        },
+        subAddMs,
+      );
+    }
     ok(
       "addToCart(subscription)",
       {
@@ -670,6 +738,8 @@ async function main() {
         itemCount: subAdded.addToCart?.cart?.contents?.itemCount,
         key: subLine?.key,
         subtotal: subLine?.subtotal ?? null,
+        price: displayPrice,
+        salePrice: displaySale,
       },
       subAddMs,
     );
