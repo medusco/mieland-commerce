@@ -9,13 +9,14 @@ import {
   refreshAuthToken,
   toGraphqlUser,
 } from "../../auth/index.js";
-import { saveWpAuthCookie } from "../../auth/wp-session.js";
+import { buildWpAuthSetCookie } from "../../auth/wp-session.js";
 import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
   requestWpPasswordReset,
   updateCustomerProfile,
 } from "../../repositories/customers.js";
+import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
 import { listCustomerOrders, getOrderById } from "../../repositories/orders.js";
 import { bindCartToCustomer, loadCart, mutateCart } from "../../engine/cart-store.js";
 import { parseDatabaseId } from "../../utils/index.js";
@@ -207,7 +208,27 @@ export const customerResolvers = {
       return {
         clientMutationId: input.clientMutationId,
         success: result.success,
+        token: result.token,
+        login: result.login,
         user: result.user,
+      };
+    },
+
+    requestPersonalCoupon: async (
+      _: unknown,
+      { input }: { input: { email: string; clientMutationId?: string } },
+    ) => {
+      const result = await getOrCreatePersonalCoupon(input.email);
+      return {
+        clientMutationId: input.clientMutationId,
+        created: result.created,
+        coupon: {
+          code: result.code,
+          amount: result.amount,
+          discountType: result.discountType,
+          description: result.description,
+          email: result.email,
+        },
       };
     },
 
@@ -240,9 +261,10 @@ export const customerResolvers = {
       }
 
       // Proxy to WPGraphQL Headless Login so WP sets a real auth cookie.
-      // Vault the cookie server-side; mint commerce JWTs for Bearer auth so
-      // verifyAccessToken works even when WP signs with GRAPHQL_LOGIN_JWT_SECRET_KEY
-      // (or another secret that differs from commerce JWT_SECRET / MySQL settings).
+      // Set HttpOnly `mc-wp-session` on the commerce domain (never Redis); mint commerce
+      // JWTs for Bearer auth so verifyAccessToken works even when WP signs with
+      // GRAPHQL_LOGIN_JWT_SECRET_KEY (or another secret that differs from
+      // commerce JWT_SECRET / MySQL settings).
       const origin =
         ctx.req.headers.get("origin") ||
         ctx.req.headers.get("Origin") ||
@@ -260,7 +282,10 @@ export const customerResolvers = {
           "WordPress login did not return an auth cookie — enable “Set authentication cookie” on the Headless Login provider",
         );
       }
-      await saveWpAuthCookie(userId, wp.cookieHeader, wp.cookieTtlSeconds);
+      ctx.pendingWpAuthSetCookie = buildWpAuthSetCookie(
+        wp.cookieHeader,
+        wp.cookieTtlSeconds,
+      );
 
       const user =
         (await findUserById(userId)) ?? {
@@ -303,7 +328,7 @@ export const customerResolvers = {
       { input }: { input: { refreshToken: string; clientMutationId?: string } },
     ) => {
       // Commerce-issued refresh tokens (login mints these after WP auth).
-      // WP auth cookie in Redis is left untouched.
+      // Browser-held mc-wp-session cookie is unchanged by refresh.
       const refreshed = await refreshAuthToken(input.refreshToken);
       if (!refreshed) {
         return {

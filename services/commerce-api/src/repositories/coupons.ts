@@ -1,0 +1,228 @@
+import { randomBytes } from "node:crypto";
+import { loadConfig, t } from "../config.js";
+import { createWcCoupon } from "../clients/woocommerce-rest.js";
+import { getRedis } from "../redis/client.js";
+import { sha256Hex, logJson } from "../utils/index.js";
+import { query, queryOne } from "../db/mysql.js";
+
+/**
+ * Postmeta key marking personal coupons issued by commerce-api.
+ * Public (no leading `_`) so WC REST reliably persists it; we also upsert via MySQL.
+ */
+export const PERSONAL_COUPON_EMAIL_META = "mieland_personal_coupon_email";
+
+const LOCK_TTL_MS = 20_000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export type PersonalCoupon = {
+  id: number;
+  code: string;
+  amount: string;
+  discountType: string;
+  description: string;
+  email: string;
+  created: boolean;
+};
+
+export function normalizeCouponEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export function assertValidCouponEmail(email: string): string {
+  const normalized = normalizeCouponEmail(email);
+  if (!normalized || !EMAIL_RE.test(normalized) || normalized.length > 254) {
+    throw new Error("A valid email address is required");
+  }
+  return normalized;
+}
+
+function generateCouponCode(prefix: string): string {
+  const safePrefix =
+    prefix
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, "")
+      .slice(0, 24) || "mieland";
+  const suffix = randomBytes(5).toString("hex").toUpperCase();
+  return `${safePrefix}-${suffix}`;
+}
+
+async function findPersonalCouponByEmail(
+  email: string,
+): Promise<{ id: number; code: string; description: string } | null> {
+  const row = await queryOne<{
+    ID: number;
+    post_title: string;
+    post_excerpt: string;
+  }>(
+    `SELECT p.ID, p.post_title, p.post_excerpt
+     FROM ${t("posts")} p
+     INNER JOIN ${t("postmeta")} pm
+       ON pm.post_id = p.ID AND pm.meta_key = ?
+     WHERE p.post_type = 'shop_coupon'
+       AND p.post_status = 'publish'
+       AND pm.meta_value = ?
+     ORDER BY p.ID ASC
+     LIMIT 1`,
+    [PERSONAL_COUPON_EMAIL_META, email],
+  );
+  if (!row) return null;
+  return {
+    id: row.ID,
+    code: row.post_title,
+    description: row.post_excerpt ?? "",
+  };
+}
+
+async function loadCouponMeta(
+  couponId: number,
+): Promise<{ amount: string; discountType: string }> {
+  const rows = await query<{ meta_key: string; meta_value: string }[]>(
+    `SELECT meta_key, meta_value FROM ${t("postmeta")} WHERE post_id = ?`,
+    [couponId],
+  );
+  const meta = Object.fromEntries(rows.map((r) => [r.meta_key, r.meta_value]));
+  return {
+    amount: String(meta.coupon_amount ?? "0"),
+    discountType: String(meta.discount_type ?? "percent"),
+  };
+}
+
+async function upsertPersonalEmailMeta(
+  couponId: number,
+  email: string,
+): Promise<void> {
+  const existing = await queryOne<{ meta_id: number }>(
+    `SELECT meta_id FROM ${t("postmeta")}
+     WHERE post_id = ? AND meta_key = ?
+     LIMIT 1`,
+    [couponId, PERSONAL_COUPON_EMAIL_META],
+  );
+  if (existing) {
+    await query(
+      `UPDATE ${t("postmeta")} SET meta_value = ? WHERE meta_id = ?`,
+      [email, existing.meta_id],
+    );
+    return;
+  }
+  await query(
+    `INSERT INTO ${t("postmeta")} (post_id, meta_key, meta_value) VALUES (?, ?, ?)`,
+    [couponId, PERSONAL_COUPON_EMAIL_META, email],
+  );
+}
+
+/**
+ * Get-or-create a personal one-time WooCommerce coupon for an email.
+ * Repeat requests return the same code (idempotent; Redis-locked).
+ */
+export async function getOrCreatePersonalCoupon(
+  rawEmail: string,
+): Promise<PersonalCoupon> {
+  const email = assertValidCouponEmail(rawEmail);
+  const cfg = loadConfig();
+  const emailHash = sha256Hex(email).slice(0, 32);
+  const lockKey = `personal-coupon:lock:${emailHash}`;
+  const redis = getRedis();
+  const token = `${Date.now()}-${Math.random()}`;
+
+  let acquired =
+    (await redis.set(lockKey, token, "PX", LOCK_TTL_MS, "NX")) === "OK";
+
+  if (!acquired) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const existing = await findPersonalCouponByEmail(email);
+      if (existing) {
+        const meta = await loadCouponMeta(existing.id);
+        return {
+          id: existing.id,
+          code: existing.code,
+          amount: meta.amount,
+          discountType: meta.discountType,
+          description: existing.description,
+          email,
+          created: false,
+        };
+      }
+      const lockHeld = await redis.get(lockKey);
+      if (!lockHeld) {
+        acquired =
+          (await redis.set(lockKey, token, "PX", LOCK_TTL_MS, "NX")) === "OK";
+        if (acquired) break;
+      }
+    }
+  }
+
+  if (!acquired) {
+    const late = await findPersonalCouponByEmail(email);
+    if (late) {
+      const meta = await loadCouponMeta(late.id);
+      return {
+        id: late.id,
+        code: late.code,
+        amount: meta.amount,
+        discountType: meta.discountType,
+        description: late.description,
+        email,
+        created: false,
+      };
+    }
+    throw new Error("Discount request is already being processed. Please wait.");
+  }
+
+  try {
+    const existing = await findPersonalCouponByEmail(email);
+    if (existing) {
+      const meta = await loadCouponMeta(existing.id);
+      return {
+        id: existing.id,
+        code: existing.code,
+        amount: meta.amount,
+        discountType: meta.discountType,
+        description: existing.description,
+        email,
+        created: false,
+      };
+    }
+
+    const code = generateCouponCode(cfg.PERSONAL_COUPON_CODE_PREFIX);
+    const amount = String(cfg.PERSONAL_COUPON_AMOUNT);
+    const discountType = cfg.PERSONAL_COUPON_DISCOUNT_TYPE;
+    const description = `Personal one-time discount for ${email}`;
+
+    const created = await createWcCoupon({
+      code,
+      discount_type: discountType,
+      amount,
+      description,
+      individual_use: true,
+      usage_limit: 1,
+      usage_limit_per_user: 1,
+      email_restrictions: [email],
+      meta_data: [{ key: PERSONAL_COUPON_EMAIL_META, value: email }],
+    });
+
+    await upsertPersonalEmailMeta(created.id, email);
+
+    logJson("info", {
+      msg: "personal_coupon_created",
+      couponId: created.id,
+      discountType: created.discount_type,
+    });
+
+    return {
+      id: created.id,
+      code: created.code,
+      amount: created.amount,
+      discountType: created.discount_type,
+      description: created.description ?? description,
+      email,
+      created: true,
+    };
+  } finally {
+    const current = await redis.get(lockKey);
+    if (current === token) {
+      await redis.del(lockKey);
+    }
+  }
+}

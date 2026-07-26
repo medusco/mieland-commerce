@@ -84,6 +84,8 @@ type GqlJson = { data?: Record<string, unknown> | null; errors?: GqlError[] };
 type Session = {
   token: string | null;
   auth: string | null;
+  /** Raw `mc-wp-session=…` Cookie pair from login Set-Cookie (sent back as Cookie). */
+  wpAuthCookiePair: string | null;
 };
 
 type Timing = { step: string; ms: number; ok: boolean };
@@ -139,6 +141,7 @@ async function gql(
   };
   if (session.token) headers["woocommerce-session"] = `Session ${session.token}`;
   if (session.auth) headers.Authorization = `Bearer ${session.auth}`;
+  if (session.wpAuthCookiePair) headers.Cookie = session.wpAuthCookiePair;
 
   const started = performance.now();
   const res = await fetch(endpoint, {
@@ -150,6 +153,16 @@ async function gql(
   const rawSession = res.headers.get("woocommerce-session");
   const m = rawSession?.match(/^\s*Session\s+(\S+)\s*$/i);
   if (m) session.token = m[1];
+
+  const setCookies =
+    typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  for (const raw of setCookies) {
+    const pair = raw.split(";")[0]?.trim();
+    if (pair?.toLowerCase().startsWith("mc-wp-session=")) {
+      session.wpAuthCookiePair = pair;
+      break;
+    }
+  }
 
   const json = (await res.json()) as GqlJson;
   return { status: res.status, json, ms: performance.now() - started };
@@ -169,7 +182,7 @@ async function mustGql<T>(
 }
 
 async function main() {
-  const session: Session = { token: null, auth: null };
+  const session: Session = { token: null, auth: null, wpAuthCookiePair: null };
   const smokeStarted = performance.now();
   console.log(`smoke target ${endpoint}`);
 
@@ -340,6 +353,7 @@ async function main() {
   const customerId = loginData.login?.customer?.databaseId;
   const customerGid = loginData.login?.customer?.id;
   if (!authToken || !customerId || !customerGid) fail("login", loginData, loginMs);
+  if (!session.wpAuthCookiePair) fail("login", "missing Set-Cookie mc-wp-session", loginMs);
   session.auth = authToken;
   if (loginData.login?.sessionToken) session.token = loginData.login.sessionToken;
   ok("login", { customerId, email: loginData.login?.customer?.email }, loginMs);
@@ -821,8 +835,9 @@ async function main() {
   const orderCount = ordersData.customer?.orders?.nodes?.filter(Boolean).length ?? 0;
   ok("listOrders", { count: orderCount }, ordersMs);
 
-  // --- logout (client-side: drop JWT; API has no logout mutation) ---
+  // --- logout (client-side: drop JWT + mc-wp-session cookie; API has no logout mutation) ---
   session.auth = null;
+  session.wpAuthCookiePair = null;
   {
     const { json: afterLogout, ms: logoutMs } = await gql(
       session,

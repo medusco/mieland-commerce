@@ -1,46 +1,72 @@
-import { getRedis } from "../redis/client.js";
+import { loadConfig } from "../config.js";
+
+/**
+ * WP auth cookies are client-held as an HttpOnly cookie on the commerce domain.
+ * Login sets the cookie; checkout/pay read it and forward to WP Store API.
+ * Commerce never stores the cookie in Redis.
+ */
+
+/** HttpOnly cookie name set by commerce on login (not a WordPress cookie name). */
+export const WP_AUTH_COOKIE_NAME = "mc-wp-session";
 
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
 
-function cookieKey(userId: number): string {
-  return `wpAuthCookie:${userId}`;
-}
-
-/** Persist WP auth Cookie header for server-side Store/REST calls. Never expose to clients. */
-export async function saveWpAuthCookie(
-  userId: number,
+/**
+ * Build a Set-Cookie header that stores the WP Cookie request header value.
+ * Value is URI-encoded so `;` / `=` inside WP pairs stay intact.
+ */
+export function buildWpAuthSetCookie(
   cookieHeader: string,
   ttlSeconds?: number,
-): Promise<void> {
-  if (!userId || !cookieHeader.trim()) return;
+): string {
   const ttl =
     Number.isFinite(ttlSeconds) && (ttlSeconds as number) > 0
       ? Math.floor(ttlSeconds as number)
       : DEFAULT_TTL_SECONDS;
-  await getRedis().set(cookieKey(userId), cookieHeader.trim(), "EX", ttl);
+  const cfg = loadConfig();
+  const parts = [
+    `${WP_AUTH_COOKIE_NAME}=${encodeURIComponent(cookieHeader.trim())}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${ttl}`,
+  ];
+  if (cfg.isProd) parts.push("Secure");
+  return parts.join("; ");
 }
 
-export async function getWpAuthCookie(userId: number): Promise<string | null> {
-  if (!userId) return null;
-  const raw = await getRedis().get(cookieKey(userId));
-  return raw?.trim() || null;
-}
-
-export async function clearWpAuthCookie(userId: number): Promise<void> {
-  if (!userId) return;
-  await getRedis().del(cookieKey(userId));
+/** Read the WP Cookie header value from an incoming Cookie request header. */
+export function parseWpAuthCookieHeader(
+  cookieHeader: string | null | undefined,
+): string | null {
+  if (!cookieHeader?.trim()) return null;
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const name = trimmed.slice(0, eq).trim();
+    if (name !== WP_AUTH_COOKIE_NAME) continue;
+    const raw = trimmed.slice(eq + 1).trim();
+    if (!raw) return null;
+    try {
+      return decodeURIComponent(raw).trim() || null;
+    } catch {
+      return raw.trim() || null;
+    }
+  }
+  return null;
 }
 
 /**
- * Require a stored WP auth cookie for logged-in checkout/payment.
- * Forces re-login when Redis TTL expired or user logged in before cookie vault existed.
+ * Require a client-supplied WP auth cookie for logged-in checkout/payment.
+ * Forces re-login when the browser omitted the cookie or the WP session expired.
  */
-export async function requireWpAuthCookie(userId: number): Promise<string> {
-  const cookie = await getWpAuthCookie(userId);
-  if (!cookie) {
+export function requireWpAuthCookie(cookie: string | null | undefined): string {
+  const trimmed = cookie?.trim() || "";
+  if (!trimmed) {
     throw new Error(
-      "WordPress session expired — please log in again to place or pay for orders",
+      "WordPress session required — log in again (missing mc-wp-session cookie)",
     );
   }
-  return cookie;
+  return trimmed;
 }

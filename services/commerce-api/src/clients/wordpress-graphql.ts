@@ -28,7 +28,7 @@ export type WpGraphqlLoginResult = {
   } | null;
   /** Cookie request header value (name=value; …). Empty if WP did not Set-Cookie. */
   cookieHeader: string;
-  /** Suggested Redis TTL in seconds from cookie Max-Age/Expires. */
+  /** Suggested cookie TTL in seconds from Max-Age/Expires (informational). */
   cookieTtlSeconds: number;
 };
 

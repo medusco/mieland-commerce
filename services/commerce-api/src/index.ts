@@ -7,7 +7,12 @@ import { GraphQLError } from "graphql";
 import depthLimit from "graphql-depth-limit";
 import { typeDefs } from "./schema/typeDefs/index.js";
 import { resolvers } from "./schema/resolvers/index.js";
-import { buildContext, type AppContext } from "./context.js";
+import {
+  buildContext,
+  getRequestScopedContext,
+  runWithRequestScope,
+  type AppContext,
+} from "./context.js";
 import { loadConfig } from "./config.js";
 import { pingMysql, closeMysql } from "./db/mysql.js";
 import { pingRedis, closeRedis } from "./redis/client.js";
@@ -124,7 +129,7 @@ app.use(
   gqlLimiter,
   (req, res, next) => {
     const q = typeof req.body?.query === "string" ? req.body.query : "";
-    if (/\b(login|registerCustomer|sendPasswordResetEmail|checkout)\b/.test(q)) {
+    if (/\b(login|registerCustomer|sendPasswordResetEmail|requestPersonalCoupon|checkout)\b/.test(q)) {
       return authLimiter(req, res, next);
     }
     next();
@@ -156,12 +161,29 @@ app.use(
           });
 
     try {
-      const response = await yoga.fetch(request);
+      const { response, pendingWp } = await runWithRequestScope(async () => {
+        const response = await yoga.fetch(request);
+        return {
+          response,
+          pendingWp: getRequestScopedContext()?.pendingWpAuthSetCookie ?? null,
+        };
+      });
       res.status(response.status);
+      const setCookies =
+        typeof response.headers.getSetCookie === "function"
+          ? response.headers.getSetCookie()
+          : [];
       response.headers.forEach((value, key) => {
         if (key.toLowerCase() === "content-encoding") return;
+        if (key.toLowerCase() === "set-cookie") return;
         res.setHeader(key, value);
       });
+      for (const c of setCookies) {
+        res.appendHeader("Set-Cookie", c);
+      }
+      if (pendingWp) {
+        res.appendHeader("Set-Cookie", pendingWp);
+      }
       res.setHeader("woocommerce-session", `Session ${sessionToken}`);
       const buf = Buffer.from(await response.arrayBuffer());
       logJson("info", {

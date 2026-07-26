@@ -4,7 +4,7 @@ import { loadConfig } from "../config.js";
 
 export type WpOptionMap = Record<string, unknown>;
 
-function maybeUnserializePhp(raw: string): unknown {
+export function maybeUnserializePhp(raw: string): unknown {
   // WordSQL options are often PHP-serialized. Handle common shapes without a full unserializer.
   if (!raw) return raw;
   if (raw.startsWith("{") || raw.startsWith("[")) {

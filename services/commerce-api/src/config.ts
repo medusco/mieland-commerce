@@ -30,6 +30,12 @@ const envSchema = z.object({
   WC_REST_TIMEOUT_MS: z.coerce.number().default(15000),
   /** Store API POST /checkout/{id} (Stripe); longer than WC_REST_TIMEOUT_MS. */
   WC_STORE_PAYMENT_TIMEOUT_MS: z.coerce.number().default(60_000),
+  /** Personal one-time coupon issued via `requestPersonalCoupon`. */
+  PERSONAL_COUPON_AMOUNT: z.coerce.number().default(10),
+  PERSONAL_COUPON_DISCOUNT_TYPE: z
+    .enum(["percent", "fixed_cart", "fixed_product"])
+    .default("percent"),
+  PERSONAL_COUPON_CODE_PREFIX: z.string().default("MIELAND"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   JWT_SECRET: z.string().optional(),
   GRAPHQL_SECRET: z.string().optional(),

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { YogaInitialContext } from "graphql-yoga";
 import DataLoader from "dataloader";
 import {
@@ -6,6 +7,7 @@ import {
   requestId,
 } from "./utils/index.js";
 import { verifyAccessToken } from "./auth/index.js";
+import { parseWpAuthCookieHeader } from "./auth/wp-session.js";
 import { getProductNodes } from "./repositories/products.js";
 import { loadConfig } from "./config.js";
 
@@ -14,10 +16,26 @@ export type AppContext = {
   sessionToken: string;
   setSessionToken: string | null;
   userId: number | null;
+  /** Decoded WP Cookie header from the `mc-wp-session` HttpOnly cookie. */
+  wpAuthCookie: string | null;
+  /** Set-Cookie to emit after login (HttpOnly `mc-wp-session`). */
+  pendingWpAuthSetCookie: string | null;
   calcMode: "lightweight" | "full";
   productLoader: DataLoader<number, unknown>;
   req: Request;
 };
+
+/** Request-scoped bag so Express can read pending Set-Cookie after yoga.fetch. */
+type RequestScope = { ctx: AppContext | null };
+const requestScope = new AsyncLocalStorage<RequestScope>();
+
+export function runWithRequestScope<T>(fn: () => Promise<T>): Promise<T> {
+  return requestScope.run({ ctx: null }, fn);
+}
+
+export function getRequestScopedContext(): AppContext | null {
+  return requestScope.getStore()?.ctx ?? null;
+}
 
 export async function buildContext(
   yogaCtx: YogaInitialContext,
@@ -43,20 +61,27 @@ export async function buildContext(
     if (verified) userId = verified.userId;
   }
 
+  const wpAuthCookie = parseWpAuthCookieHeader(headers.get("cookie"));
+
   const productLoader = new DataLoader(async (ids: readonly number[]) => {
     return getProductNodes(ids);
   });
 
   void loadConfig;
-  return {
+  const ctx: AppContext = {
     requestId: rid,
     sessionToken,
     setSessionToken,
     userId,
+    wpAuthCookie,
+    pendingWpAuthSetCookie: null,
     calcMode: "lightweight",
     productLoader,
     req,
   };
+  const scope = requestScope.getStore();
+  if (scope) scope.ctx = ctx;
+  return ctx;
 }
 
 export function requireUser(ctx: AppContext): number {

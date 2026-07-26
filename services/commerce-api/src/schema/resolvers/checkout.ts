@@ -17,7 +17,13 @@ import {
   type StorePaymentDatum,
 } from "../../clients/woocommerce-store.js";
 import { requireWpAuthCookie } from "../../auth/wp-session.js";
+import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
+import {
+  assertCouponEmailAllowed,
+  loadCoupon,
+  normalizeApplicantEmails,
+} from "../../engine/shipping.js";
 import {
   getOrderById,
   getOrderPaymentContext,
@@ -312,6 +318,27 @@ async function markOrderPaymentFailed(
   }
 }
 
+async function assertCartCouponEmails(
+  cart: { coupons: string[]; billing: { email?: string }; customerId: number | null },
+  userId: number | null,
+): Promise<void> {
+  if (!cart.coupons.length) return;
+  const candidates: Array<string | null | undefined> = [cart.billing.email];
+  const ids = new Set<number>();
+  if (userId) ids.add(userId);
+  if (cart.customerId) ids.add(cart.customerId);
+  for (const id of ids) {
+    const user = await findUserById(id);
+    if (user?.email) candidates.push(user.email);
+  }
+  const emails = normalizeApplicantEmails(candidates);
+  for (const code of cart.coupons) {
+    const coupon = await loadCoupon(code);
+    if (!coupon) continue;
+    assertCouponEmailAllowed(coupon, emails);
+  }
+}
+
 export const checkoutResolvers = {
   Mutation: {
     createOrder: async (
@@ -327,9 +354,10 @@ export const checkoutResolvers = {
       const cart = await loadCart(ctx.sessionToken);
       if (!cart.items.length) throw new Error("Cart is empty");
       await assertCartInStock(cart.items);
+      await assertCartCouponEmails(cart, userId);
 
       // WC prices line items; we only need totals for shipping_lines / coupons.
-      const calculated = await calculateCart(cart, "full");
+      const calculated = await calculateCart(cart, "full", { userId });
       await saveCart(ctx.sessionToken, calculated.cart);
 
       const idempKey = createHash("sha256")
@@ -337,9 +365,9 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const payload = await withCheckoutIdempotency(idempKey, async () => {
-        // Ensure WP session exists for later Store API payment; do not send the
-        // cookie on WC REST — a customer Cookie demotes admin consumer keys.
-        await requireWpAuthCookie(userId);
+        // Ensure browser sent mc-wp-session cookie for later Store API payment; do not
+        // send it on WC REST — a customer Cookie demotes admin consumer keys.
+        requireWpAuthCookie(ctx.wpAuthCookie);
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
@@ -404,10 +432,11 @@ export const checkoutResolvers = {
 
       if (!cart.items.length) throw new Error("Cart is empty");
       await assertCartInStock(cart.items);
+      await assertCartCouponEmails(cart, userId ?? null);
 
       // Line item prices are not sent to WC — it recalculates from catalog.
       // calculateCart is still needed for shipping_lines / free-shipping thresholds.
-      const calculated = await calculateCart(cart, "full");
+      const calculated = await calculateCart(cart, "full", { userId });
       await saveCart(ctx.sessionToken, calculated.cart);
 
       const meta = (input.metaData ?? [])
@@ -426,7 +455,7 @@ export const checkoutResolvers = {
         // "Sorry, you are not allowed to create resources." Cookie is only for
         // Store API payment. Still require it now so pay won't fail after place.
         if (userId != null) {
-          await requireWpAuthCookie(userId);
+          requireWpAuthCookie(ctx.wpAuthCookie);
         }
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
@@ -606,7 +635,7 @@ export const checkoutResolvers = {
       let storeRes;
       try {
         const wpCookie =
-          ctx.userId != null ? await requireWpAuthCookie(ctx.userId) : null;
+          ctx.userId != null ? requireWpAuthCookie(ctx.wpAuthCookie) : null;
         const fingerprint = paymentFingerprint(paymentMethod, paymentData);
         storeRes = await withPaymentIdempotency(orderId, fingerprint, () =>
           processStoreCheckoutOrder(

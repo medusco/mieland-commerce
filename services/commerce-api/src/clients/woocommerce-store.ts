@@ -140,8 +140,8 @@ export type ProcessStoreCheckoutOrderOptions = {
  * Pay an existing unpaid order via Store API:
  * POST /wc/store/v1/checkout/{ORDER_ID}
  *
- * Pass the WP auth cookie (from login vault) so registered orders are owned
- * by the same user as get_current_user_id().
+ * Pass the WP auth cookie (from browser `mc-wp-session`) so registered orders are
+ * owned by the same user as get_current_user_id().
  */
 export async function processStoreCheckoutOrder(
   orderId: number,

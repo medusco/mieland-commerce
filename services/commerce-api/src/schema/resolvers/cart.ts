@@ -9,12 +9,28 @@ import {
 } from "../../engine/cart-store.js";
 import { parseExtraDataString, type CartState } from "../../engine/types.js";
 import { assertInStock, calculateCart, type CartTotalsMode } from "../../engine/totals.js";
-import { loadCoupon } from "../../engine/shipping.js";
+import { loadCoupon, assertCouponEmailAllowed, normalizeApplicantEmails } from "../../engine/shipping.js";
+import { findUserById } from "../../auth/index.js";
 import {
   cartNeedsFromInfo,
   cartNeedsPricing,
   type CartFieldNeeds,
 } from "../../utils/selection.js";
+
+async function resolveApplicantEmails(
+  cart: CartState,
+  userId: number | null,
+): Promise<string[]> {
+  const candidates: Array<string | null | undefined> = [cart.billing.email];
+  const ids = new Set<number>();
+  if (userId) ids.add(userId);
+  if (cart.customerId) ids.add(cart.customerId);
+  for (const id of ids) {
+    const user = await findUserById(id);
+    if (user?.email) candidates.push(user.email);
+  }
+  return normalizeApplicantEmails(candidates);
+}
 
 async function shapeCartGraphql(
   ctx: AppContext,
@@ -24,6 +40,7 @@ async function shapeCartGraphql(
 ) {
   const calculated = await calculateCart(cart, mode, {
     pricing: cartNeedsPricing(needs),
+    userId: ctx.userId,
   });
   if (
     needs.shippingMethods &&
@@ -271,6 +288,9 @@ export const cartResolvers = {
       const code = input.code.trim();
       const coupon = await loadCoupon(code);
       if (!coupon) throw new Error("Invalid coupon code");
+      const cartPreview = await loadCart(ctx.sessionToken);
+      const emails = await resolveApplicantEmails(cartPreview, ctx.userId);
+      assertCouponEmailAllowed(coupon, emails);
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
         if (!c.coupons.includes(code)) c.coupons.push(code);
         return { cart: c, result: c };

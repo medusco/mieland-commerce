@@ -5,6 +5,8 @@ import {
   applyCoupons,
   loadCoupon,
   resolveShipping,
+  couponAllowsEmails,
+  normalizeApplicantEmails,
   type ShippingPackage,
 } from "./shipping.js";
 import {
@@ -12,6 +14,7 @@ import {
   getStockInfo,
 } from "../repositories/products.js";
 import { moneyStr, roundMoney } from "../utils/index.js";
+import { findUserById } from "../auth/index.js";
 
 export type CartTotalsMode = "lightweight" | "full";
 
@@ -45,6 +48,8 @@ export type CalculatedCart = {
 export type CalculateCartOptions = {
   /** Skip price/shipping/coupon work when the selection only needs keys/qty/itemCount. */
   pricing?: boolean;
+  /** Logged-in user id — used for coupon email_restrictions checks. */
+  userId?: number | null;
 };
 
 export async function calculateCart(
@@ -102,10 +107,20 @@ export async function calculateCart(
     });
   }
 
+  const emailCandidates: Array<string | null | undefined> = [cart.billing.email];
+  const userIds = new Set<number>();
+  if (options.userId) userIds.add(options.userId);
+  if (cart.customerId) userIds.add(cart.customerId);
+  for (const id of userIds) {
+    const user = await findUserById(id);
+    if (user?.email) emailCandidates.push(user.email);
+  }
+  const applicantEmails = normalizeApplicantEmails(emailCandidates);
+
   const couponRows = [];
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
-    if (c) couponRows.push(c);
+    if (c && couponAllowsEmails(c, applicantEmails)) couponRows.push(c);
   }
   const { discountTotal, applied } = applyCoupons(
     subtotalNum,
@@ -122,7 +137,8 @@ export async function calculateCart(
   let chosen = cart.chosenShippingMethods;
 
   if (mode === "full") {
-    const shipping = await resolveShipping(cart, afterDiscount);
+    // Free-shipping min_amount is based on cart subtotal (before coupons), not total.
+    const shipping = await resolveShipping(cart, subtotalNum);
     packages = shipping.packages;
     shippingTotal = shipping.chosenCost;
     chosen = shipping.chosenIds;

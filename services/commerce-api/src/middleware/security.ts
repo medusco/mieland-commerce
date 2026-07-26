@@ -93,7 +93,7 @@ export function authSensitiveBodyGuard(
   const body = req.body as { query?: string } | undefined;
   const q = body?.query ?? "";
   if (
-    /\b(login|registerCustomer|sendPasswordResetEmail|checkout)\b/.test(q)
+    /\b(login|registerCustomer|sendPasswordResetEmail|requestPersonalCoupon|checkout)\b/.test(q)
   ) {
     // marker for logging; actual limit applied by createAuthMutationRateLimiter on path
     res.setHeader("x-auth-sensitive", "1");

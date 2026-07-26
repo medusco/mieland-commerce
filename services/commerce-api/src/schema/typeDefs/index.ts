@@ -860,6 +860,26 @@ export const typeDefs = /* GraphQL */ `
     username: String!
   }
 
+  input RequestPersonalCouponInput {
+    clientMutationId: String
+    email: String!
+  }
+
+  type PersonalCoupon {
+    code: String!
+    amount: String!
+    discountType: String!
+    description: String
+    email: String!
+  }
+
+  type RequestPersonalCouponPayload {
+    clientMutationId: String
+    coupon: PersonalCoupon
+    """True when a new coupon was created; false when an existing one was returned."""
+    created: Boolean!
+  }
+
   input PasswordCredentialsInput {
     username: String!
     password: String!
@@ -937,6 +957,10 @@ export const typeDefs = /* GraphQL */ `
 
   type SendPasswordResetEmailPayload {
     success: Boolean
+    """Raw WordPress password-reset key for the storefront email link."""
+    token: String
+    """WP user_login to pair with token on /reset-password."""
+    login: String
     user: User
     clientMutationId: String
   }
@@ -1002,6 +1026,11 @@ export const typeDefs = /* GraphQL */ `
     updateCustomer(input: UpdateCustomerInput!): UpdateCustomerPayload
     registerCustomer(input: RegisterCustomerInput!): RegisterCustomerPayload
     sendPasswordResetEmail(input: SendPasswordResetEmailInput!): SendPasswordResetEmailPayload
+    """
+    Get or create a personal one-time WooCommerce coupon for the given email.
+    Repeat requests return the same coupon code.
+    """
+    requestPersonalCoupon(input: RequestPersonalCouponInput!): RequestPersonalCouponPayload
     login(input: LoginInput!): LoginPayload
     refreshToken(input: RefreshTokenInput!): RefreshTokenPayload
     updateMielandSubscription(input: UpdateMielandSubscriptionInput!): UpdateMielandSubscriptionPayload

@@ -1,5 +1,5 @@
 import { query, queryOne, t } from "../db/mysql.js";
-import { getOption } from "../repositories/options.js";
+import { getOption, maybeUnserializePhp } from "../repositories/options.js";
 import type { CartAddress, CartState } from "./types.js";
 import { roundMoney } from "../utils/index.js";
 
@@ -107,7 +107,8 @@ function rateCost(
 
 export async function resolveShipping(
   cart: CartState,
-  subtotalAfterDiscount: number,
+  /** Cart subtotal before coupons; used for free_shipping min_amount checks. */
+  subtotal: number,
 ): Promise<{ packages: ShippingPackage[]; chosenCost: number; chosenIds: string[] }> {
   const country =
     (cart.shipping.country || cart.billing.country || "").toUpperCase();
@@ -160,7 +161,7 @@ export async function resolveShipping(
   const rates: ShippingRate[] = [];
   for (const m of zoneMethods) {
     const settings = await methodSettings(m.method_id, m.instance_id);
-    const cost = rateCost(m.method_id, settings, subtotalAfterDiscount);
+    const cost = rateCost(m.method_id, settings, subtotal);
     if (cost == null) continue;
     const label = settings.title || m.method_id;
     rates.push({
@@ -234,14 +235,79 @@ export async function getUserAddressMeta(
   return Object.fromEntries(rows.map((r) => [r.meta_key, r.meta_value ?? ""]));
 }
 
-export async function loadCoupon(code: string): Promise<{
+export type LoadedCoupon = {
   id: number;
   code: string;
   description: string;
   discountType: string;
   amount: number;
   freeShipping: boolean;
-} | null> {
+  /** Lowercased emails from WC `customer_email` / email_restrictions. Empty = unrestricted. */
+  emailRestrictions: string[];
+};
+
+/** Parse WooCommerce coupon email_restrictions (`customer_email` postmeta). */
+export function parseCouponEmailRestrictions(
+  raw: string | undefined | null,
+): string[] {
+  if (!raw?.trim()) return [];
+  const parsed = maybeUnserializePhp(raw.trim());
+  const list = Array.isArray(parsed)
+    ? parsed
+    : typeof parsed === "string"
+      ? parsed.split(/[\s,;]+/)
+      : [];
+  return [
+    ...new Set(
+      list
+        .map((e) => String(e ?? "").trim().toLowerCase())
+        .filter((e) => e.includes("@")),
+    ),
+  ];
+}
+
+export function normalizeApplicantEmails(
+  emails: Array<string | null | undefined>,
+): string[] {
+  return [
+    ...new Set(
+      emails
+        .map((e) => (e ?? "").trim().toLowerCase())
+        .filter((e) => e.includes("@")),
+    ),
+  ];
+}
+
+/**
+ * Whether a coupon may be used by any of the applicant emails.
+ * Unrestricted coupons always pass. Restricted coupons require at least one match.
+ */
+export function couponAllowsEmails(
+  coupon: Pick<LoadedCoupon, "emailRestrictions">,
+  applicantEmails: string[],
+): boolean {
+  if (!coupon.emailRestrictions.length) return true;
+  if (!applicantEmails.length) return false;
+  const allowed = new Set(coupon.emailRestrictions);
+  return applicantEmails.some((e) => allowed.has(e));
+}
+
+export function assertCouponEmailAllowed(
+  coupon: Pick<LoadedCoupon, "emailRestrictions" | "code">,
+  applicantEmails: string[],
+): void {
+  if (!coupon.emailRestrictions.length) return;
+  if (!applicantEmails.length) {
+    throw new Error(
+      "This coupon is restricted to a specific email address. Add a billing email or log in to apply it.",
+    );
+  }
+  if (!couponAllowsEmails(coupon, applicantEmails)) {
+    throw new Error("This coupon cannot be used with your email address.");
+  }
+}
+
+export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
   const post = await queryOne<{ ID: number; post_excerpt: string }>(
     `SELECT ID, post_excerpt FROM ${t("posts")}
      WHERE post_type = 'shop_coupon' AND post_status = 'publish' AND post_title = ?
@@ -254,6 +320,13 @@ export async function loadCoupon(code: string): Promise<{
     [post.ID],
   );
   const meta = Object.fromEntries(metaRows.map((r) => [r.meta_key, r.meta_value]));
+  let emailRestrictions = parseCouponEmailRestrictions(meta.customer_email);
+  // Fallback for personal coupons if WC meta is missing but our marker exists.
+  if (!emailRestrictions.length && meta.mieland_personal_coupon_email) {
+    emailRestrictions = parseCouponEmailRestrictions(
+      meta.mieland_personal_coupon_email,
+    );
+  }
   return {
     id: post.ID,
     code,
@@ -261,6 +334,7 @@ export async function loadCoupon(code: string): Promise<{
     discountType: meta.discount_type ?? "fixed_cart",
     amount: Number(meta.coupon_amount ?? 0),
     freeShipping: meta.free_shipping === "yes",
+    emailRestrictions,
   };
 }
 

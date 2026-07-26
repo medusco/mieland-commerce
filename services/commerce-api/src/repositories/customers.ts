@@ -97,45 +97,96 @@ export async function updateCustomerProfile(
   }
 }
 
-/** Delegate password reset mail to WordPress (Node does not send email). */
+/**
+ * Ask WordPress to mint a password-reset key (no email).
+ * Storefront builds/sends the branded HTML email over SMTP.
+ */
 export async function requestWpPasswordReset(
   username: string,
-): Promise<{ success: boolean; user: unknown | null }> {
+): Promise<{
+  success: boolean;
+  token: string | null;
+  login: string | null;
+  user: unknown | null;
+}> {
   const { loadConfig } = await import("../config.js");
   const cfg = loadConfig();
+
   const user = await queryOne<{
     ID: number;
+    user_login: string;
     user_email: string;
     display_name: string;
   }>(
-    `SELECT ID, user_email, display_name FROM ${t("users")}
+    `SELECT ID, user_login, user_email, display_name FROM ${t("users")}
      WHERE user_login = ? OR user_email = ? LIMIT 1`,
     [username, username],
   );
   if (!user) {
     // Do not reveal existence
-    return { success: true, user: null };
+    return { success: true, token: null, login: null, user: null };
   }
+
+  let token: string | null = null;
+  let login: string | null = user.user_login;
 
   try {
     const url = `${cfg.WORDPRESS_URL.replace(/\/$/, "")}/wp-json/mieland/v1/password-reset`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const internalSecret =
+      process.env.MIELAND_INTERNAL_REST_SECRET?.trim() || "";
+    if (internalSecret) {
+      headers["x-mieland-internal-secret"] = internalSecret;
+    }
+
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ username }),
       signal: AbortSignal.timeout(10_000),
     });
-    void res;
-  } catch {
-    // Still return success shape; WP may be unreachable in local
+    const payload = (await res.json()) as {
+      success?: boolean;
+      token?: string | null;
+      login?: string | null;
+      email?: string | null;
+      message?: string;
+    };
+
+    if (!res.ok || payload.success === false) {
+      throw new Error(
+        payload.message || `WordPress password-reset failed (${res.status})`,
+      );
+    }
+
+    token = payload.token ?? null;
+    login = payload.login ?? user.user_login;
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? error.message
+        : "WordPress password-reset request failed",
+    );
   }
+
+  const names = await queryOne<{ first_name: string | null }>(
+    `SELECT meta_value AS first_name FROM ${t("usermeta")}
+     WHERE user_id = ? AND meta_key = 'first_name' LIMIT 1`,
+    [user.ID],
+  );
 
   return {
     success: true,
+    token,
+    login,
     user: {
       id: toGlobalId("user", user.ID),
+      databaseId: user.ID,
       email: user.user_email,
-      firstName: "",
+      username: user.user_login,
+      firstName: names?.first_name ?? "",
       name: user.display_name,
     },
   };

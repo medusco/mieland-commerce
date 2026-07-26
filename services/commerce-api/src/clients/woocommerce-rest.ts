@@ -103,30 +103,43 @@ export function buildWcOrderFromCart(args: {
     shipping: addr(cart.shipping),
     line_items,
     shipping_lines: shipping_lines.length ? shipping_lines : undefined,
-    coupon_lines: cart.coupons.map((code) => ({ code })),
+    coupon_lines: calculated.appliedCoupons.map((c) => ({ code: c.code })),
     meta_data: metaData,
   };
 }
 
-function wcRestOrdersUrl(orderId?: number): URL {
+function requireWcRestCredentials(): { key: string; secret: string; base: string } {
   const cfg = loadConfig();
   if (!cfg.WC_CONSUMER_KEY || !cfg.WC_CONSUMER_SECRET) {
     throw new Error(
       "WC REST credentials are not configured (set consumerKey/consumerSecret or WC_CONSUMER_KEY/WC_CONSUMER_SECRET)",
     );
   }
-  const base = cfg.WORDPRESS_URL.replace(/\/$/, "");
-  const path =
-    orderId != null
-      ? `${base}/wp-json/wc/v3/orders/${orderId}`
-      : `${base}/wp-json/wc/v3/orders`;
-  const url = new URL(path);
-  url.searchParams.set("consumer_key", cfg.WC_CONSUMER_KEY);
-  url.searchParams.set("consumer_secret", cfg.WC_CONSUMER_SECRET);
+  return {
+    key: cfg.WC_CONSUMER_KEY,
+    secret: cfg.WC_CONSUMER_SECRET,
+    base: cfg.WORDPRESS_URL.replace(/\/$/, ""),
+  };
+}
+
+function wcRestUrl(resourcePath: string): URL {
+  const { key, secret, base } = requireWcRestCredentials();
+  const path = resourcePath.startsWith("/")
+    ? resourcePath
+    : `/${resourcePath}`;
+  const url = new URL(`${base}/wp-json/wc/v3${path}`);
+  url.searchParams.set("consumer_key", key);
+  url.searchParams.set("consumer_secret", secret);
   return url;
 }
 
-async function wcRestOrderRequest(
+function wcRestOrdersUrl(orderId?: number): URL {
+  return orderId != null
+    ? wcRestUrl(`/orders/${orderId}`)
+    : wcRestUrl("/orders");
+}
+
+async function wcRestRequest(
   method: "POST" | "PUT",
   url: URL,
   payload: Record<string, unknown>,
@@ -181,7 +194,7 @@ export async function createWcOrder(
   payload: WcOrderPayload,
   options?: { cookie?: string | null },
 ): Promise<Record<string, unknown>> {
-  return wcRestOrderRequest(
+  return wcRestRequest(
     "POST",
     wcRestOrdersUrl(),
     payload,
@@ -196,11 +209,56 @@ export async function updateWcOrder(
   payload: { status?: string } & Record<string, unknown>,
   options?: { cookie?: string | null },
 ): Promise<Record<string, unknown>> {
-  return wcRestOrderRequest(
+  return wcRestRequest(
     "PUT",
     wcRestOrdersUrl(orderId),
     payload,
     "wc_rest_update_order",
     options,
   );
+}
+
+export type WcCouponCreatePayload = {
+  code: string;
+  discount_type: "percent" | "fixed_cart" | "fixed_product";
+  amount: string;
+  description?: string;
+  individual_use?: boolean;
+  usage_limit?: number;
+  usage_limit_per_user?: number;
+  email_restrictions?: string[];
+  meta_data?: Array<{ key: string; value: string }>;
+};
+
+export type WcCouponResponse = {
+  id: number;
+  code: string;
+  amount: string;
+  discount_type: string;
+  description?: string;
+};
+
+/** Create a WooCommerce coupon via REST `/wc/v3/coupons`. */
+export async function createWcCoupon(
+  payload: WcCouponCreatePayload,
+): Promise<WcCouponResponse> {
+  const body = await wcRestRequest(
+    "POST",
+    wcRestUrl("/coupons"),
+    payload as unknown as Record<string, unknown>,
+    "wc_rest_create_coupon",
+  );
+  const id = Number(body.id);
+  const code = String(body.code ?? payload.code);
+  if (!id || !code) {
+    throw new Error("WC REST coupon create returned an invalid response");
+  }
+  return {
+    id,
+    code,
+    amount: String(body.amount ?? payload.amount),
+    discount_type: String(body.discount_type ?? payload.discount_type),
+    description:
+      typeof body.description === "string" ? body.description : payload.description,
+  };
 }
