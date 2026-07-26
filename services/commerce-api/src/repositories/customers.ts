@@ -1,4 +1,4 @@
-import { query, queryOne, t } from "../db/mysql.js";
+import { query, t } from "../db/mysql.js";
 import { setUserMeta, findUserById, updateUserPassword } from "../auth/index.js";
 import { toGlobalId } from "../utils/index.js";
 import {
