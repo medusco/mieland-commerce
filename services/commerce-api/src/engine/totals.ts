@@ -8,6 +8,7 @@ import {
   couponAllowsEmails,
   normalizeApplicantEmails,
   type ShippingPackage,
+  type FreeShippingInfo,
 } from "./shipping.js";
 import {
   getProductPrices,
@@ -43,6 +44,7 @@ export type CalculatedCart = {
   }>;
   availableShippingMethods: ShippingPackage[];
   chosenShippingMethods: string[];
+  freeShippingInfo: FreeShippingInfo | null;
 };
 
 export type CalculateCartOptions = {
@@ -81,6 +83,7 @@ export async function calculateCart(
       appliedCoupons: [],
       availableShippingMethods: [],
       chosenShippingMethods: cart.chosenShippingMethods,
+      freeShippingInfo: null,
     };
   }
 
@@ -135,6 +138,7 @@ export async function calculateCart(
   let shippingTotal = 0;
   let packages: ShippingPackage[] = [];
   let chosen = cart.chosenShippingMethods;
+  let freeShippingInfo: FreeShippingInfo | null = null;
 
   if (mode === "full") {
     // Free-shipping min_amount is based on cart subtotal (before coupons), not total.
@@ -142,6 +146,7 @@ export async function calculateCart(
     packages = shipping.packages;
     shippingTotal = shipping.chosenCost;
     chosen = shipping.chosenIds;
+    freeShippingInfo = shipping.freeShippingInfo;
   }
 
   const totalTax = 0;
@@ -158,6 +163,7 @@ export async function calculateCart(
     appliedCoupons: applied,
     availableShippingMethods: packages,
     chosenShippingMethods: chosen,
+    freeShippingInfo,
   };
 }
 

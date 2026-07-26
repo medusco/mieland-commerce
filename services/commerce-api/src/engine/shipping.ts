@@ -16,6 +16,19 @@ export type ShippingPackage = {
   rates: ShippingRate[];
 };
 
+export type FreeShippingInfo = {
+  methodId: string;
+  instanceId: number;
+  label: string;
+  /** WooCommerce requires: '', coupon, min_amount, either, both */
+  requires: string;
+  minAmount: string;
+  /** Whether the cart currently qualifies for this free shipping method */
+  eligible: boolean;
+  /** How much cart subtotal (pre-coupon) is still needed; 0 when eligible or no min */
+  amountRemaining: string;
+};
+
 type ZoneMethod = {
   zone_id: number;
   instance_id: number;
@@ -109,11 +122,21 @@ export async function resolveShipping(
   cart: CartState,
   /** Cart subtotal before coupons; used for free_shipping min_amount checks. */
   subtotal: number,
-): Promise<{ packages: ShippingPackage[]; chosenCost: number; chosenIds: string[] }> {
+): Promise<{
+  packages: ShippingPackage[];
+  chosenCost: number;
+  chosenIds: string[];
+  freeShippingInfo: FreeShippingInfo | null;
+}> {
   const country =
     (cart.shipping.country || cart.billing.country || "").toUpperCase();
   if (!country) {
-    return { packages: [], chosenCost: 0, chosenIds: [] };
+    return {
+      packages: [],
+      chosenCost: 0,
+      chosenIds: [],
+      freeShippingInfo: null,
+    };
   }
 
   const [zones, locations, methods] = await Promise.all([
@@ -159,9 +182,34 @@ export async function resolveShipping(
 
   const zoneMethods = methods.filter((m) => m.zone_id === matchedZoneId);
   const rates: ShippingRate[] = [];
+  let freeShippingInfo: FreeShippingInfo | null = null;
+
   for (const m of zoneMethods) {
     const settings = await methodSettings(m.method_id, m.instance_id);
     const cost = rateCost(m.method_id, settings, subtotal);
+
+    if (m.method_id === "free_shipping" && freeShippingInfo == null) {
+      const minAmount = Number(settings.min_amount ?? 0);
+      const requires = settings.requires ?? "";
+      const minApplies =
+        requires === "min_amount" ||
+        requires === "either" ||
+        requires === "both" ||
+        (requires === "coupon" && minAmount > 0);
+      const remaining = minApplies
+        ? roundMoney(Math.max(0, minAmount - subtotal))
+        : 0;
+      freeShippingInfo = {
+        methodId: m.method_id,
+        instanceId: m.instance_id,
+        label: settings.title || m.method_id,
+        requires,
+        minAmount: minAmount.toFixed(2),
+        eligible: cost != null,
+        amountRemaining: remaining.toFixed(2),
+      };
+    }
+
     if (cost == null) continue;
     const label = settings.title || m.method_id;
     rates.push({
@@ -203,6 +251,7 @@ export async function resolveShipping(
     packages,
     chosenCost: roundMoney(chosenCost),
     chosenIds,
+    freeShippingInfo,
   };
 }
 

@@ -269,6 +269,19 @@ export const typeDefs = /* GraphQL */ `
     rates: [ShippingRate]
   }
 
+  type FreeShippingInfo {
+    methodId: String
+    instanceId: Int
+    label: String
+    """WooCommerce requires: '', coupon, min_amount, either, both"""
+    requires: String
+    minAmount: String
+    """Whether the cart currently qualifies for this free shipping method"""
+    eligible: Boolean
+    """How much cart subtotal (pre-coupon) is still needed; 0 when eligible or no min"""
+    amountRemaining: String
+  }
+
   type Cart {
     total(format: PricingFieldFormatEnum): String
     subtotal(format: PricingFieldFormatEnum): String
@@ -278,6 +291,7 @@ export const typeDefs = /* GraphQL */ `
     contents: CartToCartItemConnection
     availableShippingMethods: [ShippingPackage]
     chosenShippingMethods: [String]
+    freeShippingInfo: FreeShippingInfo
   }
 
   type CustomerAddress {

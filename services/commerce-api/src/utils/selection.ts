@@ -95,6 +95,7 @@ export function cartNeedsFromInfo(
     shippingMethods: hasAny(cartFields, [
       "availableShippingMethods",
       "chosenShippingMethods",
+      "freeShippingInfo",
     ]),
     coupons: hasAny(cartFields, ["appliedCoupons"]),
   };

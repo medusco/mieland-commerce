@@ -104,6 +104,9 @@ async function shapeCartGraphql(
     chosenShippingMethods: needs.shippingMethods
       ? calculated.chosenShippingMethods
       : [],
+    freeShippingInfo: needs.shippingMethods
+      ? calculated.freeShippingInfo
+      : null,
   };
 }
 
