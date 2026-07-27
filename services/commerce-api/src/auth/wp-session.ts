@@ -24,14 +24,20 @@ export function buildWpAuthSetCookie(
       ? Math.floor(ttlSeconds as number)
       : DEFAULT_TTL_SECONDS;
   const cfg = loadConfig();
+  // Cross-origin storefront → commerce (e.g. localhost/Vercel → Railway) needs
+  // SameSite=None; Secure so credentialed fetches include the cookie. Local HTTP
+  // commerce (same-site localhost ports) keeps Lax without Secure.
   const parts = [
     `${WP_AUTH_COOKIE_NAME}=${encodeURIComponent(cookieHeader.trim())}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Lax",
     `Max-Age=${ttl}`,
   ];
-  if (cfg.isProd) parts.push("Secure");
+  if (cfg.isProd) {
+    parts.push("SameSite=None", "Secure", "Partitioned");
+  } else {
+    parts.push("SameSite=Lax");
+  }
   return parts.join("; ");
 }
 

@@ -19,7 +19,7 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 |--------|---------|
 | \`Authorization: Bearer <JWT>\` | Customer auth (from \`login\` / \`registerCustomer\`) |
 | \`woocommerce-session: Session <token>\` | Cart session; echoed on every GraphQL response |
-| \`Cookie: mc-wp-session=…\` | HttpOnly cookie set on \`login\`; required for logged-in checkout / pay |
+| \`Cookie: mc-wp-session=…\` | HttpOnly cookie set on \`login\` (\`SameSite=None; Secure; Partitioned\` in prod); required for logged-in checkout / pay |
 | \`x-graphql-secret\` | Optional shared secret when \`GRAPHQL_SECRET\` is set |
 | \`x-request-id\` | Optional request correlation id |
 

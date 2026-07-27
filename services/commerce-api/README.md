@@ -64,8 +64,8 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 - `woocommerce-session: Session <token>` — Redis cart key; echoed on every response
 - `Authorization: Bearer <JWT>` — commerce-issued JWT after a successful WPGraphQL login
-- On login, commerce proxies to WPGraphQL, captures WordPress auth `Set-Cookie` headers, and sets an HttpOnly `mc-wp-session` cookie on the commerce domain (never Redis). It also mints its own access/refresh JWTs so Bearer verification always matches `JWT_SECRET` / `wpgraphql_login_settings.jwt_secret_key`
-- Browser sends `mc-wp-session` automatically on later GraphQL calls (`credentials: include`). Logged-in `checkout` / `createOrder` / `processOrderPayment` require it; commerce forwards it only to WP Store API on pay
+- On login, commerce proxies to WPGraphQL, captures WordPress auth `Set-Cookie` headers, and sets an HttpOnly `mc-wp-session` cookie (never Redis). Prod uses `SameSite=None; Secure; Partitioned` for cross-origin storefronts; local HTTP uses `SameSite=Lax`. It also mints its own access/refresh JWTs so Bearer verification always matches `JWT_SECRET` / `wpgraphql_login_settings.jwt_secret_key`
+- Browser sends `mc-wp-session` on later GraphQL calls (`credentials: include`). Prefer the storefront `/api/commerce` proxy so the cookie is first-party when commerce is on another host. Logged-in `checkout` / `createOrder` / `processOrderPayment` require it; commerce forwards it only to WP Store API on pay
 - Optional `x-graphql-secret` when `GRAPHQL_SECRET` is set
 
 **WP prerequisite:** Headless Login → enable “Set authentication cookie” on the password/Google providers so login responses include `wordpress_logged_in_*` cookies.
