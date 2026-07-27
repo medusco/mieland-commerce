@@ -5,7 +5,7 @@ import { RedisStore } from "rate-limit-redis";
 import { getRedis } from "../redis/client.js";
 import { loadConfig } from "../config.js";
 import { loadAccessControl } from "../auth/index.js";
-import { logJson } from "../utils/index.js";
+import { isLocalDevOrigin, logJson } from "../utils/index.js";
 
 const sendCommand: SendCommandFn = async (...args: string[]) => {
   const redis = getRedis();
@@ -67,7 +67,7 @@ export async function accessControlMiddleware(
     const shouldBlock =
       block === true || block === 1 || block === "1" || block === "yes" || cfg.isProd;
 
-    if (shouldBlock && origin && origins.length) {
+    if (shouldBlock && origin && origins.length && !isLocalDevOrigin(origin)) {
       const ok = origins.some(
         (o) => o === origin || o === "*" || origin.endsWith(o.replace(/^\*/, "")),
       );

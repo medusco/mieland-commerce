@@ -22,7 +22,7 @@ services:
       REDIS_URL: redis://redis:6379
       WORDPRESS_URL: http://host.docker.internal:8000
       MEDIA_BASE_URL: https://img.mieland.com
-      CORS_ORIGIN: http://localhost:3000
+      CORS_ORIGIN: http://localhost:3000,http://localhost:3001
       CART_TTL_SECONDS: "604800"
     depends_on:
       - redis

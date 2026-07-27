@@ -74,6 +74,19 @@ export function moneyStr(n: number, decimals = 2): string {
   return roundMoney(n, decimals).toFixed(decimals);
 }
 
+/** True for browser Origin values used during local frontend testing. */
+export function isLocalDevOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    return (
+      (u.protocol === "http:" || u.protocol === "https:") &&
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function parseSessionHeader(
   header: string | undefined | null,
 ): string | null {

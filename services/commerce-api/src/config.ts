@@ -83,7 +83,7 @@ const envSchema = z.object({
   ),
   CORS_ORIGIN: z.preprocess(
     emptyToUndefined,
-    z.string().default("http://localhost:3000"),
+    z.string().default("http://localhost:3000,http://localhost:3001"),
   ),
   JWT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
   GRAPHQL_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),

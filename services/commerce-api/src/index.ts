@@ -23,7 +23,12 @@ import {
   createAuthMutationRateLimiter,
   createGraphqlRateLimiter,
 } from "./middleware/security.js";
-import { logJson, parseSessionHeader, randomToken } from "./utils/index.js";
+import {
+  isLocalDevOrigin,
+  logJson,
+  parseSessionHeader,
+  randomToken,
+} from "./utils/index.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
 
@@ -80,6 +85,7 @@ app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
+      if (isLocalDevOrigin(origin)) return cb(null, true);
       if (cfg.corsOrigins.includes("*") || cfg.corsOrigins.includes(origin)) {
         return cb(null, true);
       }
