@@ -1,10 +1,8 @@
 import { loadConfig } from "../config.js";
-import { getWpAuthCookie } from "./wp-auth-store.js";
 
 /**
- * WP auth cookies: HttpOnly `mc-wp-session` on the client when possible, plus
- * Redis `wp-auth:{userId}` written at login so cross-origin storefronts can pay
- * without relying on third-party cookies.
+ * WP auth cookies: HttpOnly `mc-wp-session` on the client (never Redis).
+ * Commerce captures WP Set-Cookie on login and re-emits them wrapped in this cookie.
  */
 
 /** HttpOnly cookie name set by commerce on login (not a WordPress cookie name). */
@@ -81,22 +79,28 @@ export function decodeWpAuthCookieValue(
 }
 
 /**
- * Resolve WP auth for Store API: browser cookie / header, else Redis from login.
+ * Require a browser-held WP auth cookie (from `mc-wp-session`).
+ * Used by checkout / createOrder / processOrderPayment for logged-in payers.
+ */
+export function requireWpAuthCookie(
+  cookie: string | null | undefined,
+): string {
+  const trimmed = cookie?.trim() || "";
+  if (!trimmed) {
+    throw new Error(
+      "WordPress session required — log in again (missing mc-wp-session cookie)",
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Resolve WP auth for Store API from the browser cookie / decoded header value.
  */
 export async function resolveWpAuthCookie(opts: {
   cookie?: string | null;
   userId?: number | null;
 }): Promise<string> {
-  const fromClient = opts.cookie?.trim() || "";
-  if (fromClient) return fromClient;
-
-  const userId = opts.userId ?? null;
-  if (userId != null) {
-    const stored = await getWpAuthCookie(userId);
-    if (stored) return stored;
-  }
-
-  throw new Error(
-    "WordPress session required — log in again (missing mc-wp-session cookie)",
-  );
+  void opts.userId;
+  return requireWpAuthCookie(opts.cookie);
 }
