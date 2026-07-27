@@ -146,3 +146,48 @@ export async function requestWpPasswordReset(
     user: null,
   };
 }
+
+/**
+ * Apply a new password via WordPress (check_password_reset_key + reset_password).
+ */
+export async function confirmWpPasswordReset(input: {
+  key: string;
+  password: string;
+  login?: string | null;
+  email?: string | null;
+  id?: string | number | null;
+}): Promise<{ success: boolean; login: string | null }> {
+  const { loadConfig } = await import("../config.js");
+  const cfg = loadConfig();
+
+  const url = `${cfg.WORDPRESS_URL.replace(/\/$/, "")}/wp-json/mieland/v1/password-reset/confirm`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      key: input.key,
+      password: input.password,
+      login: input.login || undefined,
+      email: input.email || undefined,
+      id: input.id ?? undefined,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  const payload = (await res.json()) as {
+    success?: boolean;
+    login?: string;
+    message?: string;
+  };
+
+  if (!res.ok || payload.success === false) {
+    throw new Error(
+      payload.message || `Password reset failed (${res.status})`,
+    );
+  }
+
+  return {
+    success: true,
+    login: payload.login ?? null,
+  };
+}

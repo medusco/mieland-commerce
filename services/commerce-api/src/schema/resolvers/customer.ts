@@ -14,6 +14,7 @@ import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
   requestWpPasswordReset,
+  confirmWpPasswordReset,
   updateCustomerProfile,
 } from "../../repositories/customers.js";
 import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
@@ -211,6 +212,41 @@ export const customerResolvers = {
         token: result.token,
         login: result.login,
         user: result.user,
+      };
+    },
+
+    resetUserPassword: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input: {
+          key: string;
+          password: string;
+          login?: string | null;
+          email?: string | null;
+          id?: string | number | null;
+          clientMutationId?: string;
+        };
+      },
+    ) => {
+      const login = input.login?.trim() || null;
+      const email = input.email?.trim() || null;
+      const id = input.id ?? null;
+      if (!login && !email && (id === null || id === undefined || id === "")) {
+        throw new Error("Provide login, email, or id with the reset key.");
+      }
+      const result = await confirmWpPasswordReset({
+        key: input.key,
+        password: input.password,
+        login,
+        email,
+        id,
+      });
+      return {
+        clientMutationId: input.clientMutationId,
+        success: result.success,
+        login: result.login,
       };
     },
 

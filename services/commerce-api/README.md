@@ -88,4 +88,4 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 See `mieland-rest-checkout-bridge.php` in the WordPress mu-plugins tree for Stripe save-payment forcing, cart tax/shipping helpers, and password reset.
 
-Password reset: commerce `sendPasswordResetEmail` calls `POST /wp-json/mieland/v1/password-reset`, which runs WordPress `retrieve_password()` (mints key + sends lost-password email). Commerce does not return a reset token or send mail.
+Password reset: commerce `sendPasswordResetEmail` calls `POST /wp-json/mieland/v1/password-reset`, which runs WordPress `retrieve_password()` (mints key + sends lost-password email). Commerce does not return a reset token or send mail. Apply reset: commerce `resetUserPassword` calls `POST /wp-json/mieland/v1/password-reset/confirm` with `key` + `login` (or `email` / `id`) + new `password`.

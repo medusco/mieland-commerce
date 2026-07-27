@@ -29,7 +29,7 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 \`cart\`, \`products\`, \`customer\`, \`order\`, \`loginClients\`, \`mielandSubscriptionSettings\`, \`mielandSubscriptions\`, \`mielandSubscription\`, \`posts\`, \`post\`, \`categories\`, \`pages\`, \`page\`, \`navigation\`, \`labResults\`
 
 ### Mutations
-\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`
+\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`
 
 Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/graphql\` in non-production.
 `.trim(),

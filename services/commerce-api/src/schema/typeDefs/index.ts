@@ -874,6 +874,26 @@ export const typeDefs = /* GraphQL */ `
     username: String!
   }
 
+  input ResetUserPasswordInput {
+    clientMutationId: String
+    """Reset key from the lost-password email."""
+    key: String!
+    """New password (min 8 characters)."""
+    password: String!
+    """WordPress user_login (preferred)."""
+    login: String
+    """Alternate identity when login is absent."""
+    email: String
+    """WooCommerce-style numeric user id when login is absent."""
+    id: ID
+  }
+
+  type ResetUserPasswordPayload {
+    success: Boolean
+    login: String
+    clientMutationId: String
+  }
+
   input RequestPersonalCouponInput {
     clientMutationId: String
     email: String!
@@ -1041,6 +1061,11 @@ export const typeDefs = /* GraphQL */ `
     updateCustomer(input: UpdateCustomerInput!): UpdateCustomerPayload
     registerCustomer(input: RegisterCustomerInput!): RegisterCustomerPayload
     sendPasswordResetEmail(input: SendPasswordResetEmailInput!): SendPasswordResetEmailPayload
+    """
+    Set a new password using the key from the lost-password email.
+    Provide login, or email, or numeric user id.
+    """
+    resetUserPassword(input: ResetUserPasswordInput!): ResetUserPasswordPayload
     """
     Get or create a personal one-time WooCommerce coupon for the given email.
     Repeat requests return the same coupon code.

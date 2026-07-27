@@ -140,7 +140,7 @@ app.use(
   gqlLimiter,
   (req, res, next) => {
     const q = typeof req.body?.query === "string" ? req.body.query : "";
-    if (/\b(login|registerCustomer|sendPasswordResetEmail|requestPersonalCoupon|checkout)\b/.test(q)) {
+    if (/\b(login|registerCustomer|sendPasswordResetEmail|resetUserPassword|requestPersonalCoupon|checkout)\b/.test(q)) {
       return authLimiter(req, res, next);
     }
     next();
