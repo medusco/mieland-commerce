@@ -6,12 +6,18 @@ import {
   requestId,
 } from "./utils/index.js";
 import { verifyAccessToken } from "./auth/index.js";
-import { parseWpAuthCookieHeader } from "./auth/wp-session.js";
+import {
+  decodeWpAuthCookieValue,
+  parseWpAuthCookieHeader,
+  WP_AUTH_HEADER_NAME,
+} from "./auth/wp-session.js";
 import { getProductNodes } from "./repositories/products.js";
 import { loadConfig } from "./config.js";
 
 export type AppContext = {
   requestId: string;
+  /** Matches Express `x-mc-request-scope` for pending Set-Cookie handoff. */
+  requestScopeId: string;
   sessionToken: string;
   setSessionToken: string | null;
   userId: number | null;
@@ -24,24 +30,36 @@ export type AppContext = {
   req: Request;
 };
 
-/** Internal header so Express can recover context after yoga.fetch. */
+/** Internal header so Express can recover pending login cookies after yoga.fetch. */
 export const REQUEST_SCOPE_HEADER = "x-mc-request-scope";
 
 /**
- * Scope-id → context. Used instead of AsyncLocalStorage because undici `fetch`
- * (WP login) can clear ALS, so Express would lose pendingWpAuthSetCookie even
- * though the Yoga context still had it set.
+ * Pending login cookies by scope id. Written from the login resolver; read by Express.
+ * Do not rely on mutating Yoga context alone — plugins may wrap/replace contextValue.
  */
-const contextByScopeId = new Map<string, AppContext>();
+type PendingWpAuth = { setCookie: string; headerValue: string };
+const pendingWpAuthByScope = new Map<string, PendingWpAuth>();
 
-export function registerRequestScope(scopeId: string, ctx: AppContext): void {
-  contextByScopeId.set(scopeId, ctx);
+export function setPendingWpAuthSetCookie(
+  scopeId: string,
+  setCookie: string,
+  headerValue?: string,
+): void {
+  if (!scopeId.trim() || !setCookie.trim()) return;
+  pendingWpAuthByScope.set(scopeId.trim(), {
+    setCookie: setCookie.trim(),
+    headerValue: (headerValue ?? "").trim(),
+  });
 }
 
-export function takeContextForScope(scopeId: string): AppContext | null {
-  const ctx = contextByScopeId.get(scopeId) ?? null;
-  contextByScopeId.delete(scopeId);
-  return ctx;
+export function takePendingWpAuthSetCookie(
+  scopeId: string,
+): PendingWpAuth | null {
+  const key = scopeId.trim();
+  if (!key) return null;
+  const value = pendingWpAuthByScope.get(key) ?? null;
+  pendingWpAuthByScope.delete(key);
+  return value;
 }
 
 export async function buildContext(
@@ -69,15 +87,18 @@ export async function buildContext(
     if (verified) userId = verified.userId;
   }
 
-  const wpAuthCookie = parseWpAuthCookieHeader(headers.get("cookie"));
+  const wpAuthCookie =
+    parseWpAuthCookieHeader(headers.get("cookie")) ||
+    decodeWpAuthCookieValue(headers.get(WP_AUTH_HEADER_NAME));
 
   const productLoader = new DataLoader(async (ids: readonly number[]) => {
     return getProductNodes(ids);
   });
 
   void loadConfig;
-  const ctx: AppContext = {
+  return {
     requestId: rid,
+    requestScopeId: scopeId,
     sessionToken,
     setSessionToken,
     userId,
@@ -87,8 +108,6 @@ export async function buildContext(
     productLoader,
     req,
   };
-  if (scopeId) registerRequestScope(scopeId, ctx);
-  return ctx;
 }
 
 export function requireUser(ctx: AppContext): number {
@@ -96,4 +115,31 @@ export function requireUser(ctx: AppContext): number {
     throw new Error("Authentication required");
   }
   return ctx.userId;
+}
+
+/** True when Origin is cross-site relative to the request Host (needs SameSite=None). */
+export function isCrossSiteRequest(req: Request): boolean {
+  const origin = req.headers.get("origin") || req.headers.get("Origin");
+  if (!origin) return false;
+  try {
+    const originHost = new URL(origin).host;
+    const reqUrl = new URL(req.url);
+    return Boolean(originHost) && originHost !== reqUrl.host;
+  } catch {
+    return false;
+  }
+}
+
+/** True when the client hit commerce over HTTPS (incl. Railway / proxies). */
+export function isSecureRequest(req: Request): boolean {
+  if (req.url.startsWith("https://")) return true;
+  const proto = (
+    req.headers.get("x-forwarded-proto") ||
+    req.headers.get("X-Forwarded-Proto") ||
+    ""
+  )
+    .split(",")[0]
+    ?.trim()
+    .toLowerCase();
+  return proto === "https";
 }

@@ -1,5 +1,10 @@
 import type { AppContext } from "../../context.js";
-import { requireUser } from "../../context.js";
+import {
+  isCrossSiteRequest,
+  isSecureRequest,
+  requireUser,
+  setPendingWpAuthSetCookie,
+} from "../../context.js";
 import {
   createUser,
   findUserById,
@@ -9,7 +14,10 @@ import {
   refreshAuthToken,
   toGraphqlUser,
 } from "../../auth/index.js";
-import { buildWpAuthSetCookie } from "../../auth/wp-session.js";
+import {
+  buildWpAuthSetCookie,
+  wpAuthHeaderValue,
+} from "../../auth/wp-session.js";
 import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
@@ -355,10 +363,20 @@ export const customerResolvers = {
           "WordPress login did not return an auth cookie — enable “Set authentication cookie” on the Headless Login provider",
         );
       }
-      ctx.pendingWpAuthSetCookie = buildWpAuthSetCookie(
+      // Cross-site + HTTPS → SameSite=None; Secure. Local same-site HTTP → Lax.
+      const crossSite =
+        isSecureRequest(ctx.req) && isCrossSiteRequest(ctx.req);
+      const setCookie = buildWpAuthSetCookie(
         wp.cookieHeader,
         wp.cookieTtlSeconds,
+        { crossSite },
       );
+      const headerValue = wpAuthHeaderValue(wp.cookieHeader);
+      ctx.pendingWpAuthSetCookie = setCookie;
+      // Dedicated map — Express reads this after yoga.fetch (context mutation alone is unreliable).
+      if (ctx.requestScopeId) {
+        setPendingWpAuthSetCookie(ctx.requestScopeId, setCookie, headerValue);
+      }
 
       const user =
         (await findUserById(userId)) ?? {

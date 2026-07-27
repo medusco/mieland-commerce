@@ -10,7 +10,7 @@ import { resolvers } from "./schema/resolvers/index.js";
 import {
   buildContext,
   REQUEST_SCOPE_HEADER,
-  takeContextForScope,
+  takePendingWpAuthSetCookie,
   type AppContext,
 } from "./context.js";
 import { loadConfig } from "./config.js";
@@ -29,6 +29,7 @@ import {
   parseSessionHeader,
   randomToken,
 } from "./utils/index.js";
+import { WP_AUTH_HEADER_NAME } from "./auth/wp-session.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
 
@@ -93,7 +94,11 @@ app.use(
       return cb(new Error("Not allowed by CORS"), false);
     },
     credentials: true,
-    exposedHeaders: ["woocommerce-session", "Woocommerce-Session"],
+    exposedHeaders: [
+      "woocommerce-session",
+      "Woocommerce-Session",
+      WP_AUTH_HEADER_NAME,
+    ],
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -102,6 +107,8 @@ app.use(
       "x-graphql-secret",
       "x-request-id",
       "apollo-require-preflight",
+      WP_AUTH_HEADER_NAME,
+      "Cookie",
     ],
   }),
 );
@@ -181,9 +188,7 @@ app.use(
 
     try {
       const response = await yoga.fetch(request);
-      // Scope map — not ALS (outbound WP fetch during login clears AsyncLocalStorage).
-      const pendingWp =
-        takeContextForScope(scopeId)?.pendingWpAuthSetCookie ?? null;
+      const pendingWp = takePendingWpAuthSetCookie(scopeId);
       res.status(response.status);
       const setCookies =
         typeof response.headers.getSetCookie === "function"
@@ -195,10 +200,13 @@ app.use(
         res.setHeader(key, value);
       });
       for (const c of setCookies) {
-        res.appendHeader("Set-Cookie", c);
+        res.append("Set-Cookie", c);
       }
-      if (pendingWp) {
-        res.appendHeader("Set-Cookie", pendingWp);
+      if (pendingWp?.setCookie) {
+        res.append("Set-Cookie", pendingWp.setCookie);
+      }
+      if (pendingWp?.headerValue) {
+        res.setHeader(WP_AUTH_HEADER_NAME, pendingWp.headerValue);
       }
       res.setHeader("woocommerce-session", `Session ${sessionToken}`);
       const buf = Buffer.from(await response.arrayBuffer());
@@ -208,11 +216,11 @@ app.use(
         ms: Date.now() - started,
         status: response.status,
         method: req.method,
-        hasWpAuthSetCookie: Boolean(pendingWp),
+        hasWpAuthSetCookie: Boolean(pendingWp?.setCookie),
       });
       res.send(buf);
     } catch (err) {
-      takeContextForScope(scopeId);
+      takePendingWpAuthSetCookie(scopeId);
       if (err instanceof GraphQLError) {
         res.status(200).json({ errors: [err] });
         return;

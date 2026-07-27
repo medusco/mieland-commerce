@@ -163,6 +163,10 @@ async function gql(
       break;
     }
   }
+  if (!session.wpAuthCookiePair) {
+    const hdr = res.headers.get("x-mc-wp-session")?.trim();
+    if (hdr) session.wpAuthCookiePair = `mc-wp-session=${hdr}`;
+  }
 
   const json = (await res.json()) as GqlJson;
   return { status: res.status, json, ms: performance.now() - started };
