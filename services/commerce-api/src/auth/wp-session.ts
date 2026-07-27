@@ -1,13 +1,17 @@
 import { loadConfig } from "../config.js";
+import { getWpAuthCookie } from "./wp-auth-store.js";
 
 /**
- * WP auth cookies are client-held as an HttpOnly cookie on the commerce domain.
- * Login sets the cookie; checkout/pay read it and forward to WP Store API.
- * Commerce never stores the cookie in Redis.
+ * WP auth cookies: HttpOnly `mc-wp-session` on the client when possible, plus
+ * Redis `wp-auth:{userId}` written at login so cross-origin storefronts can pay
+ * without relying on third-party cookies.
  */
 
 /** HttpOnly cookie name set by commerce on login (not a WordPress cookie name). */
 export const WP_AUTH_COOKIE_NAME = "mc-wp-session";
+
+/** Optional request header (proxy may forward the cookie value here). */
+export const WP_AUTH_HEADER_NAME = "x-mc-wp-session";
 
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
 
@@ -63,16 +67,36 @@ export function parseWpAuthCookieHeader(
   return null;
 }
 
-/**
- * Require a client-supplied WP auth cookie for logged-in checkout/payment.
- * Forces re-login when the browser omitted the cookie or the WP session expired.
- */
-export function requireWpAuthCookie(cookie: string | null | undefined): string {
-  const trimmed = cookie?.trim() || "";
-  if (!trimmed) {
-    throw new Error(
-      "WordPress session required — log in again (missing mc-wp-session cookie)",
-    );
+/** Decode a raw `x-mc-wp-session` / cookie value (URI-encoded or plain). */
+export function decodeWpAuthCookieValue(
+  raw: string | null | undefined,
+): string | null {
+  const trimmed = raw?.trim() || "";
+  if (!trimmed) return null;
+  try {
+    return decodeURIComponent(trimmed).trim() || null;
+  } catch {
+    return trimmed;
   }
-  return trimmed;
+}
+
+/**
+ * Resolve WP auth for Store API: browser cookie / header, else Redis from login.
+ */
+export async function resolveWpAuthCookie(opts: {
+  cookie?: string | null;
+  userId?: number | null;
+}): Promise<string> {
+  const fromClient = opts.cookie?.trim() || "";
+  if (fromClient) return fromClient;
+
+  const userId = opts.userId ?? null;
+  if (userId != null) {
+    const stored = await getWpAuthCookie(userId);
+    if (stored) return stored;
+  }
+
+  throw new Error(
+    "WordPress session required — log in again (missing mc-wp-session cookie)",
+  );
 }

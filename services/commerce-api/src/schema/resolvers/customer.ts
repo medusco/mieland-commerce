@@ -29,21 +29,36 @@ function truthy(v: unknown): boolean {
   return v === true || v === 1 || v === "1" || v === "true" || v === "yes";
 }
 
-function mapAddress(input?: CartAddress & { overwrite?: boolean } | null): CartAddress {
+function mapAddress(
+  input?: CartAddress & { overwrite?: boolean } | null,
+): CartAddress {
   if (!input) return {};
-  return {
-    firstName: input.firstName,
-    lastName: input.lastName,
-    company: input.company,
-    address1: input.address1,
-    address2: input.address2,
-    city: input.city,
-    state: input.state,
-    postcode: input.postcode,
-    country: input.country,
-    phone: input.phone,
-    email: input.email,
-  };
+  const out: CartAddress = {};
+  const keys = [
+    "firstName",
+    "lastName",
+    "company",
+    "address1",
+    "address2",
+    "city",
+    "state",
+    "postcode",
+    "country",
+    "phone",
+    "email",
+  ] as const;
+  for (const key of keys) {
+    if (input[key] !== undefined) out[key] = input[key];
+  }
+  return out;
+}
+
+/** Billing → shipping when shippingSameAsBilling (omit email). */
+function shippingFromBilling(
+  billing: CartAddress & { overwrite?: boolean },
+): CartAddress & { overwrite?: boolean } {
+  const { email: _email, ...rest } = billing;
+  return rest;
 }
 
 export const customerResolvers = {
@@ -103,27 +118,45 @@ export const customerResolvers = {
       },
       ctx: AppContext,
     ) => {
-      // Guest-safe shipping/billing updates for rate calc (no id / session cart)
-      if (input.id) {
-        const userId = requireUser(ctx);
-        const requested = parseDatabaseId(input.id);
-        if (requested !== userId) throw new Error("Not authorized");
+      // Persist when authenticated via JWT — storefront commerce mutations omit
+      // `id` and expect the Bearer token to identify the customer. Without this,
+      // delivery/billing updates only hit the cart session and never usermeta.
+      const requestedId = input.id ? parseDatabaseId(input.id) : 0;
+      const userId =
+        ctx.userId != null
+          ? (() => {
+              if (requestedId && requestedId !== ctx.userId) {
+                throw new Error("Not authorized");
+              }
+              return ctx.userId;
+            })()
+          : null;
+
+      const billing = input.billing;
+      const shipping =
+        input.shippingSameAsBilling && billing
+          ? shippingFromBilling(billing)
+          : input.shipping;
+
+      if (userId != null) {
         await updateCustomerProfile(userId, {
           firstName: input.firstName,
           lastName: input.lastName,
           email: input.email,
           password: input.password,
-          billing: input.billing,
-          shipping: input.shipping,
+          billing,
+          shipping,
           shippingSameAsBilling: input.shippingSameAsBilling,
         });
-        // Mirror addresses onto cart session
         await mutateCart(ctx.sessionToken, async (cart) => {
-          if (input.billing) {
-            cart.billing = { ...cart.billing, ...mapAddress(input.billing) };
+          if (billing) {
+            cart.billing = { ...cart.billing, ...mapAddress(billing) };
           }
-          if (input.shipping) {
-            cart.shipping = { ...cart.shipping, ...mapAddress(input.shipping) };
+          if (shipping) {
+            cart.shipping = { ...cart.shipping, ...mapAddress(shipping) };
+          }
+          if (input.shippingSameAsBilling !== undefined) {
+            cart.shippingSameAsBilling = Boolean(input.shippingSameAsBilling);
           }
           cart.customerId = userId;
           return { cart, result: undefined };
@@ -134,16 +167,20 @@ export const customerResolvers = {
         };
       }
 
-      // Session-only address update (guest)
+      // Guest / unauthenticated: session cart only (rate calc, checkout draft)
+      if (input.id) {
+        requireUser(ctx); // throws Authentication required
+      }
+
       await mutateCart(ctx.sessionToken, async (cart) => {
-        if (input.billing) {
-          cart.billing = { ...cart.billing, ...mapAddress(input.billing) };
+        if (billing) {
+          cart.billing = { ...cart.billing, ...mapAddress(billing) };
         }
-        if (input.shipping) {
-          cart.shipping = { ...cart.shipping, ...mapAddress(input.shipping) };
+        if (shipping) {
+          cart.shipping = { ...cart.shipping, ...mapAddress(shipping) };
         }
-        if (input.shippingSameAsBilling === false) {
-          cart.shippingSameAsBilling = false;
+        if (input.shippingSameAsBilling !== undefined) {
+          cart.shippingSameAsBilling = Boolean(input.shippingSameAsBilling);
         }
         return { cart, result: undefined };
       });

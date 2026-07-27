@@ -9,8 +9,8 @@ import { typeDefs } from "./schema/typeDefs/index.js";
 import { resolvers } from "./schema/resolvers/index.js";
 import {
   buildContext,
-  getRequestScopedContext,
-  runWithRequestScope,
+  REQUEST_SCOPE_HEADER,
+  takeContextForScope,
   type AppContext,
 } from "./context.js";
 import { loadConfig } from "./config.js";
@@ -167,6 +167,8 @@ app.use(
       else headers.set(k, v);
     }
     headers.set("woocommerce-session", `Session ${sessionToken}`);
+    const scopeId = randomToken(16);
+    headers.set(REQUEST_SCOPE_HEADER, scopeId);
 
     const request =
       req.method === "GET"
@@ -178,13 +180,10 @@ app.use(
           });
 
     try {
-      const { response, pendingWp } = await runWithRequestScope(async () => {
-        const response = await yoga.fetch(request);
-        return {
-          response,
-          pendingWp: getRequestScopedContext()?.pendingWpAuthSetCookie ?? null,
-        };
-      });
+      const response = await yoga.fetch(request);
+      // Scope map — not ALS (outbound WP fetch during login clears AsyncLocalStorage).
+      const pendingWp =
+        takeContextForScope(scopeId)?.pendingWpAuthSetCookie ?? null;
       res.status(response.status);
       const setCookies =
         typeof response.headers.getSetCookie === "function"
@@ -209,9 +208,11 @@ app.use(
         ms: Date.now() - started,
         status: response.status,
         method: req.method,
+        hasWpAuthSetCookie: Boolean(pendingWp),
       });
       res.send(buf);
     } catch (err) {
+      takeContextForScope(scopeId);
       if (err instanceof GraphQLError) {
         res.status(200).json({ errors: [err] });
         return;

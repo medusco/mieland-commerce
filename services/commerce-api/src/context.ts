@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { YogaInitialContext } from "graphql-yoga";
 import DataLoader from "dataloader";
 import {
@@ -25,16 +24,24 @@ export type AppContext = {
   req: Request;
 };
 
-/** Request-scoped bag so Express can read pending Set-Cookie after yoga.fetch. */
-type RequestScope = { ctx: AppContext | null };
-const requestScope = new AsyncLocalStorage<RequestScope>();
+/** Internal header so Express can recover context after yoga.fetch. */
+export const REQUEST_SCOPE_HEADER = "x-mc-request-scope";
 
-export function runWithRequestScope<T>(fn: () => Promise<T>): Promise<T> {
-  return requestScope.run({ ctx: null }, fn);
+/**
+ * Scope-id → context. Used instead of AsyncLocalStorage because undici `fetch`
+ * (WP login) can clear ALS, so Express would lose pendingWpAuthSetCookie even
+ * though the Yoga context still had it set.
+ */
+const contextByScopeId = new Map<string, AppContext>();
+
+export function registerRequestScope(scopeId: string, ctx: AppContext): void {
+  contextByScopeId.set(scopeId, ctx);
 }
 
-export function getRequestScopedContext(): AppContext | null {
-  return requestScope.getStore()?.ctx ?? null;
+export function takeContextForScope(scopeId: string): AppContext | null {
+  const ctx = contextByScopeId.get(scopeId) ?? null;
+  contextByScopeId.delete(scopeId);
+  return ctx;
 }
 
 export async function buildContext(
@@ -43,6 +50,7 @@ export async function buildContext(
   const req = yogaCtx.request;
   const headers = req.headers;
   const rid = headers.get("x-request-id") || requestId();
+  const scopeId = headers.get(REQUEST_SCOPE_HEADER)?.trim() || "";
 
   let sessionToken =
     parseSessionHeader(headers.get("woocommerce-session")) ||
@@ -79,8 +87,7 @@ export async function buildContext(
     productLoader,
     req,
   };
-  const scope = requestScope.getStore();
-  if (scope) scope.ctx = ctx;
+  if (scopeId) registerRequestScope(scopeId, ctx);
   return ctx;
 }
 

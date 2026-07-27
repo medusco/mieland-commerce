@@ -87,7 +87,15 @@ export async function updateCustomerProfile(
       input.billing.overwrite !== false,
     );
   }
-  if (input.shipping) {
+  if (input.shippingSameAsBilling && input.billing) {
+    const { email: _email, ...shippingAddr } = input.billing;
+    await writeAddress(
+      userId,
+      "shipping",
+      shippingAddr,
+      input.billing.overwrite !== false,
+    );
+  } else if (input.shipping) {
     await writeAddress(
       userId,
       "shipping",
