@@ -308,6 +308,7 @@ export const customerResolvers = {
         clientMutationId: input.clientMutationId,
         created: result.created,
         coupon: {
+          id: result.id,
           code: result.code,
           amount: result.amount,
           discountType: result.discountType,

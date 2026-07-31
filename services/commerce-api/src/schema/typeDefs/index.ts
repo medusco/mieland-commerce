@@ -902,6 +902,8 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type PersonalCoupon {
+    """WooCommerce shop_coupon post ID for the issued personal coupon."""
+    id: Int!
     code: String!
     amount: String!
     discountType: String!
