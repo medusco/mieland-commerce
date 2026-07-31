@@ -12,6 +12,19 @@ export function parseAcfRelationshipId(
 
     if (/^\d+$/.test(raw)) return Number(raw);
 
+    if (raw.startsWith("[") || raw.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (typeof parsed === "number" && parsed > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const first = parsed[0];
+          if (typeof first === "number" && first > 0) return first;
+        }
+      } catch {
+        /* fallthrough */
+      }
+    }
+
     if (raw.startsWith("a:") || raw.startsWith("O:")) {
       try {
         const parsed = phpUnserialize(raw) as unknown;
@@ -124,9 +137,21 @@ export async function shapeManualProduct(
 }
 
 export function resolveAttachedProductId(meta: Record<string, string>): number {
-  return parseAcfRelationshipId(meta, [
+  const direct = parseAcfRelationshipId(meta, [
     "attached_product",
     "attachedProduct",
     "attached_product_id",
+    "attached-product",
+    "product",
+    "linked_product",
   ]);
+  if (direct) return direct;
+
+  for (const [key, value] of Object.entries(meta)) {
+    if (key.startsWith("_")) continue;
+    if (!key.includes("attached") || !key.includes("product")) continue;
+    const id = parseAcfRelationshipId({ v: value }, ["v"]);
+    if (id) return id;
+  }
+  return 0;
 }
