@@ -353,7 +353,7 @@ export function assertCouponEmailAllowed(
   if (!coupon.emailRestrictions.length) return;
   if (!applicantEmails.length) {
     throw new Error(
-      "This coupon is restricted to a specific email address. Add a billing email or log in to apply it.",
+      "This coupon is restricted to a specific email address. Add a billing email to checkout.",
     );
   }
   if (!couponAllowsEmails(coupon, applicantEmails)) {
@@ -362,15 +362,13 @@ export function assertCouponEmailAllowed(
 }
 
 export function assertCouponApplicable(
-  coupon: Pick<LoadedCoupon, "emailRestrictions" | "code" | "isPersonalized">,
-  applicantEmails: string[],
+  coupon: Pick<LoadedCoupon, "code" | "isPersonalized">,
 ): void {
   if (coupon.isPersonalized) {
     throw new Error(
       "This coupon cannot be applied directly. Use the code sent to your email after signing up.",
     );
   }
-  assertCouponEmailAllowed(coupon, applicantEmails);
 }
 
 export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {

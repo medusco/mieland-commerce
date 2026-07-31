@@ -5,8 +5,6 @@ import {
   applyCoupons,
   loadCoupon,
   resolveShipping,
-  couponAllowsEmails,
-  normalizeApplicantEmails,
   type ShippingPackage,
   type FreeShippingInfo,
 } from "./shipping.js";
@@ -15,7 +13,6 @@ import {
   getStockInfo,
 } from "../repositories/products.js";
 import { moneyStr, roundMoney } from "../utils/index.js";
-import { findUserById } from "../auth/index.js";
 
 export type CartTotalsMode = "lightweight" | "full";
 
@@ -50,7 +47,7 @@ export type CalculatedCart = {
 export type CalculateCartOptions = {
   /** Skip price/shipping/coupon work when the selection only needs keys/qty/itemCount. */
   pricing?: boolean;
-  /** Logged-in user id — used for coupon email_restrictions checks. */
+  /** Logged-in user id — passed through for callers; email checks run at checkout. */
   userId?: number | null;
 };
 
@@ -110,20 +107,10 @@ export async function calculateCart(
     });
   }
 
-  const emailCandidates: Array<string | null | undefined> = [cart.billing.email];
-  const userIds = new Set<number>();
-  if (options.userId) userIds.add(options.userId);
-  if (cart.customerId) userIds.add(cart.customerId);
-  for (const id of userIds) {
-    const user = await findUserById(id);
-    if (user?.email) emailCandidates.push(user.email);
-  }
-  const applicantEmails = normalizeApplicantEmails(emailCandidates);
-
   const couponRows = [];
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
-    if (c && !c.isPersonalized && couponAllowsEmails(c, applicantEmails)) {
+    if (c && !c.isPersonalized) {
       couponRows.push(c);
     }
   }
