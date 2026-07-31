@@ -9,6 +9,7 @@ import { typeDefs } from "./schema/typeDefs/index.js";
 import { resolvers } from "./schema/resolvers/index.js";
 import {
   buildContext,
+  FORCE_LOGOUT_HEADER,
   REQUEST_SCOPE_HEADER,
   takePendingWpAuthSetCookie,
   type AppContext,
@@ -29,7 +30,7 @@ import {
   parseSessionHeader,
   randomToken,
 } from "./utils/index.js";
-import { WP_AUTH_HEADER_NAME } from "./auth/wp-session.js";
+import { WP_AUTH_HEADER_NAME, WP_REFRESH_HEADER_NAME } from "./auth/wp-session.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
 
@@ -98,6 +99,8 @@ app.use(
       "woocommerce-session",
       "Woocommerce-Session",
       WP_AUTH_HEADER_NAME,
+      WP_REFRESH_HEADER_NAME,
+      FORCE_LOGOUT_HEADER,
     ],
     allowedHeaders: [
       "Content-Type",
@@ -108,6 +111,7 @@ app.use(
       "x-request-id",
       "apollo-require-preflight",
       WP_AUTH_HEADER_NAME,
+      WP_REFRESH_HEADER_NAME,
       "Cookie",
     ],
   }),
@@ -202,11 +206,17 @@ app.use(
       for (const c of setCookies) {
         res.append("Set-Cookie", c);
       }
-      if (pendingWp?.setCookie) {
-        res.append("Set-Cookie", pendingWp.setCookie);
+      for (const c of pendingWp?.setCookies ?? []) {
+        res.append("Set-Cookie", c);
       }
-      if (pendingWp?.headerValue) {
-        res.setHeader(WP_AUTH_HEADER_NAME, pendingWp.headerValue);
+      if (pendingWp?.sessionHeaderValue) {
+        res.setHeader(WP_AUTH_HEADER_NAME, pendingWp.sessionHeaderValue);
+      }
+      if (pendingWp?.refreshHeaderValue) {
+        res.setHeader(WP_REFRESH_HEADER_NAME, pendingWp.refreshHeaderValue);
+      }
+      if (pendingWp?.forceLogout) {
+        res.setHeader(FORCE_LOGOUT_HEADER, "1");
       }
       res.setHeader("woocommerce-session", `Session ${sessionToken}`);
       const buf = Buffer.from(await response.arrayBuffer());
@@ -216,7 +226,7 @@ app.use(
         ms: Date.now() - started,
         status: response.status,
         method: req.method,
-        hasWpAuthSetCookie: Boolean(pendingWp?.setCookie),
+        hasWpAuthSetCookie: (pendingWp?.setCookies.length ?? 0) > 0,
       });
       res.send(buf);
     } catch (err) {

@@ -7,12 +7,25 @@ import {
 } from "./utils/index.js";
 import { verifyAccessToken } from "./auth/index.js";
 import {
+  buildWpAuthClearCookie,
+  buildWpAuthSetCookie,
+  buildWpRefreshClearCookie,
+  buildWpRefreshSetCookie,
   decodeWpAuthCookieValue,
+  decodeWpRefreshCookieValue,
   parseWpAuthCookieHeader,
+  parseWpRefreshCookieHeader,
+  wpAuthHeaderValue,
+  wpRefreshHeaderValue,
   WP_AUTH_HEADER_NAME,
+  WP_REFRESH_HEADER_NAME,
 } from "./auth/wp-session.js";
 import { getProductNodes } from "./repositories/products.js";
 import { loadConfig } from "./config.js";
+
+/** GraphQL extension code + response header when auth cookies are cleared server-side. */
+export const FORCE_LOGOUT_CODE = "FORCE_LOGOUT";
+export const FORCE_LOGOUT_HEADER = "x-mc-force-logout";
 
 export type AppContext = {
   requestId: string;
@@ -23,6 +36,8 @@ export type AppContext = {
   userId: number | null;
   /** Decoded WP Cookie header from the `mc-wp-session` HttpOnly cookie. */
   wpAuthCookie: string | null;
+  /** WP Headless Login refresh token from `mc-wp-refresh` HttpOnly cookie. */
+  wpRefreshToken: string | null;
   /** Set-Cookie to emit after login (HttpOnly `mc-wp-session`). */
   pendingWpAuthSetCookie: string | null;
   calcMode: "lightweight" | "full";
@@ -37,19 +52,90 @@ export const REQUEST_SCOPE_HEADER = "x-mc-request-scope";
  * Pending login cookies by scope id. Written from the login resolver; read by Express.
  * Do not rely on mutating Yoga context alone — plugins may wrap/replace contextValue.
  */
-type PendingWpAuth = { setCookie: string; headerValue: string };
+type PendingWpAuth = {
+  setCookies: string[];
+  sessionHeaderValue: string;
+  refreshHeaderValue: string;
+  forceLogout?: boolean;
+};
 const pendingWpAuthByScope = new Map<string, PendingWpAuth>();
+
+function ensurePending(scopeId: string): PendingWpAuth {
+  const key = scopeId.trim();
+  let pending = pendingWpAuthByScope.get(key);
+  if (!pending) {
+    pending = {
+      setCookies: [],
+      sessionHeaderValue: "",
+      refreshHeaderValue: "",
+    };
+    pendingWpAuthByScope.set(key, pending);
+  }
+  return pending;
+}
+
+function appendPendingSetCookie(scopeId: string, setCookie: string): void {
+  const cookie = setCookie.trim();
+  if (!scopeId.trim() || !cookie) return;
+  ensurePending(scopeId).setCookies.push(cookie);
+}
+
+/** Clear mc-wp-session + mc-wp-refresh and tell the client to drop JWT. */
+export function scheduleForceLogout(scopeId: string, req: Request): void {
+  if (!scopeId.trim()) return;
+  const crossSite = isSecureRequest(req) && isCrossSiteRequest(req);
+  const pending = ensurePending(scopeId);
+  pending.setCookies = [
+    buildWpAuthClearCookie({ crossSite }),
+    buildWpRefreshClearCookie({ crossSite }),
+  ];
+  pending.sessionHeaderValue = "";
+  pending.refreshHeaderValue = "";
+  pending.forceLogout = true;
+}
 
 export function setPendingWpAuthSetCookie(
   scopeId: string,
   setCookie: string,
   headerValue?: string,
 ): void {
-  if (!scopeId.trim() || !setCookie.trim()) return;
-  pendingWpAuthByScope.set(scopeId.trim(), {
-    setCookie: setCookie.trim(),
-    headerValue: (headerValue ?? "").trim(),
-  });
+  appendPendingSetCookie(scopeId, setCookie);
+  if (headerValue?.trim()) {
+    ensurePending(scopeId).sessionHeaderValue = headerValue.trim();
+  }
+}
+
+/** Emit a fresh HttpOnly `mc-wp-session` after WP session renewal. */
+export function scheduleWpAuthSetCookie(
+  scopeId: string,
+  req: Request,
+  cookieHeader: string,
+  ttlSeconds?: number,
+): void {
+  if (!scopeId.trim() || !cookieHeader.trim()) return;
+  const crossSite = isSecureRequest(req) && isCrossSiteRequest(req);
+  appendPendingSetCookie(
+    scopeId,
+    buildWpAuthSetCookie(cookieHeader, ttlSeconds, { crossSite }),
+  );
+  ensurePending(scopeId).sessionHeaderValue = wpAuthHeaderValue(cookieHeader);
+}
+
+/** Emit a fresh HttpOnly `mc-wp-refresh` after WP token rotation. */
+export function scheduleWpRefreshSetCookie(
+  scopeId: string,
+  req: Request,
+  refreshToken: string,
+  expirationIso?: string | null,
+): void {
+  if (!scopeId.trim() || !refreshToken.trim()) return;
+  const crossSite = isSecureRequest(req) && isCrossSiteRequest(req);
+  appendPendingSetCookie(
+    scopeId,
+    buildWpRefreshSetCookie(refreshToken, expirationIso, { crossSite }),
+  );
+  ensurePending(scopeId).refreshHeaderValue =
+    wpRefreshHeaderValue(refreshToken);
 }
 
 export function takePendingWpAuthSetCookie(
@@ -90,6 +176,9 @@ export async function buildContext(
   const wpAuthCookie =
     parseWpAuthCookieHeader(headers.get("cookie")) ||
     decodeWpAuthCookieValue(headers.get(WP_AUTH_HEADER_NAME));
+  const wpRefreshToken =
+    parseWpRefreshCookieHeader(headers.get("cookie")) ||
+    decodeWpRefreshCookieValue(headers.get(WP_REFRESH_HEADER_NAME));
 
   const productLoader = new DataLoader(async (ids: readonly number[]) => {
     return getProductNodes(ids);
@@ -103,6 +192,7 @@ export async function buildContext(
     setSessionToken,
     userId,
     wpAuthCookie,
+    wpRefreshToken,
     pendingWpAuthSetCookie: null,
     calcMode: "lightweight",
     productLoader,

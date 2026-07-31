@@ -38,6 +38,9 @@ export type WpGraphqlRefreshResult = {
   refreshToken: string | null;
   refreshTokenExpiration: string | null;
   success: boolean;
+  /** Cookie request header value from WP Set-Cookie (when auth cookie is renewed). */
+  cookieHeader: string;
+  cookieTtlSeconds: number;
 };
 
 type GraphqlError = { message?: string };
@@ -340,7 +343,7 @@ export async function wpGraphqlRefreshToken(
   refreshToken: string,
   opts?: { origin?: string | null },
 ): Promise<WpGraphqlRefreshResult> {
-  const { body } = await postGraphql<{
+  const { body, setCookies } = await postGraphql<{
     refreshToken: {
       authToken?: string | null;
       authTokenExpiration?: string | null;
@@ -356,6 +359,7 @@ export async function wpGraphqlRefreshToken(
   );
 
   const payload = body.data?.refreshToken;
+  const { cookieHeader, ttlSeconds } = parseAuthCookiesFromSetCookie(setCookies);
   if (body.errors?.length && !payload?.authToken) {
     return {
       authToken: null,
@@ -363,6 +367,8 @@ export async function wpGraphqlRefreshToken(
       refreshToken: null,
       refreshTokenExpiration: null,
       success: false,
+      cookieHeader: "",
+      cookieTtlSeconds: ttlSeconds,
     };
   }
 
@@ -372,5 +378,7 @@ export async function wpGraphqlRefreshToken(
     refreshToken: payload?.refreshToken ?? null,
     refreshTokenExpiration: payload?.refreshTokenExpiration ?? null,
     success: Boolean(payload?.success ?? payload?.authToken),
+    cookieHeader,
+    cookieTtlSeconds: ttlSeconds,
   };
 }

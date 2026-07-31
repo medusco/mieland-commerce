@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { GraphQLError } from "graphql";
 import type { GraphQLResolveInfo } from "graphql";
 import type { AppContext } from "../../context.js";
-import { requireUser } from "../../context.js";
+import { FORCE_LOGOUT_CODE, requireUser, scheduleForceLogout } from "../../context.js";
 import { clearCart, loadCart, mutateCart, saveCart } from "../../engine/cart-store.js";
 import { assertInStock, calculateCart } from "../../engine/totals.js";
 import {
@@ -16,7 +17,8 @@ import {
   type StoreCheckoutOrderResponse,
   type StorePaymentDatum,
 } from "../../clients/woocommerce-store.js";
-import { requireWpAuthCookie } from "../../auth/wp-session.js";
+import { isWpSessionMatchingUser } from "../../auth/wp-session.js";
+import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
 import {
@@ -37,6 +39,37 @@ import {
   orderNeedsFromInfo,
 } from "../../utils/selection.js";
 import type { CartAddress } from "../../engine/types.js";
+
+const FORCE_LOGOUT_MESSAGE =
+  "You have been signed out. Please sign in again to continue.";
+
+/** Ensure mc-wp-session matches JWT; refresh via stored WP token when stale. */
+async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
+  const userId = ctx.userId;
+  if (userId == null) {
+    throw new Error("Authentication required");
+  }
+
+  const wpCookie = ctx.wpAuthCookie?.trim() || "";
+  if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
+    return wpCookie;
+  }
+
+  const origin =
+    ctx.req.headers.get("origin") || ctx.req.headers.get("Origin") || null;
+  const refreshed = await refreshWpSessionFromCookie({
+    requestScopeId: ctx.requestScopeId,
+    req: ctx.req,
+    origin,
+    wpRefreshToken: ctx.wpRefreshToken,
+  });
+  if (refreshed) return refreshed;
+
+  scheduleForceLogout(ctx.requestScopeId, ctx.req);
+  throw new GraphQLError(FORCE_LOGOUT_MESSAGE, {
+    extensions: { code: FORCE_LOGOUT_CODE },
+  });
+}
 
 function mapAddress(input?: CartAddress | null): CartAddress {
   if (!input) return {};
@@ -367,7 +400,7 @@ export const checkoutResolvers = {
       const payload = await withCheckoutIdempotency(idempKey, async () => {
         // Ensure browser sent mc-wp-session cookie for later Store API payment; do not
         // send it on WC REST — a customer Cookie demotes admin consumer keys.
-        requireWpAuthCookie(ctx.wpAuthCookie);
+        await requireSyncedWpSession(ctx);
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
@@ -455,7 +488,7 @@ export const checkoutResolvers = {
         // "Sorry, you are not allowed to create resources." Cookie is only for
         // Store API payment. Still require it now so pay won't fail after place.
         if (userId != null) {
-          requireWpAuthCookie(ctx.wpAuthCookie);
+          await requireSyncedWpSession(ctx);
         }
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
@@ -635,7 +668,7 @@ export const checkoutResolvers = {
       let storeRes;
       try {
         const wpCookie =
-          ctx.userId != null ? requireWpAuthCookie(ctx.wpAuthCookie) : null;
+          ctx.userId != null ? await requireSyncedWpSession(ctx) : null;
         const fingerprint = paymentFingerprint(paymentMethod, paymentData);
         storeRes = await withPaymentIdempotency(orderId, fingerprint, () =>
           processStoreCheckoutOrder(

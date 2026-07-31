@@ -280,6 +280,7 @@ export async function verifyAccessToken(
 }
 
 export async function refreshAuthToken(refreshToken: string): Promise<{
+  userId: number;
   authToken: string;
   authTokenExpiration: string;
   refreshToken: string;
@@ -301,7 +302,7 @@ export async function refreshAuthToken(refreshToken: string): Promise<{
     const tokens = await issueTokens(user);
     // rotate: delete old refresh after issuing the replacement
     await redis.del(`refresh:${userId}:${jti}`);
-    return tokens;
+    return { userId, ...tokens };
   } catch {
     return null;
   }

@@ -3,6 +3,7 @@ import {
   isCrossSiteRequest,
   isSecureRequest,
   requireUser,
+  scheduleWpRefreshSetCookie,
   setPendingWpAuthSetCookie,
 } from "../../context.js";
 import {
@@ -18,6 +19,7 @@ import {
   buildWpAuthSetCookie,
   wpAuthHeaderValue,
 } from "../../auth/wp-session.js";
+import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
@@ -376,6 +378,14 @@ export const customerResolvers = {
       // Dedicated map — Express reads this after yoga.fetch (context mutation alone is unreliable).
       if (ctx.requestScopeId) {
         setPendingWpAuthSetCookie(ctx.requestScopeId, setCookie, headerValue);
+        if (wp.refreshToken) {
+          scheduleWpRefreshSetCookie(
+            ctx.requestScopeId,
+            ctx.req,
+            wp.refreshToken,
+            wp.refreshTokenExpiration,
+          );
+        }
       }
 
       const user =
@@ -417,9 +427,9 @@ export const customerResolvers = {
     refreshToken: async (
       _: unknown,
       { input }: { input: { refreshToken: string; clientMutationId?: string } },
+      ctx: AppContext,
     ) => {
       // Commerce-issued refresh tokens (login mints these after WP auth).
-      // Browser-held mc-wp-session cookie is unchanged by refresh.
       const refreshed = await refreshAuthToken(input.refreshToken);
       if (!refreshed) {
         return {
@@ -431,10 +441,21 @@ export const customerResolvers = {
           refreshTokenExpiration: null,
         };
       }
+      const origin =
+        ctx.req.headers.get("origin") ||
+        ctx.req.headers.get("Origin") ||
+        null;
+      await refreshWpSessionFromCookie({
+        requestScopeId: ctx.requestScopeId,
+        req: ctx.req,
+        origin,
+        wpRefreshToken: ctx.wpRefreshToken,
+      });
+      const { userId: _userId, ...tokens } = refreshed;
       return {
         clientMutationId: input.clientMutationId,
         success: true,
-        ...refreshed,
+        ...tokens,
       };
     },
   },
