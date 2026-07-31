@@ -1,6 +1,11 @@
 import { query, queryOne, t, type SqlParam } from "../db/mysql.js";
 import { getAttachmentUrl, getPostMeta, getProductNode } from "./products.js";
 import { getOption, phpUnserialize } from "./options.js";
+import {
+  resolveAttachedProductId,
+  shapeLabReports,
+  shapeManualProduct,
+} from "./lab-results-meta.js";
 import { toGlobalId } from "../utils/index.js";
 
 function statusWhere(status?: string): string {
@@ -243,26 +248,32 @@ export async function getNavigation() {
 }
 
 export async function searchLabResults(lotNumber: string) {
-  const like = `%${lotNumber}%`;
+  const trimmed = lotNumber.trim();
+  if (!trimmed) return { nodes: [] };
+
   const rows = await query<
     { ID: number; post_title: string }[]
   >(
     `SELECT ID, post_title FROM ${t("posts")}
-     WHERE post_type = 'lab_results' AND post_status = 'publish' AND post_title LIKE ?
+     WHERE post_type = 'lab_results' AND post_status = 'publish'
+       AND (post_title = ? OR post_title LIKE ?)
+     ORDER BY (post_title = ?) DESC, post_title ASC
      LIMIT 20`,
-    [like],
+    [trimmed, `%${trimmed}%`, trimmed],
   );
   const nodes = [];
   for (const r of rows) {
     const meta = await getPostMeta(r.ID);
-    const productId = Number(meta.attached_product || meta.attachedProduct || 0);
+    const productId = resolveAttachedProductId(meta);
     const product = productId ? await getProductNode(productId) : null;
+    const reports = await shapeLabReports(meta);
+    const manualProduct = await shapeManualProduct(meta);
     nodes.push({
       title: r.post_title,
       databaseId: r.ID,
       labResultsFields: {
         batchNumber: meta.batch_number || meta.batchNumber || "",
-        reports: [],
+        reports,
         bb: meta.bb || "",
         dateOfEntry: meta.date_of_entry || meta.dateOfEntry || "",
         dha: meta.dha || "",
@@ -271,7 +282,7 @@ export async function searchLabResults(lotNumber: string) {
         hmf: meta.hmf || "",
         honeyType: meta.honey_type || meta.honeyType || "",
         leptosperin: meta.leptosperin || "",
-        manualProduct: null,
+        manualProduct,
         mfd: meta.mfd || "",
         mgo: meta.mgo || "",
         origin: meta.origin || "",
