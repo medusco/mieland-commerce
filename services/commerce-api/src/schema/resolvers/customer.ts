@@ -299,9 +299,11 @@ export const customerResolvers = {
 
     requestPersonalCoupon: async (
       _: unknown,
-      { input }: { input: { email: string; clientMutationId?: string } },
+      { input }: { input: { email: string; couponId?: number | null; clientMutationId?: string } },
     ) => {
-      const result = await getOrCreatePersonalCoupon(input.email);
+      const result = await getOrCreatePersonalCoupon(input.email, {
+        templateCouponId: input.couponId ?? undefined,
+      });
       return {
         clientMutationId: input.clientMutationId,
         created: result.created,

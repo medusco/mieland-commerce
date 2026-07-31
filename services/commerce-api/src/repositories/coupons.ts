@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { loadConfig, t } from "../config.js";
-import { createWcCoupon } from "../clients/woocommerce-rest.js";
+import { createWcCoupon, type WcCouponCreatePayload } from "../clients/woocommerce-rest.js";
 import { getRedis } from "../redis/client.js";
 import { sha256Hex, logJson } from "../utils/index.js";
 import { query, queryOne } from "../db/mysql.js";
+import { IS_PERSONALIZED_COUPON_META } from "../engine/coupon-meta.js";
 
 /**
  * Postmeta key marking personal coupons issued by commerce-api.
@@ -88,27 +89,62 @@ async function loadCouponMeta(
   };
 }
 
-async function upsertPersonalEmailMeta(
+async function loadTemplateCouponSettings(
+  templateCouponId: number,
+): Promise<{ amount: string; discountType: WcCouponCreatePayload["discount_type"] }> {
+  const row = await queryOne<{ ID: number }>(
+    `SELECT ID FROM ${t("posts")}
+     WHERE ID = ? AND post_type = 'shop_coupon' AND post_status = 'publish'
+     LIMIT 1`,
+    [templateCouponId],
+  );
+  if (!row) {
+    throw new Error(`Coupon template ${templateCouponId} was not found`);
+  }
+  const meta = await loadCouponMeta(templateCouponId);
+  const discountType = meta.discountType;
+  if (
+    discountType !== "percent" &&
+    discountType !== "fixed_cart" &&
+    discountType !== "fixed_product"
+  ) {
+    throw new Error(`Coupon template ${templateCouponId} has an unsupported discount type`);
+  }
+  return {
+    amount: meta.amount,
+    discountType,
+  };
+}
+
+async function upsertCouponMeta(
   couponId: number,
-  email: string,
+  metaKey: string,
+  value: string,
 ): Promise<void> {
   const existing = await queryOne<{ meta_id: number }>(
     `SELECT meta_id FROM ${t("postmeta")}
      WHERE post_id = ? AND meta_key = ?
      LIMIT 1`,
-    [couponId, PERSONAL_COUPON_EMAIL_META],
+    [couponId, metaKey],
   );
   if (existing) {
     await query(
       `UPDATE ${t("postmeta")} SET meta_value = ? WHERE meta_id = ?`,
-      [email, existing.meta_id],
+      [value, existing.meta_id],
     );
     return;
   }
   await query(
     `INSERT INTO ${t("postmeta")} (post_id, meta_key, meta_value) VALUES (?, ?, ?)`,
-    [couponId, PERSONAL_COUPON_EMAIL_META, email],
+    [couponId, metaKey, value],
   );
+}
+
+async function upsertPersonalEmailMeta(
+  couponId: number,
+  email: string,
+): Promise<void> {
+  await upsertCouponMeta(couponId, PERSONAL_COUPON_EMAIL_META, email);
 }
 
 /**
@@ -117,6 +153,7 @@ async function upsertPersonalEmailMeta(
  */
 export async function getOrCreatePersonalCoupon(
   rawEmail: string,
+  options?: { templateCouponId?: number },
 ): Promise<PersonalCoupon> {
   const email = assertValidCouponEmail(rawEmail);
   const cfg = loadConfig();
@@ -186,8 +223,12 @@ export async function getOrCreatePersonalCoupon(
     }
 
     const code = generateCouponCode(cfg.PERSONAL_COUPON_CODE_PREFIX);
-    const amount = String(cfg.PERSONAL_COUPON_AMOUNT);
-    const discountType = cfg.PERSONAL_COUPON_DISCOUNT_TYPE;
+    const template =
+      options?.templateCouponId != null
+        ? await loadTemplateCouponSettings(options.templateCouponId)
+        : null;
+    const amount = template?.amount ?? String(cfg.PERSONAL_COUPON_AMOUNT);
+    const discountType = template?.discountType ?? cfg.PERSONAL_COUPON_DISCOUNT_TYPE;
     const description = `Personal one-time discount for ${email}`;
 
     const created = await createWcCoupon({
@@ -199,10 +240,14 @@ export async function getOrCreatePersonalCoupon(
       usage_limit: 1,
       usage_limit_per_user: 1,
       email_restrictions: [email],
-      meta_data: [{ key: PERSONAL_COUPON_EMAIL_META, value: email }],
+      meta_data: [
+        { key: PERSONAL_COUPON_EMAIL_META, value: email },
+        { key: IS_PERSONALIZED_COUPON_META, value: "no" },
+      ],
     });
 
     await upsertPersonalEmailMeta(created.id, email);
+    await upsertCouponMeta(created.id, IS_PERSONALIZED_COUPON_META, "no");
 
     logJson("info", {
       msg: "personal_coupon_created",

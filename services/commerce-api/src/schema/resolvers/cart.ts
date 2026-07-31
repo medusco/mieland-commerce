@@ -10,7 +10,7 @@ import {
 import { parseExtraDataString, type CartState } from "../../engine/types.js";
 import { withCartSubscriptionDisplayPrices, type PricedProductNode } from "../../engine/pricing.js";
 import { assertInStock, calculateCart, type CartTotalsMode } from "../../engine/totals.js";
-import { loadCoupon, assertCouponEmailAllowed, normalizeApplicantEmails } from "../../engine/shipping.js";
+import { loadCoupon, assertCouponApplicable, normalizeApplicantEmails } from "../../engine/shipping.js";
 import { findUserById } from "../../auth/index.js";
 import {
   cartNeedsFromInfo,
@@ -305,7 +305,7 @@ export const cartResolvers = {
       if (!coupon) throw new Error("Invalid coupon code");
       const cartPreview = await loadCart(ctx.sessionToken);
       const emails = await resolveApplicantEmails(cartPreview, ctx.userId);
-      assertCouponEmailAllowed(coupon, emails);
+      assertCouponApplicable(coupon, emails);
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
         if (!c.coupons.includes(code)) c.coupons.push(code);
         return { cart: c, result: c };

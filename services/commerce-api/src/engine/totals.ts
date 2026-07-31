@@ -123,7 +123,9 @@ export async function calculateCart(
   const couponRows = [];
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
-    if (c && couponAllowsEmails(c, applicantEmails)) couponRows.push(c);
+    if (c && !c.isPersonalized && couponAllowsEmails(c, applicantEmails)) {
+      couponRows.push(c);
+    }
   }
   const { discountTotal, applied } = applyCoupons(
     subtotalNum,

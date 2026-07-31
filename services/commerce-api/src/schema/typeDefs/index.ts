@@ -897,6 +897,8 @@ export const typeDefs = /* GraphQL */ `
   input RequestPersonalCouponInput {
     clientMutationId: String
     email: String!
+    """WooCommerce shop_coupon post ID to copy discount amount/type from."""
+    couponId: Int
   }
 
   type PersonalCoupon {

@@ -2,6 +2,9 @@ import { query, queryOne, t } from "../db/mysql.js";
 import { getOption, maybeUnserializePhp } from "../repositories/options.js";
 import type { CartAddress, CartState } from "./types.js";
 import { roundMoney } from "../utils/index.js";
+import {
+  parseIsPersonalizedCoupon,
+} from "./coupon-meta.js";
 
 export type ShippingRate = {
   id: string;
@@ -291,6 +294,8 @@ export type LoadedCoupon = {
   discountType: string;
   amount: number;
   freeShipping: boolean;
+  /** Template coupons flagged in Woo admin — not directly applicable at checkout. */
+  isPersonalized: boolean;
   /** Lowercased emails from WC `customer_email` / email_restrictions. Empty = unrestricted. */
   emailRestrictions: string[];
 };
@@ -356,6 +361,18 @@ export function assertCouponEmailAllowed(
   }
 }
 
+export function assertCouponApplicable(
+  coupon: Pick<LoadedCoupon, "emailRestrictions" | "code" | "isPersonalized">,
+  applicantEmails: string[],
+): void {
+  if (coupon.isPersonalized) {
+    throw new Error(
+      "This coupon cannot be applied directly. Use the code sent to your email after signing up.",
+    );
+  }
+  assertCouponEmailAllowed(coupon, applicantEmails);
+}
+
 export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
   const post = await queryOne<{ ID: number; post_excerpt: string }>(
     `SELECT ID, post_excerpt FROM ${t("posts")}
@@ -383,6 +400,7 @@ export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
     discountType: meta.discount_type ?? "fixed_cart",
     amount: Number(meta.coupon_amount ?? 0),
     freeShipping: meta.free_shipping === "yes",
+    isPersonalized: parseIsPersonalizedCoupon(meta),
     emailRestrictions,
   };
 }
