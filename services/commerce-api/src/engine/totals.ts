@@ -38,6 +38,8 @@ export type CalculatedCart = {
     description: string;
     discountAmount: string;
     discountTax: string;
+    discountType: string;
+    amount: string;
   }>;
   availableShippingMethods: ShippingPackage[];
   chosenShippingMethods: string[];

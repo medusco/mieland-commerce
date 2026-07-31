@@ -412,7 +412,7 @@ export function applyCoupons(
   subtotal: number,
   coupons: Array<{ discountType: string; amount: number; code: string; description: string }>,
   lines: CouponCartLine[] = [],
-): { discountTotal: number; applied: Array<{ code: string; description: string; discountAmount: string; discountTax: string }> } {
+): { discountTotal: number; applied: Array<{ code: string; description: string; discountAmount: string; discountTax: string; discountType: string; amount: string }> } {
   let remaining = subtotal;
   let discountTotal = 0;
   const applied = [];
@@ -440,6 +440,8 @@ export function applyCoupons(
       description: c.description,
       discountAmount: d.toFixed(2),
       discountTax: "0.00",
+      discountType: c.discountType,
+      amount: String(c.amount),
     });
   }
   return { discountTotal, applied };

@@ -254,6 +254,8 @@ export const typeDefs = /* GraphQL */ `
     description: String
     discountAmount: String
     discountTax: String
+    discountType: String
+    amount: String
   }
 
   type ShippingRate {
