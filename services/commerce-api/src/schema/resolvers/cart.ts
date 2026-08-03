@@ -133,12 +133,10 @@ export const cartResolvers = {
       info: GraphQLResolveInfo,
     ) => {
       const cart = await loadCart(ctx.sessionToken);
-      const mode = modeFromArgs(args);
-      const hasAddress = Boolean(cart.shipping.country || cart.billing.country);
       return shapeCartGraphql(
         ctx,
         cart,
-        mode === "full" || hasAddress ? "full" : "lightweight",
+        "full",
         cartNeedsFromInfo(info, "root"),
       );
     },

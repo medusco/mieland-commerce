@@ -121,6 +121,9 @@ function rateCost(
   return null;
 }
 
+/** US-only storefront: zone lookup when cart has no address yet (cart drawer, guest). */
+const DEFAULT_SHIPPING_COUNTRY = "US";
+
 export async function resolveShipping(
   cart: CartState,
   /** Cart subtotal before coupons; used for free_shipping min_amount checks. */
@@ -131,16 +134,11 @@ export async function resolveShipping(
   chosenIds: string[];
   freeShippingInfo: FreeShippingInfo | null;
 }> {
-  const country =
-    (cart.shipping.country || cart.billing.country || "").toUpperCase();
-  if (!country) {
-    return {
-      packages: [],
-      chosenCost: 0,
-      chosenIds: [],
-      freeShippingInfo: null,
-    };
-  }
+  const country = (
+    cart.shipping.country ||
+    cart.billing.country ||
+    DEFAULT_SHIPPING_COUNTRY
+  ).toUpperCase();
 
   const [zones, locations, methods] = await Promise.all([
     loadZones(),
