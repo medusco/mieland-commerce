@@ -5,6 +5,7 @@ import {
   applyCoupons,
   loadCoupon,
   resolveShipping,
+  type LoadedCoupon,
   type ShippingPackage,
   type FreeShippingInfo,
 } from "./shipping.js";
@@ -111,7 +112,7 @@ export async function calculateCart(
     });
   }
 
-  const couponRows = [];
+  const couponRows: LoadedCoupon[] = [];
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
     if (c && !c.isPersonalized) {
