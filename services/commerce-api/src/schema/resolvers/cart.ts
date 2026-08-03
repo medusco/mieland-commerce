@@ -128,7 +128,7 @@ export const cartResolvers = {
   Query: {
     cart: async (
       _: unknown,
-      args: { recalculateTotals?: boolean; calculateShippingTax?: boolean },
+      _args: { recalculateTotals?: boolean; calculateShippingTax?: boolean },
       ctx: AppContext,
       info: GraphQLResolveInfo,
     ) => {
