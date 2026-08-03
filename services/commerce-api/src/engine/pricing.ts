@@ -39,6 +39,28 @@ export function lineUnitPrice(
   return applyFrequencyDiscount(basePrice, getItemFrequency(item), discounts);
 }
 
+/** Combined multiplier from sequential percent coupons (e.g. 10% + 10% → 0.81). */
+export function percentCouponMultiplier(
+  coupons: Array<{ discountType: string; amount: number }>,
+): number {
+  return coupons.reduce((multiplier, coupon) => {
+    if (coupon.discountType !== "percent" || coupon.amount <= 0) {
+      return multiplier;
+    }
+    const pct = Math.min(100, coupon.amount);
+    return multiplier * (1 - pct / 100);
+  }, 1);
+}
+
+export function applyPercentCouponToUnitPrice(
+  unitPrice: number,
+  coupons: Array<{ discountType: string; amount: number }>,
+): number {
+  const multiplier = percentCouponMultiplier(coupons);
+  if (multiplier >= 1) return roundMoney(unitPrice);
+  return roundMoney(unitPrice * multiplier);
+}
+
 type PricedProductNode = {
   price?: string | null;
   salePrice?: string | null;
@@ -46,18 +68,27 @@ type PricedProductNode = {
   [key: string]: unknown;
 };
 
+type CartDisplayPriceOptions = {
+  /** Set salePrice even when the catalog item is not on sale (e.g. percent coupon). */
+  forceSalePrice?: boolean;
+};
+
 /**
  * Clone a cart-line product/variation node so `price` / promo `salePrice`
- * reflect the subscription-discounted unit price (matches line subtotal).
+ * reflect the cart unit price (subscription and/or percent-coupon discounts).
  * Leaves catalog nodes in the DataLoader cache untouched.
  */
 export function withCartSubscriptionDisplayPrices<T extends PricedProductNode>(
   node: T,
   unitPrice: number,
+  options: CartDisplayPriceOptions = {},
 ): T {
   if (!(unitPrice > 0)) return node;
   const money = moneyStr(unitPrice);
-  const onSale = Boolean(node.onSale) || Boolean(node.salePrice);
+  const onSale =
+    Boolean(options.forceSalePrice) ||
+    Boolean(node.onSale) ||
+    Boolean(node.salePrice);
   return {
     ...node,
     price: money,

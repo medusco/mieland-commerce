@@ -58,6 +58,9 @@ async function shapeCartGraphql(
   }
 
   const pricing = cartNeedsPricing(needs);
+  const hasPercentCoupon = calculated.appliedCoupons.some(
+    (coupon) => coupon.discountType === "percent",
+  );
   const nodes = calculated.lines.map((line) => {
     const productRaw = needs.products
       ? (productById.get(line.productId) as PricedProductNode | undefined)
@@ -66,13 +69,22 @@ async function shapeCartGraphql(
       needs.variations && line.variationId
         ? (productById.get(line.variationId) as PricedProductNode | undefined)
         : null;
+    const displayOpts = { forceSalePrice: hasPercentCoupon };
     const product =
       productRaw && pricing
-        ? withCartSubscriptionDisplayPrices(productRaw, line.unitPrice)
+        ? withCartSubscriptionDisplayPrices(
+            productRaw,
+            line.displayUnitPrice,
+            displayOpts,
+          )
         : productRaw;
     const variation =
       variationRaw && pricing
-        ? withCartSubscriptionDisplayPrices(variationRaw, line.unitPrice)
+        ? withCartSubscriptionDisplayPrices(
+            variationRaw,
+            line.displayUnitPrice,
+            displayOpts,
+          )
         : variationRaw;
     return {
       key: line.key,

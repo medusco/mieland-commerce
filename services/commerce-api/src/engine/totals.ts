@@ -1,6 +1,6 @@
 import type { CartState } from "./types.js";
 import { getItemFrequency } from "./types.js";
-import { getSubscriptionDiscounts, lineUnitPrice } from "./pricing.js";
+import { getSubscriptionDiscounts, lineUnitPrice, applyPercentCouponToUnitPrice } from "./pricing.js";
 import {
   applyCoupons,
   loadCoupon,
@@ -26,6 +26,7 @@ export type CalculatedCart = {
     quantity: number;
     extraData: CartState["items"][0]["extraData"];
     unitPrice: number;
+    displayUnitPrice: number;
     subtotal: string;
     frequency: string;
   }>;
@@ -72,6 +73,7 @@ export async function calculateCart(
         quantity: item.quantity,
         extraData: item.extraData,
         unitPrice: 0,
+        displayUnitPrice: 0,
         subtotal: "0.00",
         frequency: getItemFrequency(item),
       })),
@@ -124,6 +126,10 @@ export async function calculateCart(
       unitPrice: line.unitPrice,
     })),
   );
+  const displayLines = lines.map((line) => ({
+    ...line,
+    displayUnitPrice: applyPercentCouponToUnitPrice(line.unitPrice, couponRows),
+  }));
   const afterDiscount = roundMoney(Math.max(0, subtotalNum - discountTotal));
 
   let shippingTotal = 0;
@@ -146,7 +152,7 @@ export async function calculateCart(
   return {
     cart: { ...cart, chosenShippingMethods: chosen },
     itemCount,
-    lines,
+    lines: displayLines,
     subtotal: moneyStr(subtotalNum),
     total: moneyStr(total),
     shippingTotal: moneyStr(shippingTotal),
