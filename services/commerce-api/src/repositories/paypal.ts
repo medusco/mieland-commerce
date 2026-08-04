@@ -28,11 +28,6 @@ type PpcpGatewaySettings = {
   enabled?: string;
 };
 
-type PpcpPaymentSettings = {
-  paypalEnabled?: boolean | string | number;
-  paypal_enabled?: boolean | string | number;
-};
-
 export type PaypalMerchantCredentials = {
   clientId: string;
   clientSecret: string;
@@ -60,16 +55,18 @@ function asString(value: unknown): string {
  * Prefer new settings (`woocommerce-ppcp-data-common`); fall back to legacy.
  */
 export async function getPaypalMerchantCredentials(): Promise<PaypalMerchantCredentials | null> {
-  const [common, legacy, gateway, payment] = await Promise.all([
+  const [common, legacy, gateway] = await Promise.all([
     getOption<PpcpCommonSettings>("woocommerce-ppcp-data-common"),
     getOption<PpcpLegacySettings>("woocommerce-ppcp-settings"),
     getOption<PpcpGatewaySettings>("woocommerce_ppcp-gateway_settings"),
-    getOption<PpcpPaymentSettings>("woocommerce-ppcp-data-payment"),
   ]);
 
-  const sandbox = common
-    ? asBool(common.use_sandbox) || asBool(common.sandbox_merchant)
-    : asBool(legacy?.sandbox_on);
+  const sandboxFromCommon =
+    common && typeof common === "object"
+      ? asBool(common.use_sandbox) || asBool(common.sandbox_merchant)
+      : false;
+  const sandboxFromLegacy = asBool(legacy?.sandbox_on);
+  const sandbox = sandboxFromCommon || sandboxFromLegacy;
 
   let clientId = "";
   let clientSecret = "";
@@ -80,16 +77,32 @@ export async function getPaypalMerchantCredentials(): Promise<PaypalMerchantCred
     clientId = asString(common.client_id);
     clientSecret = asString(common.client_secret);
     merchantId = asString(common.merchant_id);
-    connected = asBool(common.merchant_connected) || Boolean(clientId && clientSecret);
+    connected =
+      asBool(common.merchant_connected) || Boolean(clientId && clientSecret);
   }
 
-  if ((!clientId || !clientSecret) && legacy && typeof legacy === "object") {
-    if (sandbox) {
-      clientId = clientId || asString(legacy.sandbox_client_id);
-      clientSecret = clientSecret || asString(legacy.sandbox_client_secret);
-    } else {
-      clientId = clientId || asString(legacy.client_id);
-      clientSecret = clientSecret || asString(legacy.client_secret);
+  // Legacy option may hold live and/or sandbox credentials.
+  if (legacy && typeof legacy === "object") {
+    if (!clientId || !clientSecret) {
+      if (sandbox) {
+        clientId =
+          clientId ||
+          asString(legacy.sandbox_client_id) ||
+          asString(legacy.client_id);
+        clientSecret =
+          clientSecret ||
+          asString(legacy.sandbox_client_secret) ||
+          asString(legacy.client_secret);
+      } else {
+        clientId =
+          clientId ||
+          asString(legacy.client_id) ||
+          asString(legacy.sandbox_client_id);
+        clientSecret =
+          clientSecret ||
+          asString(legacy.client_secret) ||
+          asString(legacy.sandbox_client_secret);
+      }
     }
     merchantId = merchantId || asString(legacy.merchant_id);
     connected = connected || Boolean(clientId && clientSecret);
@@ -99,21 +112,29 @@ export async function getPaypalMerchantCredentials(): Promise<PaypalMerchantCred
     return null;
   }
 
+  // Gateway enabled flag: missing option → treat as enabled when credentials exist.
+  // (woocommerce-ppcp-data-payment does NOT gate the main PayPal method.)
   const gatewayEnabled =
-    gateway == null ? true : asBool(gateway.enabled) || gateway.enabled === "yes";
-  const paymentEnabled =
-    payment == null
+    gateway == null
       ? true
-      : asBool(payment.paypalEnabled) || asBool(payment.paypal_enabled);
+      : asBool(gateway.enabled) ||
+        gateway.enabled === "yes" ||
+        // Empty settings object still means "not explicitly disabled".
+        Object.keys(gateway).length === 0;
+
   const legacyEnabled =
-    legacy == null ? true : asBool(legacy.enabled) || legacy.enabled === "yes";
+    legacy == null
+      ? true
+      : !("enabled" in legacy) ||
+        asBool(legacy.enabled) ||
+        legacy.enabled === "yes";
 
   return {
     clientId,
     clientSecret,
     sandbox,
     merchantId,
-    enabled: connected && gatewayEnabled && paymentEnabled && legacyEnabled,
+    enabled: connected && gatewayEnabled && legacyEnabled,
   };
 }
 
