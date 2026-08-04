@@ -113,28 +113,27 @@ export async function getPaypalMerchantCredentials(): Promise<PaypalMerchantCred
   }
 
   // Gateway enabled flag: missing option → treat as enabled when credentials exist.
-  // (woocommerce-ppcp-data-payment does NOT gate the main PayPal method.)
-  const gatewayEnabled =
-    gateway == null
-      ? true
-      : asBool(gateway.enabled) ||
-        gateway.enabled === "yes" ||
-        // Empty settings object still means "not explicitly disabled".
-        Object.keys(gateway).length === 0;
+  // Do not consult woocommerce-ppcp-data-payment — that file toggles Venmo/Pay
+  // Later/etc., not the main PayPal Smart Button method.
+  const gatewayExplicitlyDisabled =
+    gateway != null &&
+    "enabled" in gateway &&
+    !asBool(gateway.enabled) &&
+    gateway.enabled !== "yes";
 
-  const legacyEnabled =
-    legacy == null
-      ? true
-      : !("enabled" in legacy) ||
-        asBool(legacy.enabled) ||
-        legacy.enabled === "yes";
+  const legacyExplicitlyDisabled =
+    legacy != null &&
+    "enabled" in legacy &&
+    !asBool(legacy.enabled) &&
+    legacy.enabled !== "yes";
 
   return {
     clientId,
     clientSecret,
     sandbox,
     merchantId,
-    enabled: connected && gatewayEnabled && legacyEnabled,
+    // If credentials exist and nothing explicitly disables the gateway, enable.
+    enabled: connected && !gatewayExplicitlyDisabled && !legacyExplicitlyDisabled,
   };
 }
 

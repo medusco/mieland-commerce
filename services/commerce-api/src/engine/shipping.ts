@@ -1,6 +1,7 @@
 import { query, queryOne, t } from "../db/mysql.js";
 import { getOption, maybeUnserializePhp } from "../repositories/options.js";
 import type { CartAddress, CartState } from "./types.js";
+import { getItemFrequency, isValidFrequency } from "./types.js";
 import { roundMoney } from "../utils/index.js";
 import {
   parseIsPersonalizedCoupon,
@@ -101,8 +102,11 @@ function rateCost(
   methodId: string,
   settings: Record<string, string>,
   subtotal: number,
+  /** Subscription carts always unlock Woo free_shipping methods. */
+  forceFreeShipping = false,
 ): number | null {
   if (methodId === "free_shipping") {
+    if (forceFreeShipping) return 0;
     const requires = settings.requires ?? "";
     const minAmount = Number(settings.min_amount ?? 0);
     if (requires === "min_amount" || requires === "either" || requires === "both") {
@@ -119,6 +123,10 @@ function rateCost(
   }
   // Unknown methods (e.g. MCF) skipped until present in zones
   return null;
+}
+
+function cartHasSubscription(cart: CartState): boolean {
+  return cart.items.some((item) => isValidFrequency(getItemFrequency(item)));
 }
 
 /** US-only storefront: zone lookup when cart has no address yet (cart drawer, guest). */
@@ -184,19 +192,21 @@ export async function resolveShipping(
   const zoneMethods = methods.filter((m) => m.zone_id === matchedZoneId);
   const rates: ShippingRate[] = [];
   let freeShippingInfo: FreeShippingInfo | null = null;
+  const forceFreeShipping = cartHasSubscription(cart);
 
   for (const m of zoneMethods) {
     const settings = await methodSettings(m.method_id, m.instance_id);
-    const cost = rateCost(m.method_id, settings, subtotal);
+    const cost = rateCost(m.method_id, settings, subtotal, forceFreeShipping);
 
     if (m.method_id === "free_shipping" && freeShippingInfo == null) {
       const minAmount = Number(settings.min_amount ?? 0);
       const requires = settings.requires ?? "";
       const minApplies =
-        requires === "min_amount" ||
-        requires === "either" ||
-        requires === "both" ||
-        (requires === "coupon" && minAmount > 0);
+        !forceFreeShipping &&
+        (requires === "min_amount" ||
+          requires === "either" ||
+          requires === "both" ||
+          (requires === "coupon" && minAmount > 0));
       const remaining = minApplies
         ? roundMoney(Math.max(0, minAmount - subtotal))
         : 0;
@@ -220,6 +230,37 @@ export async function resolveShipping(
       methodId: m.method_id,
       cost: cost.toFixed(2),
     });
+  }
+
+  // Subscription carts always get free shipping, even if the zone has no
+  // free_shipping method (or min_amount would otherwise block it).
+  if (forceFreeShipping && !rates.some((r) => Number(r.cost) === 0)) {
+    rates.push({
+      id: "free_shipping:subscription",
+      instanceId: 0,
+      label: "Free shipping",
+      methodId: "free_shipping",
+      cost: "0.00",
+    });
+  }
+  if (forceFreeShipping) {
+    if (freeShippingInfo) {
+      freeShippingInfo = {
+        ...freeShippingInfo,
+        eligible: true,
+        amountRemaining: "0.00",
+      };
+    } else {
+      freeShippingInfo = {
+        methodId: "free_shipping",
+        instanceId: 0,
+        label: "Free shipping",
+        requires: "",
+        minAmount: "0.00",
+        eligible: true,
+        amountRemaining: "0.00",
+      };
+    }
   }
 
   // When free shipping is available, only offer free rates and always choose them.

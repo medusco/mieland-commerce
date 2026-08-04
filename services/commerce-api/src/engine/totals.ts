@@ -140,6 +140,7 @@ export async function calculateCart(
 
   if (mode === "full") {
     // Free-shipping min_amount is based on cart subtotal (before coupons), not total.
+    // Subscription lines bypass min_amount and always unlock free shipping.
     const shipping = await resolveShipping(cart, subtotalNum);
     packages = shipping.packages;
     shippingTotal = shipping.chosenCost;
