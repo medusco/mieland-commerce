@@ -209,17 +209,25 @@ function isStripePaymentObjectId(value: string): boolean {
   return /^(pm_|src_|tok_|card_)/i.test(value);
 }
 
+function isPaypalGateway(gateway: string | undefined | null): boolean {
+  const g = (gateway ?? "").trim().toLowerCase();
+  return g === "ppcp-gateway" || g === "paypal" || g.startsWith("ppcp-");
+}
+
 /**
- * Map GraphQL / WPGraphQL-style Stripe meta onto Store API payment_data keys.
+ * Map GraphQL / WPGraphQL-style payment meta onto Store API payment_data keys.
  *
- * WooCommerce Store API replaces $_POST with payment_data only. Modern Stripe UPE
- * expects:
- * - payment_method: gateway id ("stripe") — used to derive UPE type ("card")
+ * WooCommerce Store API replaces $_POST with payment_data only.
+ *
+ * Stripe UPE expects:
+ * - payment_method: gateway id ("stripe")
  * - wc-stripe-payment-method: PaymentMethod id (pm_…)
  * - stripe_source: same id (legacy / dual support)
  *
- * Shop clients often still send WPGraphQL-style keys where
- * wc-stripe-payment-method is the UPE type ("card") and _stripe_source_id is pm_….
+ * PayPal PPCP expects (same as Blocks):
+ * - payment_method: "ppcp-gateway"
+ * - paypal_order_id: PayPal Orders v2 id
+ * - funding_source / ppcp-funding-source: e.g. "paypal"
  */
 export function toStorePaymentData(
   entries: Array<{ key: string; value?: string | null }> | undefined,
@@ -236,6 +244,8 @@ export function toStorePaymentData(
 
   let sourceId: string | undefined;
   let gatewayId: string | undefined;
+  let paypalOrderId: string | undefined;
+  let fundingSource: string | undefined;
 
   for (const entry of entries) {
     const key = entry.key;
@@ -286,7 +296,21 @@ export function toStorePaymentData(
       continue;
     }
 
-    // Gateway id for UPE (must be snake_case in $_POST). Do not treat as pm id.
+    if (key === "paypal_order_id" || key === "paypalOrderId") {
+      if (value) paypalOrderId = value;
+      continue;
+    }
+
+    if (
+      key === "funding_source" ||
+      key === "ppcp-funding-source" ||
+      key === "fundingSource"
+    ) {
+      if (value) fundingSource = value;
+      continue;
+    }
+
+    // Gateway id for UPE / PPCP (must be snake_case in $_POST). Do not treat as pm id.
     if (key === "payment_method" || key === "paymentMethod") {
       if (value) gatewayId = value;
       continue;
@@ -295,13 +319,28 @@ export function toStorePaymentData(
     push(key, value);
   }
 
+  const gateway =
+    gatewayId ||
+    (paypalOrderId ? "ppcp-gateway" : sourceId ? "stripe" : "stripe");
+
+  if (isPaypalGateway(gateway) || paypalOrderId) {
+    if (paypalOrderId) {
+      push("paypal_order_id", paypalOrderId);
+    }
+    const funding = fundingSource || "paypal";
+    push("funding_source", funding);
+    push("ppcp-funding-source", funding);
+    push("payment_method", gatewayId || "ppcp-gateway");
+    push("paymentMethod", gatewayId || "ppcp-gateway");
+    return out;
+  }
+
   if (sourceId) {
     push("wc-stripe-payment-method", sourceId);
     push("stripe_source", sourceId);
   }
 
   // Store API $_POST is payment_data only; UPE reads payment_method (snake_case).
-  const gateway = gatewayId || "stripe";
   push("payment_method", gateway);
   push("paymentMethod", gateway);
 

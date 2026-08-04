@@ -17,6 +17,8 @@ import {
   type StoreCheckoutOrderResponse,
   type StorePaymentDatum,
 } from "../../clients/woocommerce-store.js";
+import { createPaypalOrder } from "../../clients/paypal.js";
+import { getPaypalPublicSettings } from "../../repositories/paypal.js";
 import { isWpSessionMatchingUser } from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
@@ -42,6 +44,18 @@ import type { CartAddress } from "../../engine/types.js";
 
 const FORCE_LOGOUT_MESSAGE =
   "You have been signed out. Please sign in again to continue.";
+
+const PPCP_GATEWAY = "ppcp-gateway";
+
+function isPaypalPaymentMethod(method: string | null | undefined): boolean {
+  const m = (method ?? "").trim().toLowerCase();
+  return m === PPCP_GATEWAY || m === "paypal" || m.startsWith("ppcp-");
+}
+
+function isStripePaymentMethod(method: string | null | undefined): boolean {
+  const m = (method ?? "").trim().toLowerCase();
+  return !m || m === "stripe" || m.startsWith("stripe");
+}
 
 /** Ensure mc-wp-session matches JWT; refresh via stored WP token when stale. */
 async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
@@ -233,7 +247,14 @@ function paymentFingerprint(
   paymentMethod: string,
   paymentData: StorePaymentDatum[],
 ): string {
+  const paypalOrderId = paymentData.find(
+    (p) =>
+      p.key === "paypal_order_id" &&
+      typeof p.value === "string" &&
+      p.value.length > 0,
+  )?.value;
   const source =
+    paypalOrderId ??
     paymentData.find(
       (p) =>
         (p.key === "wc-stripe-payment-method" ||
@@ -241,7 +262,8 @@ function paymentFingerprint(
           p.key === "_stripe_source_id") &&
         typeof p.value === "string" &&
         /^(pm_|src_|tok_|card_)/i.test(p.value),
-    )?.value ?? JSON.stringify(paymentData);
+    )?.value ??
+    JSON.stringify(paymentData);
   return createHash("sha256")
     .update(`${paymentMethod}:${String(source)}`)
     .digest("hex")
@@ -373,7 +395,91 @@ async function assertCartCouponEmails(
 }
 
 export const checkoutResolvers = {
+  Query: {
+    paypalSettings: async () => getPaypalPublicSettings(),
+  },
   Mutation: {
+    createPayPalOrder: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input?: {
+          clientMutationId?: string | null;
+          orderId?: number | null;
+          orderKey?: string | null;
+        } | null;
+      },
+      ctx: AppContext,
+    ) => {
+      const orderId = input?.orderId != null ? Number(input.orderId) : null;
+
+      if (orderId != null && Number.isFinite(orderId) && orderId > 0) {
+        const ctxOrder = await getOrderPaymentContext(orderId);
+        if (!ctxOrder) throw new Error("Order not found");
+
+        if (ctx.userId != null) {
+          if (ctxOrder.customerId > 0 && ctxOrder.customerId !== ctx.userId) {
+            throw new Error("Order not found");
+          }
+        } else if (ctxOrder.customerId > 0) {
+          throw new Error("Authentication required");
+        }
+
+        if (!ctxOrder.needsPayment) {
+          throw new Error(
+            `Order does not need payment (status: ${ctxOrder.status})`,
+          );
+        }
+
+        const orderKey = (input?.orderKey || ctxOrder.orderKey || "").trim();
+        if (
+          ctxOrder.orderKey &&
+          input?.orderKey &&
+          input.orderKey !== ctxOrder.orderKey
+        ) {
+          throw new Error("Invalid orderKey");
+        }
+        if (!orderKey) {
+          throw new Error("orderKey is required");
+        }
+
+        const paypal = await createPaypalOrder({
+          amount: ctxOrder.total,
+          currency: ctxOrder.currency || "USD",
+          customId: String(orderId),
+          invoiceId: `wc-${orderId}`,
+        });
+
+        return {
+          clientMutationId: input?.clientMutationId ?? null,
+          id: paypal.id,
+          status: paypal.status,
+        };
+      }
+
+      const cart = await loadCart(ctx.sessionToken);
+      if (!cart.items.length) throw new Error("Cart is empty");
+      await assertCartInStock(cart.items);
+      await assertCartCouponEmails(cart, ctx.userId ?? null);
+
+      const calculated = await calculateCart(cart, "full", {
+        userId: ctx.userId,
+      });
+      await saveCart(ctx.sessionToken, calculated.cart);
+
+      const paypal = await createPaypalOrder({
+        amount: calculated.total,
+        currency: "USD",
+      });
+
+      return {
+        clientMutationId: input?.clientMutationId ?? null,
+        id: paypal.id,
+        status: paypal.status,
+      };
+    },
+
     createOrder: async (
       _: unknown,
       { input }: { input: { customerId: number; clientMutationId?: string } },
@@ -618,7 +724,7 @@ export const checkoutResolvers = {
       ]);
 
       // Stripe Store API usually expects billing fields inside payment_data too.
-      if (paymentMethod === "stripe" || paymentMethod.startsWith("stripe")) {
+      if (isStripePaymentMethod(paymentMethod)) {
         const billing = ctxOrder.billing;
         if (billingEmail && !paymentData.some((p) => p.key === "billing_email")) {
           paymentData.push({ key: "billing_email", value: billingEmail });
@@ -640,6 +746,18 @@ export const checkoutResolvers = {
             key: "billing_last_name",
             value: billing.lastName,
           });
+        }
+      }
+
+      if (isPaypalPaymentMethod(paymentMethod)) {
+        const hasPaypalOrder = paymentData.some(
+          (p) =>
+            p.key === "paypal_order_id" &&
+            typeof p.value === "string" &&
+            p.value.length > 0,
+        );
+        if (!hasPaypalOrder) {
+          throw new Error("paypal_order_id is required for PayPal payment");
         }
       }
 

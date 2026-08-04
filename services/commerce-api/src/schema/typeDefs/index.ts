@@ -841,9 +841,9 @@ export const typeDefs = /* GraphQL */ `
     billingEmail: String
     paymentMethod: String
     """
-    Store API payment_data key/values. Prefer _stripe_source_id (pm_…) from the shop;
-    it is mapped to wc-stripe-payment-method + stripe_source. Do not put UPE type
-    slugs like "card" in wc-stripe-payment-method — that key must be the pm_ id.
+    Store API payment_data key/values.
+    Stripe: prefer _stripe_source_id (pm_…) — mapped to wc-stripe-payment-method + stripe_source.
+    PayPal (ppcp-gateway): paypal_order_id + funding_source (same keys PPCP Blocks send).
     """
     paymentData: [MetaDataInput]
   }
@@ -1036,6 +1036,28 @@ export const typeDefs = /* GraphQL */ `
     clientMutationId: String
   }
 
+  """Public WooCommerce PayPal Payments settings (no secrets)."""
+  type PaypalSettings {
+    clientId: String
+    sandbox: Boolean
+    enabled: Boolean
+    merchantId: String
+  }
+
+  input CreatePayPalOrderInput {
+    clientMutationId: String
+    """Pay an existing unpaid WC order (pay-for-order). When set, cart is ignored."""
+    orderId: Int
+    orderKey: String
+  }
+
+  type CreatePayPalOrderPayload {
+    clientMutationId: String
+    """PayPal Orders v2 id — pass to processOrderPayment as paypal_order_id."""
+    id: String
+    status: String
+  }
+
   type Query {
     cart(recalculateTotals: Boolean, calculateShippingTax: Boolean): Cart
     products(first: Int, where: ProductQueryInput): RootQueryToProductConnection
@@ -1045,6 +1067,8 @@ export const typeDefs = /* GraphQL */ `
     mielandSubscriptionSettings: MielandSubscriptionSettings
     mielandSubscriptions(status: String): [MielandSubscription]
     mielandSubscription(id: Int!): MielandSubscription
+    """Public PayPal Smart Button settings from WooCommerce PPCP options."""
+    paypalSettings: PaypalSettings
     posts(first: Int, where: RootQueryToPostConnectionWhereArgs): RootQueryToPostConnection
     post(id: ID!, idType: PostIdType): Post
     categories(first: Int): CategoryConnection
@@ -1064,6 +1088,11 @@ export const typeDefs = /* GraphQL */ `
     createOrder(input: CreateOrderInput!): CreateOrderPayload
     checkout(input: CheckoutInput!): CheckoutPayload
     processOrderPayment(input: ProcessOrderPaymentInput!): ProcessOrderPaymentPayload
+    """
+    Create a PayPal Orders v2 order for the current cart total (or an unpaid WC order).
+    Pass the returned id to checkout / processOrderPayment as paypal_order_id.
+    """
+    createPayPalOrder(input: CreatePayPalOrderInput): CreatePayPalOrderPayload
     updateCustomer(input: UpdateCustomerInput!): UpdateCustomerPayload
     registerCustomer(input: RegisterCustomerInput!): RegisterCustomerPayload
     sendPasswordResetEmail(input: SendPasswordResetEmailInput!): SendPasswordResetEmailPayload

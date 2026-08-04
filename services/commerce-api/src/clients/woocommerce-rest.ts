@@ -91,9 +91,15 @@ export function buildWcOrderFromCart(args: {
     };
   });
 
+  const gateway = paymentMethod || "stripe";
+  const isPaypal =
+    gateway === "ppcp-gateway" ||
+    gateway === "paypal" ||
+    gateway.startsWith("ppcp-");
+
   return {
-    payment_method: paymentMethod || "stripe",
-    payment_method_title: "Credit Card (Stripe)",
+    payment_method: gateway,
+    payment_method_title: isPaypal ? "PayPal" : "Credit Card (Stripe)",
     customer_id:
       customerId !== undefined && customerId !== null
         ? customerId

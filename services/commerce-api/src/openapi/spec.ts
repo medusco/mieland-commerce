@@ -29,7 +29,9 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 \`cart\`, \`products\`, \`customer\`, \`order\`, \`loginClients\`, \`mielandSubscriptionSettings\`, \`mielandSubscriptions\`, \`mielandSubscription\`, \`posts\`, \`post\`, \`categories\`, \`pages\`, \`page\`, \`navigation\`, \`labResults\`
 
 ### Mutations
-\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`
+\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`createPayPalOrder\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`
+
+Query helpers: \`paypalSettings\` (public PayPal client id for Smart Buttons).
 
 Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/graphql\` in non-production.
 `.trim(),
@@ -249,6 +251,40 @@ Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/gra
                         ],
                       },
                     },
+                  },
+                },
+                processOrderPaymentPaypal: {
+                  summary: "processOrderPayment (PayPal ppcp-gateway)",
+                  value: {
+                    query: `mutation PayPaypal($input: ProcessOrderPaymentInput!) {
+  processOrderPayment(input: $input) {
+    result
+    redirect
+    paymentStatus
+    order { databaseId status needsPayment total }
+  }
+}`,
+                    variables: {
+                      input: {
+                        orderId: 123,
+                        paymentMethod: "ppcp-gateway",
+                        paymentData: [
+                          { key: "paypal_order_id", value: "5O190127TN364715T" },
+                          { key: "funding_source", value: "paypal" },
+                        ],
+                      },
+                    },
+                  },
+                },
+                createPayPalOrder: {
+                  summary: "createPayPalOrder (cart total)",
+                  value: {
+                    query: `mutation CreatePayPalOrder {
+  createPayPalOrder(input: {}) {
+    id
+    status
+  }
+}`,
                   },
                 },
                 customerOrders: {

@@ -603,8 +603,10 @@ export async function getOrderPaymentContext(orderId: number) {
     status: string;
     customer_id: number;
     payment_method: string;
+    currency: string;
+    total_amount: string;
   }>(
-    `SELECT id, status, customer_id, payment_method
+    `SELECT id, status, customer_id, payment_method, currency, total_amount
      FROM ${t("wc_orders")} WHERE id = ? AND type = 'shop_order' LIMIT 1`,
     [orderId],
   );
@@ -626,6 +628,8 @@ export async function getOrderPaymentContext(orderId: number) {
     customerId: Number(order.customer_id),
     status,
     paymentMethod: order.payment_method || "stripe",
+    currency: order.currency || "USD",
+    total: money(order.total_amount),
     orderKey: ops?.order_key || meta._order_key || "",
     needsPayment: ["pending", "on-hold", "failed"].includes(status),
     billing,
