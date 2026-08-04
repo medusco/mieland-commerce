@@ -120,6 +120,8 @@ export type OrderListNeeds = {
   shippingLines: boolean;
   taxLines: boolean;
   meta: boolean;
+  /** Call WP mcf-tra bridge to refresh Amazon TRA when cache is empty (detail views). */
+  refreshMcf: boolean;
 };
 
 /** Field needs under an Order selection (path e.g. `["order"]` or `["nodes"]`). */
@@ -139,6 +141,13 @@ export function orderNeedsFromInfo(
     info.fragments,
   );
 
+  const wantsMcf = hasAny(nodeFields, [
+    "amazonMcfTrackingCode",
+    "amazonMcfTracking",
+    "amazonMcfTraNumber",
+    "amazonMcfTraUpdates",
+  ]);
+
   return {
     addresses: hasAny(nodeFields, ["billing", "shipping"]),
     lineItems: nodeFields.some((f) => f.name.value === "lineItems"),
@@ -147,11 +156,9 @@ export function orderNeedsFromInfo(
     ),
     shippingLines: nodeFields.some((f) => f.name.value === "shippingLines"),
     taxLines: nodeFields.some((f) => f.name.value === "taxLines"),
-    meta: hasAny(nodeFields, [
-      "amazonMcfTrackingCode",
-      "amazonMcfTracking",
-      "transactionId",
-    ]),
+    meta: wantsMcf || hasAny(nodeFields, ["transactionId"]),
+    // Live Amazon refresh only for single-order selections (not list `nodes`).
+    refreshMcf: wantsMcf && path[path.length - 1] !== "nodes",
   };
 }
 

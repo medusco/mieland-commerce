@@ -86,6 +86,10 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 ## WP bridge
 
-See `mieland-rest-checkout-bridge.php` in the WordPress mu-plugins tree for Stripe save-payment forcing, cart tax/shipping helpers, and password reset.
+See `mieland-rest-checkout-bridge.php` and `mieland-mcf-tra-api.php` in the WordPress mu-plugins tree for Stripe save-payment forcing, cart tax/shipping helpers, password reset, and MCF TRA.
 
 Password reset: commerce `sendPasswordResetEmail` calls `POST /wp-json/mieland/v1/password-reset`, which runs WordPress `retrieve_password()` (mints key + sends lost-password email). Commerce does not return a reset token or send mail. Apply reset: commerce `resetUserPassword` calls `POST /wp-json/mieland/v1/password-reset/confirm` with `key` + `login` (or `email` / `id`) + new `password`.
+
+MCF TRA: order fields `amazonMcfTraNumber` / `amazonMcfTracking.traNumber` read `_ns_fba_*` order meta. On single-order queries, when TRA (or carrier tracking) is missing but `_sent_to_fba` is set, commerce calls `GET /wp-json/mieland/v1/orders/{id}/mcf-tra` (Amazon GetFulfillmentOrder via the MCF plugin). Set `MIELAND_INTERNAL_REST_SECRET` to match WP. Order lists use cached meta only (`refresh=0` equivalent).
+
+MCF TRA updates: selecting `amazonMcfTraUpdates` on an order calls `GET /wp-json/mieland/v1/orders/{id}/mcf-tra/{traNumber}/updates` (Amazon getPackageTrackingDetails). Optional args: `traNumber` (defaults to primary TRA), `refresh` (default true; `false` is cache-only).

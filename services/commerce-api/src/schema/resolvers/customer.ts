@@ -28,10 +28,13 @@ import {
   updateCustomerProfile,
 } from "../../repositories/customers.js";
 import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
-import { listCustomerOrders, getOrderById } from "../../repositories/orders.js";
+import { listCustomerOrders, getOrderById, getOrderMcfTraUpdates } from "../../repositories/orders.js";
 import { bindCartToCustomer, loadCart, mutateCart } from "../../engine/cart-store.js";
 import { parseDatabaseId } from "../../utils/index.js";
-import { orderListNeedsFromInfo } from "../../utils/selection.js";
+import {
+  orderListNeedsFromInfo,
+  orderNeedsFromInfo,
+} from "../../utils/selection.js";
 import type { CartAddress } from "../../engine/types.js";
 import type { GraphQLResolveInfo } from "graphql";
 
@@ -91,10 +94,11 @@ export const customerResolvers = {
       _: unknown,
       args: { id: string; idType?: string },
       ctx: AppContext,
+      info: GraphQLResolveInfo,
     ) => {
       const userId = requireUser(ctx);
       const id = parseDatabaseId(args.id);
-      return getOrderById(id, userId);
+      return getOrderById(id, userId, orderNeedsFromInfo(info, []));
     },
     loginClients: async () => listEnabledLoginClients(),
   },
@@ -108,6 +112,24 @@ export const customerResolvers = {
       const userId = requireUser(ctx);
       if (parent.databaseId !== userId) throw new Error("Not authorized");
       return listCustomerOrders(userId, orderListNeedsFromInfo(info));
+    },
+  },
+  Order: {
+    amazonMcfTraUpdates: async (
+      parent: {
+        databaseId?: number;
+        amazonMcfTraNumber?: string | null;
+      },
+      args: { traNumber?: string | null; refresh?: boolean | null },
+      ctx: AppContext,
+    ) => {
+      requireUser(ctx);
+      const orderId = parent.databaseId;
+      if (!orderId) return null;
+      return getOrderMcfTraUpdates(orderId, {
+        traNumber: args.traNumber || parent.amazonMcfTraNumber || null,
+        refresh: args.refresh !== false,
+      });
     },
   },
   Mutation: {

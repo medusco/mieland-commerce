@@ -356,6 +356,39 @@ export const typeDefs = /* GraphQL */ `
     carrier: String
     status: String
     estimatedArrival: String
+    sentToFbaAt: String
+    traNumber: String
+  }
+
+  type AmazonMcfTraEventAddress {
+    city: String
+    state: String
+    country: String
+    postalCode: String
+  }
+
+  type AmazonMcfTraUpdate {
+    eventDate: String
+    eventCode: String
+    eventDescription: String
+    eventAddress: AmazonMcfTraEventAddress
+  }
+
+  type AmazonMcfTraUpdates {
+    traNumber: String
+    orderId: Int
+    packageNumber: Int
+    available: Boolean
+    currentStatus: String
+    currentStatusDescription: String
+    trackingNumber: String
+    customerTrackingLink: String
+    carrierCode: String
+    shipDate: String
+    estimatedArrivalDate: String
+    updates: [AmazonMcfTraUpdate]
+    source: String
+    error: String
   }
 
   type Order {
@@ -377,6 +410,9 @@ export const typeDefs = /* GraphQL */ `
     needsPayment: Boolean
     amazonMcfTrackingCode: String
     amazonMcfTracking: AmazonMcfTracking
+    amazonMcfTraNumber: String
+    """Package tracking timeline for a TRA (Amazon getPackageTrackingDetails via WP bridge)."""
+    amazonMcfTraUpdates(traNumber: String, refresh: Boolean = true): AmazonMcfTraUpdates
     billing: CustomerAddress
     shipping: CustomerAddress
     lineItems: LineItemConnection

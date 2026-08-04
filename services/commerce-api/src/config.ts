@@ -55,6 +55,14 @@ const envSchema = z.object({
     emptyToUndefined,
     z.string().default("http://localhost:8000"),
   ),
+  /**
+   * Shared with WP `MIELAND_INTERNAL_REST_SECRET` / option `mieland_internal_rest_secret`.
+   * Sent as `X-Mieland-Internal-Secret` on mieland/v1 internal routes (mcf-tra, cart helpers).
+   */
+  MIELAND_INTERNAL_REST_SECRET: z.preprocess(
+    emptyToUndefined,
+    z.string().default(""),
+  ),
   /** Public uploads/CDN base (WP `S3_UPLOADS_BUCKET_URL`, e.g. https://img.mieland.com). */
   MEDIA_BASE_URL: z.string().default(""),
   WC_CONSUMER_KEY: z.string().default(""),
