@@ -7,9 +7,19 @@ import {
   mutateCart,
   saveCart,
 } from "../../engine/cart-store.js";
-import { parseExtraDataString, type CartState } from "../../engine/types.js";
+import {
+  parseExtraDataString,
+  type CartAddress,
+  type CartState,
+} from "../../engine/types.js";
 import { withCartSubscriptionDisplayPrices, type PricedProductNode } from "../../engine/pricing.js";
-import { assertInStock, calculateCart, type CartTotalsMode } from "../../engine/totals.js";
+import {
+  assertInStock,
+  calculateCart,
+  emptyTaxBreakdown,
+  type CalculatedCart,
+  type CartTotalsMode,
+} from "../../engine/totals.js";
 import { loadCoupon, assertCouponApplicable } from "../../engine/shipping.js";
 import {
   cartNeedsFromInfo,
@@ -17,17 +27,46 @@ import {
   type CartFieldNeeds,
 } from "../../utils/selection.js";
 
+function mapAddressInput(
+  input?: CartAddress | null,
+): CartAddress {
+  if (!input) return {};
+  const out: CartAddress = {};
+  const keys = [
+    "firstName",
+    "lastName",
+    "company",
+    "address1",
+    "address2",
+    "city",
+    "state",
+    "postcode",
+    "country",
+    "phone",
+    "email",
+  ] as const;
+  for (const key of keys) {
+    if (input[key] !== undefined) out[key] = input[key];
+  }
+  return out;
+}
+
 async function shapeCartGraphql(
   ctx: AppContext,
   cart: CartState,
   mode: CartTotalsMode,
   needs: CartFieldNeeds,
+  preCalculated?: CalculatedCart | null,
 ) {
-  const calculated = await calculateCart(cart, mode, {
-    pricing: cartNeedsPricing(needs),
-    userId: ctx.userId,
-  });
+  const calculated =
+    preCalculated ??
+    (await calculateCart(cart, mode, {
+      pricing: cartNeedsPricing(needs),
+      userId: ctx.userId,
+      calculateTax: mode === "full" && needs.cartTotals,
+    }));
   if (
+    !preCalculated &&
     needs.shippingMethods &&
     mode === "full" &&
     JSON.stringify(calculated.chosenShippingMethods) !==
@@ -331,6 +370,87 @@ export const cartResolvers = {
           cart,
           modeFromArgs(input, true),
           cartNeedsFromInfo(info, "payload"),
+        ),
+      };
+    },
+
+    calculateCartTax: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input?: {
+          clientMutationId?: string;
+          address?: CartAddress | null;
+          shippingCost?: string | null;
+          shippingMethodId?: string | null;
+        } | null;
+      },
+      ctx: AppContext,
+      info: GraphQLResolveInfo,
+    ) => {
+      const addressIn = mapAddressInput(input?.address);
+      const hasAddressOverride = Object.keys(addressIn).length > 0;
+
+      let cart = await loadCart(ctx.sessionToken);
+      if (!cart.items.length) throw new Error("Cart is empty");
+
+      if (hasAddressOverride) {
+        cart = await mutateCart(ctx.sessionToken, async (c) => {
+          c.shipping = { ...c.shipping, ...addressIn };
+          if (!c.billing.address1) {
+            const { email: _e, ...asBilling } = addressIn;
+            c.billing = { ...c.billing, ...asBilling };
+          }
+          if (ctx.userId) c.customerId = ctx.userId;
+          return { cart: c, result: c };
+        });
+      }
+
+      const shippingCostRaw = input?.shippingCost;
+      const taxShippingCost =
+        shippingCostRaw != null && shippingCostRaw !== ""
+          ? Number(shippingCostRaw)
+          : null;
+      const taxShippingMethodId = input?.shippingMethodId?.trim() || null;
+
+      const calculated = await calculateCart(cart, "full", {
+        userId: ctx.userId,
+        calculateTax: true,
+        taxAddress: hasAddressOverride ? addressIn : null,
+        taxShippingCost:
+          taxShippingCost != null && Number.isFinite(taxShippingCost)
+            ? taxShippingCost
+            : null,
+        taxShippingMethodId,
+      });
+
+      if (
+        JSON.stringify(calculated.chosenShippingMethods) !==
+        JSON.stringify(cart.chosenShippingMethods)
+      ) {
+        await saveCart(ctx.sessionToken, calculated.cart);
+        cart = calculated.cart;
+      }
+
+      const tax =
+        calculated.taxBreakdown ??
+        emptyTaxBreakdown({
+          message: "Tax was not calculated",
+          subtotal: calculated.subtotal,
+          shippingTotal: calculated.shippingTotal,
+          total: calculated.total,
+        });
+
+      return {
+        clientMutationId: input?.clientMutationId ?? null,
+        tax,
+        cart: await shapeCartGraphql(
+          ctx,
+          cart,
+          "full",
+          cartNeedsFromInfo(info, "payload"),
+          calculated,
         ),
       };
     },

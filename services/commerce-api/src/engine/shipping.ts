@@ -13,7 +13,16 @@ export type ShippingRate = {
   label: string;
   methodId: string;
   cost: string;
+  /** WP instance setting checkbox `expedited` (mieland-shipping-expedited). */
+  isExpedited: boolean;
 };
+
+/** Match WP `mieland_shipping_expedited_is_yes`. */
+function isExpeditedSetting(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    String(value ?? "").trim().toLowerCase(),
+  );
+}
 
 export type ShippingPackage = {
   packageDetails: string;
@@ -229,6 +238,7 @@ export async function resolveShipping(
       label,
       methodId: m.method_id,
       cost: cost.toFixed(2),
+      isExpedited: isExpeditedSetting(settings.expedited),
     });
   }
 
@@ -241,6 +251,7 @@ export async function resolveShipping(
       label: "Free shipping",
       methodId: "free_shipping",
       cost: "0.00",
+      isExpedited: false,
     });
   }
   if (forceFreeShipping) {
@@ -264,16 +275,16 @@ export async function resolveShipping(
   }
 
   // When free shipping is available, only offer free rates and choose them by
-  // default — unless a paid method (e.g. 2-Day Expedited) is already selected.
+  // default — unless an Expedited method (WP checkbox) is already selected.
   const freeRates = rates.filter((r) => Number(r.cost) === 0);
   const existingChosen = cart.chosenShippingMethods.filter((id) =>
     rates.some((r) => r.id === id),
   );
-  const hasChosenPaidRate = existingChosen.some((id) =>
-    rates.some((r) => r.id === id && Number(r.cost) > 0),
+  const hasChosenExpeditedRate = existingChosen.some((id) =>
+    rates.some((r) => r.id === id && r.isExpedited),
   );
   const availableRates =
-    freeRates.length > 0 && !hasChosenPaidRate ? freeRates : rates;
+    freeRates.length > 0 && !hasChosenExpeditedRate ? freeRates : rates;
 
   const packages: ShippingPackage[] = [
     {

@@ -282,6 +282,8 @@ export const typeDefs = /* GraphQL */ `
     instanceId: Int
     label: String
     methodId: String
+    """Whether this rate's shipping method has the Expedited checkbox enabled."""
+    isExpedited: Boolean
   }
 
   type ShippingPackage {
@@ -302,10 +304,43 @@ export const typeDefs = /* GraphQL */ `
     amountRemaining: String
   }
 
+  type CartTaxLine {
+    productId: Int
+    variationId: Int
+    quantity: Float
+    lineTotal: String
+    lineTax: String
+    name: String
+  }
+
+  type CartTaxRateTotal {
+    code: String
+    label: String
+    amount: String
+  }
+
+  """TaxCloud / SST preview from WP mieland/v1/cart-tax."""
+  type CartTaxBreakdown {
+    success: Boolean
+    provider: String
+    taxTotal: String
+    contentsTax: String
+    shippingTax: String
+    feeTax: String
+    subtotal: String
+    shippingTotal: String
+    total: String
+    currency: String
+    message: String
+    taxTotals: [CartTaxRateTotal]
+    items: [CartTaxLine]
+  }
+
   type Cart {
     total(format: PricingFieldFormatEnum): String
     subtotal(format: PricingFieldFormatEnum): String
     shippingTotal(format: PricingFieldFormatEnum): String
+    """TaxCloud preview when delivery address is complete; 0.00 otherwise."""
     totalTax(format: PricingFieldFormatEnum): String
     appliedCoupons: [AppliedCoupon]
     contents: CartToCartItemConnection
@@ -867,6 +902,22 @@ export const typeDefs = /* GraphQL */ `
     calculateShippingTax: Boolean
   }
 
+  input CalculateCartTaxInput {
+    clientMutationId: String
+    """Optional destination override; defaults to cart shipping then billing. Persisted on the cart session when provided."""
+    address: CustomerAddressInput
+    """Optional shipping cost override; defaults to chosen cart shipping."""
+    shippingCost: String
+    shippingMethodId: String
+  }
+
+  type CalculateCartTaxPayload {
+    clientMutationId: String
+    tax: CartTaxBreakdown
+    """Cart with refreshed totalTax / total after tax preview."""
+    cart: Cart
+  }
+
   input CreateOrderInput {
     clientMutationId: String
     customerId: Int!
@@ -1139,6 +1190,11 @@ export const typeDefs = /* GraphQL */ `
     updateShippingMethod(input: UpdateShippingMethodInput!): CartPayload
     applyCoupon(input: ApplyCouponInput!): CartPayload
     removeCoupons(input: RemoveCouponsInput!): CartPayload
+    """
+    Preview TaxCloud sales tax for the session cart (WP mieland/v1/cart-tax).
+    Optional address is saved on the cart; returns breakdown plus refreshed cart totals.
+    """
+    calculateCartTax(input: CalculateCartTaxInput): CalculateCartTaxPayload
     createOrder(input: CreateOrderInput!): CreateOrderPayload
     checkout(input: CheckoutInput!): CheckoutPayload
     processOrderPayment(input: ProcessOrderPaymentInput!): ProcessOrderPaymentPayload

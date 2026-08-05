@@ -1,4 +1,4 @@
-import type { CartState } from "./types.js";
+import type { CartAddress, CartState } from "./types.js";
 import { getItemFrequency } from "./types.js";
 import { getSubscriptionDiscounts, lineUnitPrice, applyPercentCouponToUnitPrice } from "./pricing.js";
 import {
@@ -13,9 +13,36 @@ import {
   getProductPrices,
   getStockInfo,
 } from "../repositories/products.js";
+import {
+  fetchCartTax,
+  type CartTaxResponse,
+} from "../clients/mieland-wp-bridge.js";
 import { moneyStr, roundMoney } from "../utils/index.js";
 
 export type CartTotalsMode = "lightweight" | "full";
+
+export type CartTaxBreakdown = {
+  success: boolean;
+  provider: string | null;
+  taxTotal: string;
+  contentsTax: string;
+  shippingTax: string;
+  feeTax: string;
+  subtotal: string;
+  shippingTotal: string;
+  total: string;
+  currency: string | null;
+  message: string | null;
+  taxTotals: Array<{ code: string; label: string; amount: string }>;
+  items: Array<{
+    productId: number;
+    variationId: number;
+    quantity: number;
+    lineTotal: string;
+    lineTax: string;
+    name: string;
+  }>;
+};
 
 export type CalculatedCart = {
   cart: CartState;
@@ -35,6 +62,7 @@ export type CalculatedCart = {
   total: string;
   shippingTotal: string;
   totalTax: string;
+  taxBreakdown: CartTaxBreakdown | null;
   appliedCoupons: Array<{
     code: string;
     description: string;
@@ -53,7 +81,109 @@ export type CalculateCartOptions = {
   pricing?: boolean;
   /** Logged-in user id — passed through for callers; email checks run at checkout. */
   userId?: number | null;
+  /**
+   * Call WP cart-tax bridge (TaxCloud). Defaults to true in full mode when
+   * destination address is complete. Set false to skip (e.g. shipping-only).
+   */
+  calculateTax?: boolean;
+  /** Override destination for tax preview (does not mutate cart). */
+  taxAddress?: CartAddress | null;
+  /** Override shipping cost sent to the tax bridge. */
+  taxShippingCost?: number | null;
+  /** Override shipping method id sent to the tax bridge. */
+  taxShippingMethodId?: string | null;
 };
+
+const TAX_ADDRESS_FIELDS = [
+  "country",
+  "state",
+  "postcode",
+  "city",
+  "address1",
+] as const;
+
+export function emptyTaxBreakdown(
+  overrides: Partial<CartTaxBreakdown> = {},
+): CartTaxBreakdown {
+  return {
+    success: false,
+    provider: null,
+    taxTotal: "0.00",
+    contentsTax: "0.00",
+    shippingTax: "0.00",
+    feeTax: "0.00",
+    subtotal: "0.00",
+    shippingTotal: "0.00",
+    total: "0.00",
+    currency: null,
+    message: null,
+    taxTotals: [],
+    items: [],
+    ...overrides,
+  };
+}
+
+export function mapCartTaxResponse(
+  res: CartTaxResponse | null,
+): CartTaxBreakdown {
+  if (!res) {
+    return emptyTaxBreakdown({
+      message: "Tax calculation unavailable",
+    });
+  }
+  const success = res.success !== false && res.taxTotal != null;
+  return {
+    success,
+    provider: res.provider ?? null,
+    taxTotal: res.taxTotal ?? "0.00",
+    contentsTax: res.contentsTax ?? "0.00",
+    shippingTax: res.shippingTax ?? "0.00",
+    feeTax: res.feeTax ?? "0.00",
+    subtotal: res.subtotal ?? "0.00",
+    shippingTotal: res.shippingTotal ?? "0.00",
+    total: res.total ?? "0.00",
+    currency: res.currency ?? null,
+    message: res.message ?? null,
+    taxTotals: (res.taxTotals ?? []).map((t) => ({
+      code: t.code,
+      label: t.label,
+      amount: t.amount,
+    })),
+    items: (res.items ?? []).map((item) => ({
+      productId: item.productId,
+      variationId: item.variationId,
+      quantity: item.quantity,
+      lineTotal: item.lineTotal,
+      lineTax: item.lineTax,
+      name: item.name,
+    })),
+  };
+}
+
+function resolveTaxAddress(
+  cart: CartState,
+  override?: CartAddress | null,
+): CartAddress {
+  if (override && TAX_ADDRESS_FIELDS.every((f) => override[f])) {
+    return override;
+  }
+  const shipping = cart.shipping;
+  const billing = cart.billing;
+  if (TAX_ADDRESS_FIELDS.every((f) => shipping[f])) return shipping;
+  if (TAX_ADDRESS_FIELDS.every((f) => billing[f])) return billing;
+  return {
+    country: shipping.country || billing.country,
+    state: shipping.state || billing.state,
+    postcode: shipping.postcode || billing.postcode,
+    city: shipping.city || billing.city,
+    address1: shipping.address1 || billing.address1,
+    address2: shipping.address2 || billing.address2,
+  };
+}
+
+function taxAddressComplete(addr: CartAddress): boolean {
+  return TAX_ADDRESS_FIELDS.every((f) => Boolean(addr[f]?.trim()));
+}
 
 export async function calculateCart(
   cart: CartState,
@@ -82,6 +212,7 @@ export async function calculateCart(
       total: "0.00",
       shippingTotal: "0.00",
       totalTax: "0.00",
+      taxBreakdown: null,
       appliedCoupons: [],
       availableShippingMethods: [],
       chosenShippingMethods: cart.chosenShippingMethods,
@@ -148,7 +279,61 @@ export async function calculateCart(
     freeShippingInfo = shipping.freeShippingInfo;
   }
 
-  const totalTax = 0;
+  let totalTax = 0;
+  let taxBreakdown: CartTaxBreakdown | null = null;
+  const wantTax = options.calculateTax !== false && mode === "full";
+
+  if (wantTax && cart.items.length > 0) {
+    const address = resolveTaxAddress(cart, options.taxAddress);
+    if (taxAddressComplete(address)) {
+      const chosenRate = packages
+        .flatMap((p) => p.rates)
+        .find((r) => chosen.includes(r.id));
+      const methodId =
+        options.taxShippingMethodId ??
+        chosenRate?.methodId ??
+        chosen[0]?.split(":")[0] ??
+        "flat_rate";
+      const shipCost =
+        options.taxShippingCost != null
+          ? options.taxShippingCost
+          : shippingTotal;
+
+      const bridge = await fetchCartTax({
+        items: displayLines.map((line) => ({
+          productId: line.productId,
+          variationId: line.variationId ?? 0,
+          quantity: line.quantity,
+          unitPrice: line.displayUnitPrice,
+        })),
+        address: {
+          country: address.country,
+          state: address.state,
+          postcode: address.postcode,
+          city: address.city,
+          address1: address.address1,
+          address2: address.address2 ?? "",
+        },
+        shipping: {
+          cost: shipCost,
+          methodId,
+        },
+        customerId: cart.customerId ?? options.userId ?? 0,
+      });
+
+      taxBreakdown = mapCartTaxResponse(bridge);
+      if (taxBreakdown.success) {
+        totalTax = roundMoney(Number(taxBreakdown.taxTotal) || 0);
+      }
+    } else {
+      taxBreakdown = emptyTaxBreakdown({
+        message: "Incomplete delivery address",
+        shippingTotal: moneyStr(shippingTotal),
+        subtotal: moneyStr(subtotalNum),
+      });
+    }
+  }
+
   const total = roundMoney(afterDiscount + shippingTotal + totalTax);
 
   return {
@@ -159,6 +344,7 @@ export async function calculateCart(
     total: moneyStr(total),
     shippingTotal: moneyStr(shippingTotal),
     totalTax: moneyStr(totalTax),
+    taxBreakdown,
     appliedCoupons: applied,
     availableShippingMethods: packages,
     chosenShippingMethods: chosen,

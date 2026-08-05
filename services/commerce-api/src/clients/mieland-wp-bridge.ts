@@ -154,11 +154,131 @@ export async function fetchMcfTraUpdates(
     }
     return (await res.json()) as McfTraUpdatesResponse;
   } catch (error) {
+      console.warn(
+        JSON.stringify({
+          msg: "mcf_tra_updates_bridge_error",
+          traNumber,
+          orderId: options.orderId ?? null,
+          err: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return null;
+    }
+  }
+
+export type CartTaxItemRequest = {
+  productId: number;
+  quantity: number;
+  variationId?: number | null;
+  unitPrice?: number | null;
+};
+
+export type CartTaxAddressRequest = {
+  country?: string;
+  state?: string;
+  postcode?: string;
+  city?: string;
+  address1?: string;
+  address2?: string;
+};
+
+export type CartTaxShippingRequest = {
+  cost?: number;
+  methodId?: string;
+};
+
+export type CartTaxRequest = {
+  items: CartTaxItemRequest[];
+  address: CartTaxAddressRequest;
+  shipping?: CartTaxShippingRequest;
+  customerId?: number;
+};
+
+export type CartTaxLineResponse = {
+  productId: number;
+  variationId: number;
+  quantity: number;
+  lineTotal: string;
+  lineTax: string;
+  name: string;
+};
+
+export type CartTaxRateTotalResponse = {
+  code: string;
+  label: string;
+  amount: string;
+};
+
+export type CartTaxResponse = {
+  success?: boolean;
+  provider?: string;
+  taxTotal?: string;
+  contentsTax?: string;
+  shippingTax?: string;
+  feeTax?: string;
+  subtotal?: string;
+  shippingTotal?: string;
+  total?: string;
+  currency?: string;
+  message?: string;
+  taxTotals?: CartTaxRateTotalResponse[];
+  items?: CartTaxLineResponse[];
+  address?: CartTaxAddressRequest;
+  missing?: string[];
+};
+
+/**
+ * POST /wp-json/mieland/v1/cart-tax
+ * TaxCloud / SST preview via WP Simple Sales Tax (no WC order created).
+ */
+export async function fetchCartTax(
+  body: CartTaxRequest,
+  options: { timeoutMs?: number } = {},
+): Promise<CartTaxResponse | null> {
+  const cfg = loadConfig();
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  const base = cfg.WORDPRESS_URL.replace(/\/$/, "");
+  const url = `${base}/wp-json/mieland/v1/cart-tax`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...internalHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      let message: string | null = null;
+      try {
+        const errBody = (await res.json()) as CartTaxResponse;
+        message = errBody.message ?? null;
+      } catch {
+        /* ignore */
+      }
+      console.warn(
+        JSON.stringify({
+          msg: "cart_tax_bridge_failed",
+          status: res.status,
+          message,
+        }),
+      );
+      return {
+        success: false,
+        message: message ?? `cart-tax bridge HTTP ${res.status}`,
+        taxTotal: "0.00",
+        contentsTax: "0.00",
+        shippingTax: "0.00",
+        feeTax: "0.00",
+      };
+    }
+    return (await res.json()) as CartTaxResponse;
+  } catch (error) {
     console.warn(
       JSON.stringify({
-        msg: "mcf_tra_updates_bridge_error",
-        traNumber,
-        orderId: options.orderId ?? null,
+        msg: "cart_tax_bridge_error",
         err: error instanceof Error ? error.message : String(error),
       }),
     );
