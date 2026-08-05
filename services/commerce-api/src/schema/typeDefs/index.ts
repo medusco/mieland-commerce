@@ -1075,6 +1075,8 @@ export const typeDefs = /* GraphQL */ `
     order: Order
     redirect: String
     result: String
+    """TaxCloud / SST preview from calculateCart(full) at checkout time."""
+    tax: CartTaxBreakdown
     clientMutationId: String
   }
 

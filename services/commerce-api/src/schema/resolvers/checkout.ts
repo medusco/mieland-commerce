@@ -4,7 +4,11 @@ import type { GraphQLResolveInfo } from "graphql";
 import type { AppContext } from "../../context.js";
 import { FORCE_LOGOUT_CODE, requireUser, scheduleForceLogout } from "../../context.js";
 import { clearCart, loadCart, mutateCart, saveCart } from "../../engine/cart-store.js";
-import { assertInStock, calculateCart } from "../../engine/totals.js";
+import {
+  assertInStock,
+  calculateCart,
+  emptyTaxBreakdown,
+} from "../../engine/totals.js";
 import {
   buildWcOrderFromCart,
   createWcOrder,
@@ -650,12 +654,22 @@ export const checkoutResolvers = {
             }
         : null;
 
+      const tax =
+        calculated.taxBreakdown ??
+        emptyTaxBreakdown({
+          message: "Tax was not calculated",
+          subtotal: calculated.subtotal,
+          shippingTotal: calculated.shippingTotal,
+          total: calculated.total,
+        });
+
       return {
         clientMutationId: input.clientMutationId,
         customer,
         order,
         redirect: null,
         result: "success",
+        tax,
       };
     },
 
