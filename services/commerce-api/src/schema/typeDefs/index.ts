@@ -342,6 +342,10 @@ export const typeDefs = /* GraphQL */ `
     shippingTotal(format: PricingFieldFormatEnum): String
     """TaxCloud preview when delivery address is complete; 0.00 otherwise."""
     totalTax(format: PricingFieldFormatEnum): String
+    """Whether the last TaxCloud / SST preview succeeded (null when tax was not run)."""
+    taxSuccess: Boolean
+    """Debug / error detail from TaxCloud preview (null when tax was not run)."""
+    taxMessage: String
     appliedCoupons: [AppliedCoupon]
     contents: CartToCartItemConnection
     availableShippingMethods: [ShippingPackage]

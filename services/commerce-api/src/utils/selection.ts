@@ -91,6 +91,8 @@ export function cartNeedsFromInfo(
       "subtotal",
       "shippingTotal",
       "totalTax",
+      "taxSuccess",
+      "taxMessage",
     ]),
     shippingMethods: hasAny(cartFields, [
       "availableShippingMethods",
