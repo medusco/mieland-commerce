@@ -111,8 +111,10 @@ export const typeDefs = /* GraphQL */ `
 
   type Comment {
     id: ID
+    databaseId: Int
     date: String
     content: String
+    status: String
     karma: Int
     author: CommentAuthorEdge
   }
@@ -125,6 +127,22 @@ export const typeDefs = /* GraphQL */ `
   type ProductReviews {
     averageRating: Float
     edges: [ProductReviewEdge]
+  }
+
+  """WooGraphQL-compatible product review input (commentOn = product databaseId)."""
+  input WriteReviewInput {
+    clientMutationId: String
+    commentOn: Int!
+    rating: Int!
+    content: String!
+    author: String
+    authorEmail: String
+  }
+
+  type WriteReviewPayload {
+    clientMutationId: String
+    rating: Float
+    review: Comment
   }
 
   interface Product {
@@ -1146,5 +1164,10 @@ export const typeDefs = /* GraphQL */ `
     refreshToken(input: RefreshTokenInput!): RefreshTokenPayload
     updateMielandSubscription(input: UpdateMielandSubscriptionInput!): UpdateMielandSubscriptionPayload
     cancelMielandSubscription(input: CancelMielandSubscriptionInput!): CancelMielandSubscriptionPayload
+    """
+    Leave a WooCommerce product review. Requires Authorization Bearer JWT.
+    Creates the review via WC REST and associates it with the authenticated user.
+    """
+    writeReview(input: WriteReviewInput!): WriteReviewPayload
   }
 `;

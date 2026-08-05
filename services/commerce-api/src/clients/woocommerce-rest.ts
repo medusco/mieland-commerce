@@ -268,3 +268,51 @@ export async function createWcCoupon(
       typeof body.description === "string" ? body.description : payload.description,
   };
 }
+
+export type WcProductReviewCreatePayload = {
+  product_id: number;
+  review: string;
+  reviewer: string;
+  reviewer_email: string;
+  rating: number;
+  /** WC comment status: approved | hold | spam | trash */
+  status?: "approved" | "hold" | "spam" | "trash";
+};
+
+export type WcProductReviewResponse = {
+  id: number;
+  product_id: number;
+  status: string;
+  reviewer: string;
+  reviewer_email: string;
+  review: string;
+  rating: number;
+  date_created: string | null;
+};
+
+/** Create a WooCommerce product review via REST `/wc/v3/products/reviews`. */
+export async function createWcProductReview(
+  payload: WcProductReviewCreatePayload,
+): Promise<WcProductReviewResponse> {
+  const body = await wcRestRequest(
+    "POST",
+    wcRestUrl("/products/reviews"),
+    payload as unknown as Record<string, unknown>,
+    "wc_rest_create_product_review",
+  );
+  const id = Number(body.id);
+  if (!id) {
+    throw new Error("WC REST product review create returned an invalid response");
+  }
+  return {
+    id,
+    product_id: Number(body.product_id ?? payload.product_id),
+    status: String(body.status ?? payload.status ?? "hold"),
+    reviewer: String(body.reviewer ?? payload.reviewer),
+    reviewer_email: String(body.reviewer_email ?? payload.reviewer_email),
+    review: String(body.review ?? payload.review),
+    rating: Number(body.rating ?? payload.rating),
+    date_created:
+      typeof body.date_created === "string" ? body.date_created : null,
+  };
+}

@@ -263,9 +263,17 @@ export async function resolveShipping(
     }
   }
 
-  // When free shipping is available, only offer free rates and always choose them.
+  // When free shipping is available, only offer free rates and choose them by
+  // default — unless a paid method (e.g. 2-Day Expedited) is already selected.
   const freeRates = rates.filter((r) => Number(r.cost) === 0);
-  const availableRates = freeRates.length > 0 ? freeRates : rates;
+  const existingChosen = cart.chosenShippingMethods.filter((id) =>
+    rates.some((r) => r.id === id),
+  );
+  const hasChosenPaidRate = existingChosen.some((id) =>
+    rates.some((r) => r.id === id && Number(r.cost) > 0),
+  );
+  const availableRates =
+    freeRates.length > 0 && !hasChosenPaidRate ? freeRates : rates;
 
   const packages: ShippingPackage[] = [
     {
@@ -274,14 +282,15 @@ export async function resolveShipping(
     },
   ];
 
-  let chosenIds =
-    freeRates.length > 0
-      ? [freeRates[0]!.id]
-      : cart.chosenShippingMethods.filter((id) =>
-          availableRates.some((r) => r.id === id),
-        );
-  if (!chosenIds.length && availableRates.length) {
-    chosenIds = [availableRates[0]!.id];
+  let chosenIds = existingChosen.filter((id) =>
+    availableRates.some((r) => r.id === id),
+  );
+  if (!chosenIds.length) {
+    if (freeRates.length > 0) {
+      chosenIds = [freeRates[0]!.id];
+    } else if (availableRates.length) {
+      chosenIds = [availableRates[0]!.id];
+    }
   }
 
   const chosenCost = chosenIds.reduce((sum, id) => {

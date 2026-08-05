@@ -4,6 +4,7 @@ import { customerResolvers } from "./customer.js";
 import { subscriptionResolvers } from "./subscriptions.js";
 import { contentResolvers } from "./content.js";
 import { checkoutResolvers } from "./checkout.js";
+import { reviewResolvers } from "./reviews.js";
 
 function mergeResolvers(
   ...maps: Array<Record<string, Record<string, unknown>>>
@@ -24,4 +25,5 @@ export const resolvers = mergeResolvers(
   subscriptionResolvers,
   contentResolvers,
   checkoutResolvers,
+  reviewResolvers,
 );
