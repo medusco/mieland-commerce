@@ -132,10 +132,12 @@ export function mapCartTaxResponse(
     });
   }
   const success = res.success !== false && res.taxTotal != null;
+  const provider = res.provider ?? null;
+  const taxTotal = res.taxTotal ?? "0.00";
   return {
     success,
-    provider: res.provider ?? null,
-    taxTotal: res.taxTotal ?? "0.00",
+    provider,
+    taxTotal,
     contentsTax: res.contentsTax ?? "0.00",
     shippingTax: res.shippingTax ?? "0.00",
     feeTax: res.feeTax ?? "0.00",
@@ -143,7 +145,12 @@ export function mapCartTaxResponse(
     shippingTotal: res.shippingTotal ?? "0.00",
     total: res.total ?? "0.00",
     currency: res.currency ?? null,
-    message: res.message ?? null,
+    // WP success payloads omit message — always fill one for checkout debug.
+    message:
+      res.message ??
+      (success
+        ? `OK — taxTotal ${taxTotal} via ${provider ?? "unknown"}`
+        : "Tax calculation failed"),
     taxTotals: (res.taxTotals ?? []).map((t) => ({
       code: t.code,
       label: t.label,
