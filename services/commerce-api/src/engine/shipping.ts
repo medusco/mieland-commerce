@@ -276,7 +276,7 @@ export async function resolveShipping(
 
   // When free shipping is available, offer free rates plus Expedited methods
   // (WP checkbox) so customers can upgrade; hide other paid non-expedited rates.
-  // Always keep expedited visible even when free shipping is selected/defaulted.
+  // Subscription carts force free shipping and cannot use expedited delivery.
   const freeRates = rates.filter((r) => Number(r.cost) === 0);
   const existingChosen = cart.chosenShippingMethods.filter((id) =>
     rates.some((r) => r.id === id),
@@ -285,9 +285,13 @@ export async function resolveShipping(
     freeRates.length > 0
       ? [
           ...freeRates,
-          ...rates.filter((r) => r.isExpedited && Number(r.cost) !== 0),
+          ...(forceFreeShipping
+            ? []
+            : rates.filter((r) => r.isExpedited && Number(r.cost) !== 0)),
         ]
-      : rates;
+      : forceFreeShipping
+        ? rates.filter((r) => !r.isExpedited)
+        : rates;
 
   const packages: ShippingPackage[] = [
     {
