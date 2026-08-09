@@ -188,19 +188,22 @@ export function hashWpPassword(password: string): string {
   return `$wp${normalized}`;
 }
 
-const ACCESS_TTL = "1h";
-const REFRESH_TTL_SECONDS = 60 * 60 * 24 * 30;
-
 export async function issueTokens(user: AuthUser): Promise<{
   authToken: string;
   authTokenExpiration: string;
   refreshToken: string;
   refreshTokenExpiration: string;
 }> {
+  const cfg = loadConfig();
+  const accessTtlSeconds = Math.max(60, Math.floor(cfg.JWT_ACCESS_TTL_SECONDS));
+  const refreshTtlSeconds = Math.max(
+    accessTtlSeconds,
+    Math.floor(cfg.JWT_REFRESH_TTL_SECONDS),
+  );
   const secret = await loadJwtSecret();
   const now = Math.floor(Date.now() / 1000);
-  const accessExp = now + 60 * 60;
-  const refreshExp = now + REFRESH_TTL_SECONDS;
+  const accessExp = now + accessTtlSeconds;
+  const refreshExp = now + refreshTtlSeconds;
 
   const authToken = await new jose.SignJWT({
     sub: String(user.id),
@@ -209,7 +212,7 @@ export async function issueTokens(user: AuthUser): Promise<{
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt(now)
-    .setExpirationTime(ACCESS_TTL)
+    .setExpirationTime(accessExp)
     .sign(secret);
 
   const refreshSecret = randomToken(24);
@@ -218,7 +221,7 @@ export async function issueTokens(user: AuthUser): Promise<{
     `refresh:${user.id}:${refreshSecret}`,
     String(user.id),
     "EX",
-    REFRESH_TTL_SECONDS,
+    refreshTtlSeconds,
   );
 
   const refreshToken = await new jose.SignJWT({
@@ -300,8 +303,9 @@ export async function refreshAuthToken(refreshToken: string): Promise<{
     const user = await findUserById(userId);
     if (!user) return null;
     const tokens = await issueTokens(user);
-    // rotate: delete old refresh after issuing the replacement
-    await redis.del(`refresh:${userId}:${jti}`);
+    // Keep the prior refresh key briefly so a lost response / double-refresh
+    // does not force an immediate logout.
+    await redis.expire(`refresh:${userId}:${jti}`, 60);
     return { userId, ...tokens };
   } catch {
     return null;

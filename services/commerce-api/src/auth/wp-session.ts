@@ -34,9 +34,11 @@ export function buildWpAuthSetCookie(
   ttlSeconds?: number,
   opts?: WpAuthSetCookieOptions,
 ): string {
+  // Never emit a wrapper shorter than 14 days — WP often returns ~2d Max-Age
+  // without remember-me; JWT refresh renews the inner cookies while this lasts.
   const ttl =
     Number.isFinite(ttlSeconds) && (ttlSeconds as number) > 0
-      ? Math.floor(ttlSeconds as number)
+      ? Math.max(DEFAULT_TTL_SECONDS, Math.floor(ttlSeconds as number))
       : DEFAULT_TTL_SECONDS;
   const cfg = loadConfig();
   const crossSite = Boolean(opts?.crossSite || cfg.isProd);

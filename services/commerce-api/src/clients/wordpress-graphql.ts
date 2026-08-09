@@ -94,6 +94,9 @@ mutation RefreshAuthToken($input: RefreshTokenInput!) {
 const DEFAULT_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
 const AUTH_COOKIE_NAME_RE =
   /^(wordpress_logged_in_|wordpress_sec_|wordpress_[a-f0-9]|woocommerce_session_|woocommerce_)/i;
+/** Only WP login cookies drive mc-wp-session Max-Age (not short Woo sessions). */
+const WP_LOGIN_COOKIE_NAME_RE =
+  /^(wordpress_logged_in_|wordpress_sec_|wordpress_[a-f0-9])/i;
 
 function graphqlUrl(): string {
   const cfg = loadConfig();
@@ -140,13 +143,14 @@ export type ParsedAuthCookies = {
 
 /**
  * Turn Set-Cookie headers into a Cookie request header, keeping WP/Woo auth cookies.
- * Also computes a TTL from Max-Age / Expires (minimum across cookies, floored).
+ * TTL comes from wordpress_logged_in_* / wordpress_sec_* only (never Woo session),
+ * and is floored at 14 days so mc-wp-session outlives WP's default 2-day cookies.
  */
 export function parseAuthCookiesFromSetCookie(
   setCookies: string[],
 ): ParsedAuthCookies {
   const pairs: Array<{ name: string; value: string }> = [];
-  let ttlSeconds = DEFAULT_COOKIE_TTL_SECONDS;
+  let wpLoginTtlSeconds: number | null = null;
   const now = Date.now();
 
   for (const raw of setCookies) {
@@ -159,19 +163,30 @@ export function parseAuthCookiesFromSetCookie(
     if (!AUTH_COOKIE_NAME_RE.test(name)) continue;
     pairs.push({ name, value });
 
+    if (!WP_LOGIN_COOKIE_NAME_RE.test(name)) continue;
+
     const attrs = raw.slice(first.length);
+    let cookieTtl: number | null = null;
     const maxAge = attrs.match(/;\s*Max-Age=(\d+)/i);
     if (maxAge) {
       const n = Number(maxAge[1]);
-      if (Number.isFinite(n) && n > 0) ttlSeconds = Math.min(ttlSeconds, n);
+      if (Number.isFinite(n) && n > 0) cookieTtl = n;
     }
     const expires = attrs.match(/;\s*Expires=([^;]+)/i);
     if (expires) {
       const t = Date.parse(expires[1].trim());
       if (Number.isFinite(t) && t > now) {
         const secs = Math.floor((t - now) / 1000);
-        if (secs > 0) ttlSeconds = Math.min(ttlSeconds, secs);
+        if (secs > 0) {
+          cookieTtl = cookieTtl == null ? secs : Math.min(cookieTtl, secs);
+        }
       }
+    }
+    if (cookieTtl != null) {
+      wpLoginTtlSeconds =
+        wpLoginTtlSeconds == null
+          ? cookieTtl
+          : Math.min(wpLoginTtlSeconds, cookieTtl);
     }
   }
 
@@ -184,7 +199,11 @@ export function parseAuthCookiesFromSetCookie(
 
   return {
     cookieHeader,
-    ttlSeconds: Math.max(60, ttlSeconds),
+    // Browser wrapper must stay long enough for JWT refresh to renew WP cookies.
+    ttlSeconds: Math.max(
+      DEFAULT_COOKIE_TTL_SECONDS,
+      wpLoginTtlSeconds ?? DEFAULT_COOKIE_TTL_SECONDS,
+    ),
   };
 }
 

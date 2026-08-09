@@ -94,6 +94,19 @@ const envSchema = z.object({
     z.string().default("http://localhost:3000,http://localhost:3001"),
   ),
   JWT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
+  /**
+   * Commerce access JWT lifetime (default 14 days). Storefront stays signed in
+   * without needing a refresh within this window.
+   */
+  JWT_ACCESS_TTL_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(60 * 60 * 24 * 14),
+  ),
+  /** Commerce refresh JWT + Redis key lifetime (default 30 days). */
+  JWT_REFRESH_TTL_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(60 * 60 * 24 * 30),
+  ),
   GRAPHQL_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
   MAX_BODY_BYTES: z.preprocess(
     emptyToUndefined,
