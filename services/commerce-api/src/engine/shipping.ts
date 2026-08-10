@@ -365,12 +365,19 @@ export type LoadedCoupon = {
   freeShipping: boolean;
   /** Template coupons flagged in Woo admin — not directly applicable at checkout. */
   isPersonalized: boolean;
+  /**
+   * Issued personal coupon for a specific signup email
+   * (`mieland_personal_coupon_email` postmeta). Requires applicant email at apply.
+   */
+  isPersonalIssue: boolean;
   /** Lowercased emails from WC `customer_email` / email_restrictions. Empty = unrestricted. */
   emailRestrictions: string[];
   /** Woo `usage_count` — times this coupon has been redeemed. */
   usageCount: number;
   /** Woo `usage_limit` — null means unlimited. */
   usageLimit: number | null;
+  /** Count of Woo `_used_by` rows (permanent redemptions). */
+  usedByCount: number;
 };
 
 /** Parse WooCommerce coupon email_restrictions (`customer_email` postmeta). */
@@ -419,17 +426,30 @@ export function couponAllowsEmails(
   return applicantEmails.some((e) => allowed.has(e));
 }
 
+/** Personal issued / email-restricted coupons must know the shopper email at apply. */
+export function couponRequiresApplicantEmail(
+  coupon: Pick<LoadedCoupon, "isPersonalIssue" | "emailRestrictions">,
+): boolean {
+  return coupon.isPersonalIssue || coupon.emailRestrictions.length > 0;
+}
+
 export function assertCouponEmailAllowed(
-  coupon: Pick<LoadedCoupon, "emailRestrictions" | "code">,
+  coupon: Pick<
+    LoadedCoupon,
+    "emailRestrictions" | "code" | "isPersonalIssue"
+  >,
   applicantEmails: string[],
 ): void {
-  if (!coupon.emailRestrictions.length) return;
+  if (!couponRequiresApplicantEmail(coupon)) return;
   if (!applicantEmails.length) {
     throw new Error(
       "Enter your email address before applying this personalized discount.",
     );
   }
-  if (!couponAllowsEmails(coupon, applicantEmails)) {
+  if (
+    coupon.emailRestrictions.length &&
+    !couponAllowsEmails(coupon, applicantEmails)
+  ) {
     throw new Error("This coupon cannot be used with your email address.");
   }
 }
@@ -437,7 +457,12 @@ export function assertCouponEmailAllowed(
 export function assertCouponApplicable(
   coupon: Pick<
     LoadedCoupon,
-    "code" | "isPersonalized" | "usageCount" | "usageLimit"
+    | "code"
+    | "isPersonalized"
+    | "isPersonalIssue"
+    | "usageCount"
+    | "usageLimit"
+    | "usedByCount"
   >,
 ): void {
   if (coupon.isPersonalized) {
@@ -445,7 +470,16 @@ export function assertCouponApplicable(
       "This coupon cannot be applied directly. Use the code sent to your email after signing up.",
     );
   }
-  if (isCouponUsageExhausted(coupon.usageCount, coupon.usageLimit)) {
+  const limit =
+    coupon.usageLimit ?? (coupon.isPersonalIssue ? 1 : null);
+  if (isCouponUsageExhausted(coupon.usageCount, limit)) {
+    throw new Error("This coupon has already been used.");
+  }
+  if (
+    coupon.isPersonalIssue &&
+    limit != null &&
+    coupon.usedByCount >= limit
+  ) {
     throw new Error("This coupon has already been used.");
   }
 }
@@ -472,13 +506,17 @@ export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
     [post.ID],
   );
   const meta = Object.fromEntries(metaRows.map((r) => [r.meta_key, r.meta_value]));
+  const personalEmailRaw = String(meta.mieland_personal_coupon_email ?? "").trim();
+  const isPersonalIssue = Boolean(personalEmailRaw);
   let emailRestrictions = parseCouponEmailRestrictions(meta.customer_email);
   // Fallback for personal coupons if WC meta is missing but our marker exists.
-  if (!emailRestrictions.length && meta.mieland_personal_coupon_email) {
-    emailRestrictions = parseCouponEmailRestrictions(
-      meta.mieland_personal_coupon_email,
-    );
+  if (!emailRestrictions.length && personalEmailRaw) {
+    emailRestrictions = parseCouponEmailRestrictions(personalEmailRaw);
   }
+  // `_used_by` can appear as multiple postmeta rows — Object.fromEntries keeps one.
+  const usedByCount = metaRows.filter(
+    (row) => row.meta_key === "_used_by" || row.meta_key === "used_by",
+  ).length;
   return {
     id: post.ID,
     code: (post.post_title || normalized).trim().toUpperCase(),
@@ -487,9 +525,11 @@ export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
     amount: Number(meta.coupon_amount ?? 0),
     freeShipping: meta.free_shipping === "yes",
     isPersonalized: parseIsPersonalizedCoupon(meta),
+    isPersonalIssue,
     emailRestrictions,
     usageCount: parseCouponUsageCount(meta.usage_count),
     usageLimit: parseCouponUsageLimit(meta.usage_limit),
+    usedByCount,
   };
 }
 

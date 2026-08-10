@@ -24,6 +24,7 @@ import {
   loadCoupon,
   assertCouponApplicable,
   assertCouponEmailAllowed,
+  couponRequiresApplicantEmail,
   normalizeApplicantEmails,
 } from "../../engine/shipping.js";
 import {
@@ -364,21 +365,33 @@ export const cartResolvers = {
       if (!coupon) throw new Error("Invalid coupon code");
       const existingCart = await loadCart(ctx.sessionToken);
       const inputEmail = input.email?.trim().toLowerCase() || null;
-      let billingEmail =
-        inputEmail || existingCart.billing.email?.trim().toLowerCase() || null;
-      if (!billingEmail && ctx.userId) {
-        const user = await findUserById(ctx.userId);
-        billingEmail = user?.email?.trim().toLowerCase() || null;
-      }
-      // Personal / email-restricted coupons require a known email at apply time.
+      const cartEmail =
+        existingCart.billing.email?.trim().toLowerCase() || null;
+      // Personal coupons require email in the mutation input (email: null must fail).
+      // Generic email-restricted coupons may use cart billing as a fallback.
+      const applicantEmail = couponRequiresApplicantEmail(coupon)
+        ? coupon.isPersonalIssue
+          ? inputEmail
+          : inputEmail || cartEmail
+        : inputEmail || cartEmail;
       assertCouponEmailAllowed(
         coupon,
-        normalizeApplicantEmails([billingEmail]),
+        normalizeApplicantEmails([applicantEmail]),
       );
+
+      let accountEmail: string | null = null;
+      if (ctx.userId) {
+        const user = await findUserById(ctx.userId);
+        accountEmail = user?.email?.trim().toLowerCase() || null;
+      }
+      const holderEmail =
+        applicantEmail ||
+        cartEmail ||
+        (couponRequiresApplicantEmail(coupon) ? null : accountEmail);
       const holder = {
         couponCodes: [code],
         customerId: ctx.userId ?? existingCart.customerId,
-        billingEmail,
+        billingEmail: holderEmail,
       };
       await assertCouponNotRedeemedOnPaidOrder(holder);
       await assertCouponNotTentativelyHeld(holder);
