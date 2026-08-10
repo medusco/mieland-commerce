@@ -1,6 +1,7 @@
-import { query, t, type SqlParam } from "../db/mysql.js";
+import { query, queryOne, t, type SqlParam } from "../db/mysql.js";
 import { isCouponUsageLimitReached } from "../engine/coupon-meta.js";
 import { loadCoupon } from "../engine/shipping.js";
+import { findUserById, findUserByLoginOrEmail } from "../auth/index.js";
 
 /** HPOS may store statuses with or without the `wc-` prefix. */
 const UNPAID_STATUSES = [
@@ -227,7 +228,7 @@ export async function countActiveTentativeCouponHolds(
   return { global, perUser };
 }
 
-async function countUsedByForAliases(
+export async function countUsedByForAliases(
   couponId: number,
   aliases: string[],
 ): Promise<number> {
@@ -251,9 +252,46 @@ async function countUsedByForAliases(
 }
 
 /**
+ * Expand aliases the way Woo does for per-user limits:
+ * billing email, account email, user id, and billing_email usermeta.
+ */
+export async function resolveUsageAliases(args: {
+  customerId?: number | null;
+  billingEmail?: string | null;
+}): Promise<string[]> {
+  const aliases = new Set<string>();
+  const email = args.billingEmail?.trim().toLowerCase() || "";
+  if (email) aliases.add(email);
+
+  let customerId =
+    args.customerId != null && args.customerId > 0 ? args.customerId : null;
+
+  if (!customerId && email) {
+    const byEmail = await findUserByLoginOrEmail(email);
+    if (byEmail) customerId = byEmail.id;
+  }
+
+  if (customerId) {
+    aliases.add(String(customerId));
+    const user = await findUserById(customerId);
+    if (user?.email) aliases.add(user.email.trim().toLowerCase());
+    const billingMeta = await queryOne<{ meta_value: string }>(
+      `SELECT meta_value FROM ${t("usermeta")}
+       WHERE user_id = ? AND meta_key = 'billing_email'
+       LIMIT 1`,
+      [customerId],
+    );
+    const billingEmailMeta = billingMeta?.meta_value?.trim().toLowerCase();
+    if (billingEmailMeta?.includes("@")) aliases.add(billingEmailMeta);
+  }
+
+  return [...aliases].filter(Boolean);
+}
+
+/**
  * Same rule Woo uses before attaching a coupon to an order:
  * `usage_count + active _coupon_held_* >= usage_limit` (and the per-user
- * equivalent with `_maybe_used_by_*` / `_used_by`).
+ * equivalent with `_maybe_used_by_*` / `_used_by` across email + user id aliases).
  */
 export async function assertCouponUsageLimitLikeWoo(args: {
   couponCodes: string[];
@@ -261,12 +299,7 @@ export async function assertCouponUsageLimitLikeWoo(args: {
   billingEmail?: string | null;
 }): Promise<void> {
   const codes = normalizeCodes(args.couponCodes);
-  const aliases = [
-    args.billingEmail?.trim().toLowerCase() || "",
-    args.customerId != null && args.customerId > 0
-      ? String(args.customerId)
-      : "",
-  ].filter(Boolean);
+  const aliases = await resolveUsageAliases(args);
 
   for (const code of codes) {
     const coupon = await loadCoupon(code);
@@ -292,12 +325,26 @@ export async function assertCouponUsageLimitLikeWoo(args: {
 
     const perUserLimit =
       coupon.usageLimitPerUser ?? (coupon.isPersonalIssue ? 1 : null);
-    if (perUserLimit != null && aliases.length) {
-      const usedBy = await countUsedByForAliases(coupon.id, aliases);
-      if (
-        isCouponUsageLimitReached(usedBy, holds.perUser, perUserLimit)
-      ) {
-        const stuck = holds.perUser > 0 && usedBy < perUserLimit;
+    if (perUserLimit != null) {
+      const usedBy = aliases.length
+        ? await countUsedByForAliases(coupon.id, aliases)
+        : 0;
+      // With aliases: count holds for those identities (Woo get_usage_by_user_id).
+      // Without aliases on a personal issue: any active maybe_used_by blocks.
+      let maybeHolds = holds.perUser;
+      if (!aliases.length && coupon.isPersonalIssue) {
+        const now = Math.floor(Date.now() / 1000);
+        const rows = await query<{ n: number }[]>(
+          `SELECT COUNT(*) AS n FROM ${t("postmeta")}
+           WHERE post_id = ?
+             AND meta_key LIKE '_maybe_used_by_%'
+             AND meta_key > ?`,
+          [coupon.id, `_maybe_used_by_${now}`],
+        );
+        maybeHolds = Number(rows[0]?.n ?? 0);
+      }
+      if (isCouponUsageLimitReached(usedBy, maybeHolds, perUserLimit)) {
+        const stuck = maybeHolds > 0 && usedBy < perUserLimit;
         throw new Error(
           stuck
             ? `Coupon "${coupon.code}" cannot be applied because it is already on an incomplete checkout. Complete or cancel that order first, then try again.`

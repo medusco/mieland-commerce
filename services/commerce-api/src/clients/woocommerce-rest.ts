@@ -150,13 +150,16 @@ async function wcRestRequest(
   url: URL,
   payload: Record<string, unknown>,
   logMsg: string,
-  options?: { cookie?: string | null },
+  options?: { cookie?: string | null; retries?: number },
 ): Promise<Record<string, unknown>> {
   const cfg = loadConfig();
   const started = Date.now();
   const cookie = options?.cookie?.trim() || null;
+  // Order creates are not idempotent: a timed-out success can hold a
+  // single-use coupon, then the retry fails with "usage limit reached".
+  const maxAttempts = Math.max(1, options?.retries ?? 1);
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -190,6 +193,7 @@ async function wcRestRequest(
       return body;
     } catch (err) {
       lastErr = err;
+      if (attempt + 1 >= maxAttempts) break;
       await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
     }
   }

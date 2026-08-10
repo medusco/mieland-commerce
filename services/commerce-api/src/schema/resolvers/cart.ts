@@ -26,6 +26,7 @@ import {
   assertCouponEmailAllowed,
   couponRequiresApplicantEmail,
   normalizeApplicantEmails,
+  cartHasSubscription,
 } from "../../engine/shipping.js";
 import {
   assertCouponNotHeldByUnpaidOrder,
@@ -184,13 +185,16 @@ function modeFromArgs(
   return "lightweight";
 }
 
-/** Full totals when coupons are applied so discount/shipping refresh after item changes. */
+/** Full totals when coupons or subscription lines need shipping/discount refresh. */
 function modeForCart(
   cart: CartState,
   args: { calculateShippingTax?: boolean; recalculateTotals?: boolean },
   forceFull = false,
 ): CartTotalsMode {
-  return modeFromArgs(args, forceFull || cart.coupons.length > 0);
+  return modeFromArgs(
+    args,
+    forceFull || cart.coupons.length > 0 || cartHasSubscription(cart),
+  );
 }
 
 export const cartResolvers = {

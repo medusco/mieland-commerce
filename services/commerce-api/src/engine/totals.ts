@@ -10,7 +10,11 @@ import {
   type FreeShippingInfo,
 } from "./shipping.js";
 import { isCouponUsageLimitReached } from "./coupon-meta.js";
-import { countActiveTentativeCouponHolds } from "../repositories/coupon-holds.js";
+import {
+  countActiveTentativeCouponHolds,
+  countUsedByForAliases,
+  resolveUsageAliases,
+} from "../repositories/coupon-holds.js";
 import {
   getProductPrices,
   getStockInfo,
@@ -253,12 +257,11 @@ export async function calculateCart(
   }
 
   const couponRows: LoadedCoupon[] = [];
-  const aliases = [
-    cart.billing.email?.trim().toLowerCase() || "",
-    cart.customerId != null && cart.customerId > 0
-      ? String(cart.customerId)
-      : "",
-  ].filter(Boolean);
+  // Same identity set Woo uses for per-user usage / `_maybe_used_by_*`.
+  const aliases = await resolveUsageAliases({
+    customerId: cart.customerId,
+    billingEmail: cart.billing.email,
+  });
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
     if (!c || c.isPersonalized) continue;
@@ -271,15 +274,13 @@ export async function calculateCart(
     }
     const perUserLimit =
       c.usageLimitPerUser ?? (c.isPersonalIssue ? 1 : null);
-    if (
-      perUserLimit != null &&
-      isCouponUsageLimitReached(
-        c.isPersonalIssue ? c.usedByCount : 0,
-        holds.perUser,
-        perUserLimit,
-      )
-    ) {
-      continue;
+    if (perUserLimit != null) {
+      const usedBy = aliases.length
+        ? await countUsedByForAliases(c.id, aliases)
+        : 0;
+      if (isCouponUsageLimitReached(usedBy, holds.perUser, perUserLimit)) {
+        continue;
+      }
     }
     couponRows.push(c);
   }

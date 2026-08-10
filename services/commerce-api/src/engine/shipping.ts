@@ -137,7 +137,9 @@ function rateCost(
   return null;
 }
 
-function cartHasSubscription(cart: CartState): boolean {
+/** True when any cart line has a valid subscription frequency. */
+export function cartHasSubscription(cart: CartState): boolean {
+  // Any subscription line unlocks free shipping for the whole cart.
   return cart.items.some((item) => isValidFrequency(getItemFrequency(item)));
 }
 
