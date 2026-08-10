@@ -204,12 +204,42 @@ export async function createWcOrder(
   payload: WcOrderPayload,
   options?: { cookie?: string | null },
 ): Promise<Record<string, unknown>> {
-  return wcRestRequest(
+  const body = await wcRestRequest(
     "POST",
     wcRestOrdersUrl(),
     payload,
     "wc_rest_create_order",
     options,
+  );
+  assertWcOrderCouponsAttached(payload, body);
+  return body;
+}
+
+/** Woo may return 201 but strip coupon_lines when a single-use hold fails. */
+export function assertWcOrderCouponsAttached(
+  payload: WcOrderPayload,
+  wcOrder: Record<string, unknown>,
+): void {
+  const requested = (payload.coupon_lines ?? [])
+    .map((c) => c.code.trim().toUpperCase())
+    .filter(Boolean);
+  if (!requested.length) return;
+
+  const lines = Array.isArray(wcOrder.coupon_lines) ? wcOrder.coupon_lines : [];
+  const attached = new Set(
+    lines
+      .map((line) => {
+        const row = line as { code?: string };
+        return String(row.code ?? "").trim().toUpperCase();
+      })
+      .filter(Boolean),
+  );
+  const missing = requested.filter((code) => !attached.has(code));
+  if (!missing.length) return;
+
+  const code = missing[0]!;
+  throw new Error(
+    `Coupon "${code}" could not be applied to this order (WooCommerce removed it during order creation). The discount may already be in use on another checkout — complete or cancel that order, then try again.`,
   );
 }
 

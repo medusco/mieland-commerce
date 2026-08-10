@@ -235,18 +235,58 @@ async function withCheckoutIdempotency<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const redis = getRedis();
-  const existing = await redis.get(`checkout:idemp:${key}`);
-  if (existing) {
-    return JSON.parse(existing) as T;
+  const resultKey = `checkout:idemp:${key}`;
+  const lockKey = `checkout:lock:${key}`;
+  const ttlSec = 60 * 60;
+  const lockTtlMs = 90_000;
+
+  const cached = await redis.get(resultKey);
+  if (cached) {
+    return JSON.parse(cached) as T;
   }
-  const result = await fn();
-  await redis.set(
-    `checkout:idemp:${key}`,
-    JSON.stringify(result),
-    "EX",
-    60 * 60,
-  );
-  return result;
+
+  const token = `${Date.now()}-${Math.random()}`;
+  let acquired =
+    (await redis.set(lockKey, token, "PX", lockTtlMs, "NX")) === "OK";
+
+  if (!acquired) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const again = await redis.get(resultKey);
+      if (again) {
+        return JSON.parse(again) as T;
+      }
+      const lockHeld = await redis.get(lockKey);
+      if (!lockHeld) {
+        acquired =
+          (await redis.set(lockKey, token, "PX", lockTtlMs, "NX")) === "OK";
+        if (acquired) break;
+      }
+    }
+  }
+
+  if (!acquired) {
+    const late = await redis.get(resultKey);
+    if (late) {
+      return JSON.parse(late) as T;
+    }
+    throw new Error("Your checkout is already being processed. Please wait.");
+  }
+
+  try {
+    const again = await redis.get(resultKey);
+    if (again) {
+      return JSON.parse(again) as T;
+    }
+    const result = await fn();
+    await redis.set(resultKey, JSON.stringify(result), "EX", ttlSec);
+    return result;
+  } finally {
+    const current = await redis.get(lockKey);
+    if (current === token) {
+      await redis.del(lockKey);
+    }
+  }
 }
 
 const PAYMENT_IDEMP_TTL_SEC = 60 * 60;
