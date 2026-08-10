@@ -897,6 +897,8 @@ export const typeDefs = /* GraphQL */ `
   input ApplyCouponInput {
     clientMutationId: String
     code: String!
+    """Billing email used to validate email-restricted (personal) coupons."""
+    email: String
     calculateShippingTax: Boolean
   }
 

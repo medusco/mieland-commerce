@@ -426,7 +426,7 @@ export function assertCouponEmailAllowed(
   if (!coupon.emailRestrictions.length) return;
   if (!applicantEmails.length) {
     throw new Error(
-      "This coupon is restricted to a specific email address. Add a billing email to checkout.",
+      "Enter your email address before applying this personalized discount.",
     );
   }
   if (!couponAllowsEmails(coupon, applicantEmails)) {
