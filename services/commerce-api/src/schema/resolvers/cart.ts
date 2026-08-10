@@ -29,6 +29,7 @@ import {
 import {
   assertCouponNotHeldByUnpaidOrder,
   assertCouponNotRedeemedOnPaidOrder,
+  assertCouponNotTentativelyHeld,
 } from "../../repositories/coupon-holds.js";
 import { findUserById } from "../../auth/index.js";
 import {
@@ -374,16 +375,14 @@ export const cartResolvers = {
         coupon,
         normalizeApplicantEmails([billingEmail]),
       );
-      await assertCouponNotRedeemedOnPaidOrder({
+      const holder = {
         couponCodes: [code],
         customerId: ctx.userId ?? existingCart.customerId,
         billingEmail,
-      });
-      await assertCouponNotHeldByUnpaidOrder({
-        couponCodes: [code],
-        customerId: ctx.userId ?? existingCart.customerId,
-        billingEmail,
-      });
+      };
+      await assertCouponNotRedeemedOnPaidOrder(holder);
+      await assertCouponNotTentativelyHeld(holder);
+      await assertCouponNotHeldByUnpaidOrder(holder);
       assertCouponApplicable(coupon);
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
         if (inputEmail) {

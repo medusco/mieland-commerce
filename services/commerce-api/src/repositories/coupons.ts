@@ -13,6 +13,7 @@ import {
 import {
   assertCouponNotHeldByUnpaidOrder,
   assertCouponNotRedeemedOnPaidOrder,
+  assertCouponNotTentativelyHeld,
 } from "./coupon-holds.js";
 
 /**
@@ -124,14 +125,10 @@ async function assertPersonalCouponCanBeApplied(
   email: string,
   meta: { usageCount: number; usageLimit: number | null },
 ): Promise<void> {
-  await assertCouponNotRedeemedOnPaidOrder({
-    couponCodes: [code],
-    billingEmail: email,
-  });
-  await assertCouponNotHeldByUnpaidOrder({
-    couponCodes: [code],
-    billingEmail: email,
-  });
+  const holder = { couponCodes: [code], billingEmail: email };
+  await assertCouponNotRedeemedOnPaidOrder(holder);
+  await assertCouponNotTentativelyHeld(holder);
+  await assertCouponNotHeldByUnpaidOrder(holder);
   assertPersonalCouponUnused(meta);
 }
 

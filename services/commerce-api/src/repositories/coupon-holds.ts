@@ -1,12 +1,26 @@
 import { query, t, type SqlParam } from "../db/mysql.js";
+import { loadCoupon } from "../engine/shipping.js";
 
-const UNPAID_STATUSES = ["pending", "failed", "on-hold"] as const;
+/** HPOS may store statuses with or without the `wc-` prefix. */
+const UNPAID_STATUSES = [
+  "pending",
+  "failed",
+  "on-hold",
+  "wc-pending",
+  "wc-failed",
+  "wc-on-hold",
+] as const;
+
 /** Paid / finalized statuses that permanently consume a single-use coupon. */
 const PAID_STATUSES = [
   "processing",
   "completed",
   "refunded",
   "partially-refunded",
+  "wc-processing",
+  "wc-completed",
+  "wc-refunded",
+  "wc-partially-refunded",
 ] as const;
 
 export type UnpaidCouponHold = {
@@ -14,6 +28,54 @@ export type UnpaidCouponHold = {
   code: string;
   status: string;
 };
+
+function normalizeCodes(couponCodes: string[]): string[] {
+  return [
+    ...new Set(
+      couponCodes
+        .map((c) => c.trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function ownerFilter(args: {
+  customerId?: number | null;
+  billingEmail?: string | null;
+}): {
+  customerId: number | null;
+  email: string | null;
+  clause: string;
+  params: SqlParam[];
+} | null {
+  const customerId =
+    args.customerId != null && args.customerId > 0 ? args.customerId : null;
+  const email = args.billingEmail?.trim().toLowerCase() || null;
+  if (!customerId && !email) return null;
+
+  if (customerId && email) {
+    return {
+      customerId,
+      email,
+      clause: "AND (o.customer_id = ? OR LOWER(o.billing_email) = ?)",
+      params: [customerId, email],
+    };
+  }
+  if (customerId) {
+    return {
+      customerId,
+      email,
+      clause: "AND o.customer_id = ?",
+      params: [customerId],
+    };
+  }
+  return {
+    customerId,
+    email,
+    clause: "AND LOWER(o.billing_email) = ?",
+    params: [email!],
+  };
+}
 
 /**
  * WooCommerce holds usage-limited coupons on pending/failed/on-hold orders.
@@ -25,35 +87,13 @@ export async function findUnpaidOrdersHoldingCoupons(args: {
   customerId?: number | null;
   billingEmail?: string | null;
 }): Promise<UnpaidCouponHold[]> {
-  const codes = [
-    ...new Set(
-      args.couponCodes
-        .map((c) => c.trim().toUpperCase())
-        .filter(Boolean),
-    ),
-  ];
-  if (!codes.length) return [];
-
-  const customerId =
-    args.customerId != null && args.customerId > 0 ? args.customerId : null;
-  const email = args.billingEmail?.trim().toLowerCase() || null;
-  if (!customerId && !email) return [];
+  const codes = normalizeCodes(args.couponCodes);
+  const owner = ownerFilter(args);
+  if (!codes.length || !owner) return [];
 
   const codePlaceholders = codes.map(() => "?").join(",");
   const statusPlaceholders = UNPAID_STATUSES.map(() => "?").join(",");
-  const params: SqlParam[] = [...UNPAID_STATUSES, ...codes];
-
-  let ownerClause = "";
-  if (customerId && email) {
-    ownerClause = "AND (o.customer_id = ? OR LOWER(o.billing_email) = ?)";
-    params.push(customerId, email);
-  } else if (customerId) {
-    ownerClause = "AND o.customer_id = ?";
-    params.push(customerId);
-  } else {
-    ownerClause = "AND LOWER(o.billing_email) = ?";
-    params.push(email!);
-  }
+  const params: SqlParam[] = [...UNPAID_STATUSES, ...codes, ...owner.params];
 
   const rows = await query<
     { id: number; status: string; order_item_name: string }[]
@@ -65,7 +105,7 @@ export async function findUnpaidOrdersHoldingCoupons(args: {
      WHERE o.type = 'shop_order'
        AND o.status IN (${statusPlaceholders})
        AND UPPER(oi.order_item_name) IN (${codePlaceholders})
-       ${ownerClause}
+       ${owner.clause}
      ORDER BY o.id DESC`,
     params,
   );
@@ -75,16 +115,6 @@ export async function findUnpaidOrdersHoldingCoupons(args: {
     code: String(row.order_item_name ?? "").trim().toUpperCase(),
     status: String(row.status ?? "").replace(/^wc-/, ""),
   }));
-}
-
-/** True when any of the codes are locked to an unpaid checkout for this shopper. */
-export async function isCouponHeldByUnpaidOrder(args: {
-  couponCodes: string[];
-  customerId?: number | null;
-  billingEmail?: string | null;
-}): Promise<boolean> {
-  const holds = await findUnpaidOrdersHoldingCoupons(args);
-  return holds.length > 0;
 }
 
 /**
@@ -108,35 +138,13 @@ export async function findPaidOrdersWithCoupons(args: {
   customerId?: number | null;
   billingEmail?: string | null;
 }): Promise<UnpaidCouponHold[]> {
-  const codes = [
-    ...new Set(
-      args.couponCodes
-        .map((c) => c.trim().toUpperCase())
-        .filter(Boolean),
-    ),
-  ];
-  if (!codes.length) return [];
-
-  const customerId =
-    args.customerId != null && args.customerId > 0 ? args.customerId : null;
-  const email = args.billingEmail?.trim().toLowerCase() || null;
-  if (!customerId && !email) return [];
+  const codes = normalizeCodes(args.couponCodes);
+  const owner = ownerFilter(args);
+  if (!codes.length || !owner) return [];
 
   const codePlaceholders = codes.map(() => "?").join(",");
   const statusPlaceholders = PAID_STATUSES.map(() => "?").join(",");
-  const params: SqlParam[] = [...PAID_STATUSES, ...codes];
-
-  let ownerClause = "";
-  if (customerId && email) {
-    ownerClause = "AND (o.customer_id = ? OR LOWER(o.billing_email) = ?)";
-    params.push(customerId, email);
-  } else if (customerId) {
-    ownerClause = "AND o.customer_id = ?";
-    params.push(customerId);
-  } else {
-    ownerClause = "AND LOWER(o.billing_email) = ?";
-    params.push(email!);
-  }
+  const params: SqlParam[] = [...PAID_STATUSES, ...codes, ...owner.params];
 
   const rows = await query<
     { id: number; status: string; order_item_name: string }[]
@@ -148,7 +156,7 @@ export async function findPaidOrdersWithCoupons(args: {
      WHERE o.type = 'shop_order'
        AND o.status IN (${statusPlaceholders})
        AND UPPER(oi.order_item_name) IN (${codePlaceholders})
-       ${ownerClause}
+       ${owner.clause}
      ORDER BY o.id DESC
      LIMIT 1`,
     params,
@@ -170,4 +178,85 @@ export async function assertCouponNotRedeemedOnPaidOrder(args: {
   const paid = await findPaidOrdersWithCoupons(args);
   if (!paid.length) return;
   throw new Error("This personal discount has already been used.");
+}
+
+/**
+ * Count active Woo tentative holds (`_coupon_held_*` / `_maybe_used_by_*`).
+ * Matches WC: only meta_keys whose embedded expiry timestamp is still in the future.
+ */
+export async function countActiveTentativeCouponHolds(
+  couponId: number,
+  aliases: string[] = [],
+): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  const heldPrefix = `_coupon_held_${now}`;
+  const maybePrefix = `_maybe_used_by_${now}`;
+
+  const globalRows = await query<{ n: number }[]>(
+    `SELECT COUNT(*) AS n FROM ${t("postmeta")}
+     WHERE post_id = ?
+       AND meta_key LIKE '_coupon_held_%'
+       AND meta_key > ?`,
+    [couponId, heldPrefix],
+  );
+  let total = Number(globalRows[0]?.n ?? 0);
+
+  const normalizedAliases = [
+    ...new Set(
+      aliases
+        .map((a) => String(a ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (normalizedAliases.length) {
+    const ph = normalizedAliases.map(() => "?").join(",");
+    const perUser = await query<{ n: number }[]>(
+      `SELECT COUNT(*) AS n FROM ${t("postmeta")}
+       WHERE post_id = ?
+         AND meta_key LIKE '_maybe_used_by_%'
+         AND meta_key > ?
+         AND LOWER(meta_value) IN (${ph})`,
+      [couponId, maybePrefix, ...normalizedAliases],
+    );
+    total += Number(perUser[0]?.n ?? 0);
+  } else {
+    const anyUser = await query<{ n: number }[]>(
+      `SELECT COUNT(*) AS n FROM ${t("postmeta")}
+       WHERE post_id = ?
+         AND meta_key LIKE '_maybe_used_by_%'
+         AND meta_key > ?`,
+      [couponId, maybePrefix],
+    );
+    total += Number(anyUser[0]?.n ?? 0);
+  }
+
+  return total;
+}
+
+/**
+ * Reject when Woo still has an active tentative hold on the coupon
+ * (the usual cause of "usage limit reached" after a failed checkout).
+ */
+export async function assertCouponNotTentativelyHeld(args: {
+  couponCodes: string[];
+  customerId?: number | null;
+  billingEmail?: string | null;
+}): Promise<void> {
+  const codes = normalizeCodes(args.couponCodes);
+  const aliases = [
+    args.billingEmail?.trim().toLowerCase() || "",
+    args.customerId != null && args.customerId > 0
+      ? String(args.customerId)
+      : "",
+  ].filter(Boolean);
+
+  for (const code of codes) {
+    const coupon = await loadCoupon(code);
+    if (!coupon) continue;
+    const holds = await countActiveTentativeCouponHolds(coupon.id, aliases);
+    if (holds <= 0) continue;
+    throw new Error(
+      `Coupon "${coupon.code}" cannot be applied because it is already on an incomplete checkout. Complete or cancel that order first, then try again.`,
+    );
+  }
 }
