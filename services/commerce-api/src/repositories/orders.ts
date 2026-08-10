@@ -263,7 +263,7 @@ async function orderLinesMany(orderIds: number[], withProducts: boolean) {
 
 async function orderItemLinesMany(
   orderIds: number[],
-  itemType: "shipping" | "tax",
+  itemType: "shipping" | "tax" | "coupon",
 ) {
   const byOrder = new Map<number, unknown[]>();
   for (const id of orderIds) byOrder.set(id, []);
@@ -287,10 +287,16 @@ async function orderItemLinesMany(
         methodTitle: item.order_item_name,
         total: money(meta.cost ?? meta.total),
       });
-    } else {
+    } else if (itemType === "tax") {
       list.push({
         label: item.order_item_name,
         taxTotal: money(meta.tax_amount ?? meta.total),
+      });
+    } else {
+      list.push({
+        code: item.order_item_name,
+        discount: money(meta.discount_amount),
+        discountTax: money(meta.discount_amount_tax),
       });
     }
     byOrder.set(Number(item.order_id), list);
@@ -305,6 +311,11 @@ async function shippingLines(orderId: number) {
 
 async function taxLines(orderId: number) {
   const map = await orderItemLinesMany([orderId], "tax");
+  return { nodes: map.get(orderId) ?? [] };
+}
+
+async function couponLines(orderId: number) {
+  const map = await orderItemLinesMany([orderId], "coupon");
   return { nodes: map.get(orderId) ?? [] };
 }
 
@@ -483,6 +494,7 @@ function leanOrderNode(row: {
     lineItems: { nodes: [] as unknown[] },
     shippingLines: { nodes: [] as unknown[] },
     taxLines: { nodes: [] as unknown[] },
+    couponLines: { nodes: [] as unknown[] },
   };
 }
 
@@ -495,6 +507,7 @@ export async function listCustomerOrders(
     lineProducts: false,
     shippingLines: false,
     taxLines: false,
+    couponLines: false,
     meta: false,
     refreshMcf: false,
   },
@@ -536,11 +549,12 @@ export async function listCustomerOrders(
     needs.lineItems ||
     needs.shippingLines ||
     needs.taxLines ||
+    needs.couponLines ||
     needs.meta;
 
   if (!heavy) return { nodes };
 
-  const [addresses, lineItems, shipping, taxes, metaMap] = await Promise.all([
+  const [addresses, lineItems, shipping, taxes, coupons, metaMap] = await Promise.all([
     needs.addresses
       ? orderAddressesMany(ids)
       : Promise.resolve({
@@ -555,6 +569,9 @@ export async function listCustomerOrders(
       : Promise.resolve(new Map<number, unknown[]>()),
     needs.taxLines
       ? orderItemLinesMany(ids, "tax")
+      : Promise.resolve(new Map<number, unknown[]>()),
+    needs.couponLines
+      ? orderItemLinesMany(ids, "coupon")
       : Promise.resolve(new Map<number, unknown[]>()),
     needs.meta
       ? orderMetaMany(ids)
@@ -574,6 +591,9 @@ export async function listCustomerOrders(
     }
     if (needs.taxLines) {
       node.taxLines = { nodes: taxes.get(node.databaseId) ?? [] };
+    }
+    if (needs.couponLines) {
+      node.couponLines = { nodes: coupons.get(node.databaseId) ?? [] };
     }
     if (needs.meta) {
       const meta = metaMap.get(node.databaseId) ?? {};
@@ -602,6 +622,7 @@ export async function shapeOrder(
     lineProducts: true,
     shippingLines: true,
     taxLines: true,
+    couponLines: true,
     meta: true,
     refreshMcf: true,
   },
@@ -645,7 +666,7 @@ export async function shapeOrder(
     Number(ops?.shipping_total_amount ?? 0) -
     Number(order.tax_amount ?? 0);
 
-  const [billing, shipping, lineItems, shippingLineNodes, taxLineNodes] =
+  const [billing, shipping, lineItems, shippingLineNodes, taxLineNodes, couponLineNodes] =
     await Promise.all([
       needs.addresses ? orderAddress(order.id, "billing") : Promise.resolve(null),
       needs.addresses ? orderAddress(order.id, "shipping") : Promise.resolve(null),
@@ -657,6 +678,9 @@ export async function shapeOrder(
         : Promise.resolve({ nodes: [] as unknown[] }),
       needs.taxLines
         ? taxLines(order.id)
+        : Promise.resolve({ nodes: [] as unknown[] }),
+      needs.couponLines
+        ? couponLines(order.id)
         : Promise.resolve({ nodes: [] as unknown[] }),
     ]);
 
@@ -685,6 +709,7 @@ export async function shapeOrder(
     lineItems,
     shippingLines: shippingLineNodes,
     taxLines: taxLineNodes,
+    couponLines: couponLineNodes,
   };
 }
 
@@ -696,6 +721,16 @@ export function shapeOrderFromWc(wc: Record<string, unknown>) {
   const shippingTotal = money(wc.shipping_total);
   const totalTax = money(wc.total_tax);
   const subtotalNum = Number(wc.total ?? 0) - Number(wc.shipping_total ?? 0) - Number(wc.total_tax ?? 0);
+  const couponLineNodes = Array.isArray(wc.coupon_lines)
+    ? wc.coupon_lines.map((line) => {
+        const row = line as Record<string, unknown>;
+        return {
+          code: String(row.code ?? ""),
+          discount: money(row.discount),
+          discountTax: money(row.discount_tax),
+        };
+      })
+    : [];
   return {
     id: toGlobalId("order", id),
     databaseId: id,
@@ -723,6 +758,7 @@ export function shapeOrderFromWc(wc: Record<string, unknown>) {
     lineItems: { nodes: [] as unknown[] },
     shippingLines: { nodes: [] as unknown[] },
     taxLines: { nodes: [] as unknown[] },
+    couponLines: { nodes: couponLineNodes },
   };
 }
 
