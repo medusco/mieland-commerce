@@ -26,7 +26,10 @@ import {
   assertCouponEmailAllowed,
   normalizeApplicantEmails,
 } from "../../engine/shipping.js";
-import { assertCouponNotHeldByUnpaidOrder } from "../../repositories/coupon-holds.js";
+import {
+  assertCouponNotHeldByUnpaidOrder,
+  assertCouponNotRedeemedOnPaidOrder,
+} from "../../repositories/coupon-holds.js";
 import { findUserById } from "../../auth/index.js";
 import {
   cartNeedsFromInfo,
@@ -371,6 +374,11 @@ export const cartResolvers = {
         coupon,
         normalizeApplicantEmails([billingEmail]),
       );
+      await assertCouponNotRedeemedOnPaidOrder({
+        couponCodes: [code],
+        customerId: ctx.userId ?? existingCart.customerId,
+        billingEmail,
+      });
       await assertCouponNotHeldByUnpaidOrder({
         couponCodes: [code],
         customerId: ctx.userId ?? existingCart.customerId,

@@ -10,7 +10,10 @@ import {
   parseCouponUsageLimit,
   IS_PERSONALIZED_COUPON_META,
 } from "../engine/coupon-meta.js";
-import { assertCouponNotHeldByUnpaidOrder } from "./coupon-holds.js";
+import {
+  assertCouponNotHeldByUnpaidOrder,
+  assertCouponNotRedeemedOnPaidOrder,
+} from "./coupon-holds.js";
 
 /**
  * Postmeta key marking personal coupons issued by commerce-api.
@@ -116,16 +119,28 @@ function assertPersonalCouponUnused(meta: {
   }
 }
 
+async function assertPersonalCouponCanBeApplied(
+  code: string,
+  email: string,
+  meta: { usageCount: number; usageLimit: number | null },
+): Promise<void> {
+  await assertCouponNotRedeemedOnPaidOrder({
+    couponCodes: [code],
+    billingEmail: email,
+  });
+  await assertCouponNotHeldByUnpaidOrder({
+    couponCodes: [code],
+    billingEmail: email,
+  });
+  assertPersonalCouponUnused(meta);
+}
+
 async function personalCouponFromExisting(
   existing: { id: number; code: string; description: string },
   email: string,
 ): Promise<PersonalCoupon> {
-  await assertCouponNotHeldByUnpaidOrder({
-    couponCodes: [existing.code],
-    billingEmail: email,
-  });
   const meta = await loadCouponMeta(existing.id);
-  assertPersonalCouponUnused(meta);
+  await assertPersonalCouponCanBeApplied(existing.code, email, meta);
   return {
     id: existing.id,
     code: existing.code,
