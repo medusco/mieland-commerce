@@ -28,6 +28,7 @@ import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
 import {
+  assertCouponApplicable,
   assertCouponEmailAllowed,
   loadCoupon,
   normalizeApplicantEmails,
@@ -394,6 +395,7 @@ async function assertCartCouponEmails(
   for (const code of cart.coupons) {
     const coupon = await loadCoupon(code);
     if (!coupon) continue;
+    assertCouponApplicable(coupon);
     assertCouponEmailAllowed(coupon, emails);
   }
 }

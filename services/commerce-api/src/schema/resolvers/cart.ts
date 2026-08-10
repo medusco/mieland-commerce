@@ -339,12 +339,14 @@ export const cartResolvers = {
       ctx: AppContext,
       info: GraphQLResolveInfo,
     ) => {
-      const code = input.code.trim();
+      const code = input.code.trim().toUpperCase();
       const coupon = await loadCoupon(code);
       if (!coupon) throw new Error("Invalid coupon code");
       assertCouponApplicable(coupon);
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
-        if (!c.coupons.includes(code)) c.coupons.push(code);
+        const existing = c.coupons.map((c) => c.toUpperCase());
+        if (!existing.includes(coupon.code)) c.coupons.push(coupon.code);
+        c.coupons = c.coupons.map((c) => c.trim().toUpperCase());
         return { cart: c, result: c };
       });
       return {

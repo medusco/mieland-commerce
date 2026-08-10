@@ -255,7 +255,7 @@ export async function createWcCoupon(
     "wc_rest_create_coupon",
   );
   const id = Number(body.id);
-  const code = String(body.code ?? payload.code);
+  const code = String(body.code ?? payload.code).trim().toUpperCase();
   if (!id || !code) {
     throw new Error("WC REST coupon create returned an invalid response");
   }

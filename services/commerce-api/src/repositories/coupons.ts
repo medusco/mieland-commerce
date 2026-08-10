@@ -4,7 +4,12 @@ import { createWcCoupon, type WcCouponCreatePayload } from "../clients/woocommer
 import { getRedis } from "../redis/client.js";
 import { sha256Hex, logJson } from "../utils/index.js";
 import { query, queryOne } from "../db/mysql.js";
-import { IS_PERSONALIZED_COUPON_META } from "../engine/coupon-meta.js";
+import {
+  isCouponUsageExhausted,
+  parseCouponUsageCount,
+  parseCouponUsageLimit,
+  IS_PERSONALIZED_COUPON_META,
+} from "../engine/coupon-meta.js";
 
 /**
  * Postmeta key marking personal coupons issued by commerce-api.
@@ -41,9 +46,9 @@ function generateCouponCode(prefix: string): string {
   const safePrefix =
     prefix
       .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "")
-      .slice(0, 24) || "mieland";
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]/g, "")
+      .slice(0, 24) || "MIELAND";
   const suffix = randomBytes(5).toString("hex").toUpperCase();
   return `${safePrefix}-${suffix}`;
 }
@@ -70,14 +75,19 @@ async function findPersonalCouponByEmail(
   if (!row) return null;
   return {
     id: row.ID,
-    code: row.post_title,
+    code: row.post_title.trim().toUpperCase(),
     description: row.post_excerpt ?? "",
   };
 }
 
 async function loadCouponMeta(
   couponId: number,
-): Promise<{ amount: string; discountType: string }> {
+): Promise<{
+  amount: string;
+  discountType: string;
+  usageCount: number;
+  usageLimit: number | null;
+}> {
   const rows = await query<{ meta_key: string; meta_value: string }[]>(
     `SELECT meta_key, meta_value FROM ${t("postmeta")} WHERE post_id = ?`,
     [couponId],
@@ -86,6 +96,39 @@ async function loadCouponMeta(
   return {
     amount: String(meta.coupon_amount ?? "0"),
     discountType: String(meta.discount_type ?? "percent"),
+    usageCount: parseCouponUsageCount(meta.usage_count),
+    usageLimit: parseCouponUsageLimit(meta.usage_limit),
+  };
+}
+
+/**
+ * Personal coupons are single-use. Do not re-issue or return a spent code.
+ * When usage_limit is unset, treat as limit 1 (how we create these coupons).
+ */
+function assertPersonalCouponUnused(meta: {
+  usageCount: number;
+  usageLimit: number | null;
+}): void {
+  const limit = meta.usageLimit ?? 1;
+  if (isCouponUsageExhausted(meta.usageCount, limit)) {
+    throw new Error("This personal discount has already been used.");
+  }
+}
+
+async function personalCouponFromExisting(
+  existing: { id: number; code: string; description: string },
+  email: string,
+): Promise<PersonalCoupon> {
+  const meta = await loadCouponMeta(existing.id);
+  assertPersonalCouponUnused(meta);
+  return {
+    id: existing.id,
+    code: existing.code,
+    amount: meta.amount,
+    discountType: meta.discountType,
+    description: existing.description,
+    email,
+    created: false,
   };
 }
 
@@ -149,7 +192,8 @@ async function upsertPersonalEmailMeta(
 
 /**
  * Get-or-create a personal one-time WooCommerce coupon for an email.
- * Repeat requests return the same code (idempotent; Redis-locked).
+ * Repeat requests return the same code while unused (idempotent; Redis-locked).
+ * Throws if the email already has a personal coupon that was redeemed.
  */
 export async function getOrCreatePersonalCoupon(
   rawEmail: string,
@@ -170,16 +214,7 @@ export async function getOrCreatePersonalCoupon(
       await new Promise((r) => setTimeout(r, 250));
       const existing = await findPersonalCouponByEmail(email);
       if (existing) {
-        const meta = await loadCouponMeta(existing.id);
-        return {
-          id: existing.id,
-          code: existing.code,
-          amount: meta.amount,
-          discountType: meta.discountType,
-          description: existing.description,
-          email,
-          created: false,
-        };
+        return personalCouponFromExisting(existing, email);
       }
       const lockHeld = await redis.get(lockKey);
       if (!lockHeld) {
@@ -193,16 +228,7 @@ export async function getOrCreatePersonalCoupon(
   if (!acquired) {
     const late = await findPersonalCouponByEmail(email);
     if (late) {
-      const meta = await loadCouponMeta(late.id);
-      return {
-        id: late.id,
-        code: late.code,
-        amount: meta.amount,
-        discountType: meta.discountType,
-        description: late.description,
-        email,
-        created: false,
-      };
+      return personalCouponFromExisting(late, email);
     }
     throw new Error("Discount request is already being processed. Please wait.");
   }
@@ -210,16 +236,7 @@ export async function getOrCreatePersonalCoupon(
   try {
     const existing = await findPersonalCouponByEmail(email);
     if (existing) {
-      const meta = await loadCouponMeta(existing.id);
-      return {
-        id: existing.id,
-        code: existing.code,
-        amount: meta.amount,
-        discountType: meta.discountType,
-        description: existing.description,
-        email,
-        created: false,
-      };
+      return personalCouponFromExisting(existing, email);
     }
 
     const code = generateCouponCode(cfg.PERSONAL_COUPON_CODE_PREFIX);
@@ -257,7 +274,7 @@ export async function getOrCreatePersonalCoupon(
 
     return {
       id: created.id,
-      code: created.code,
+      code: (created.code || code).trim().toUpperCase(),
       amount: created.amount,
       discountType: created.discount_type,
       description: created.description ?? description,

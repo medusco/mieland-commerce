@@ -82,7 +82,7 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 ## Personal coupon
 
-`requestPersonalCoupon(input: { email })` get-or-creates a one-time WooCommerce coupon restricted to that email (`usage_limit: 1`, `individual_use: true`). Repeat requests for the same email return the same code (looked up via `mieland_personal_coupon_email` postmeta). Configure amount/type/prefix with `PERSONAL_COUPON_AMOUNT`, `PERSONAL_COUPON_DISCOUNT_TYPE`, `PERSONAL_COUPON_CODE_PREFIX`. Requires WC REST credentials. Apply the returned code with `applyCoupon`.
+`requestPersonalCoupon(input: { email })` get-or-creates a one-time WooCommerce coupon restricted to that email (`usage_limit: 1`, `individual_use: true`). Repeat requests for the same email return the same code while unused (looked up via `mieland_personal_coupon_email` postmeta). If Woo `usage_count` shows the code was already redeemed, the mutation errors and does not create a new code. `applyCoupon` / cart totals / checkout also reject spent coupons (`usage_count` ≥ `usage_limit`). Configure amount/type/prefix with `PERSONAL_COUPON_AMOUNT`, `PERSONAL_COUPON_DISCOUNT_TYPE`, `PERSONAL_COUPON_CODE_PREFIX`. Requires WC REST credentials. Apply the returned code with `applyCoupon`.
 
 ## WP bridge
 

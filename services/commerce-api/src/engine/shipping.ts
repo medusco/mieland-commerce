@@ -4,6 +4,9 @@ import type { CartAddress, CartState } from "./types.js";
 import { getItemFrequency, isValidFrequency } from "./types.js";
 import { roundMoney } from "../utils/index.js";
 import {
+  isCouponUsageExhausted,
+  parseCouponUsageCount,
+  parseCouponUsageLimit,
   parseIsPersonalizedCoupon,
 } from "./coupon-meta.js";
 
@@ -364,6 +367,10 @@ export type LoadedCoupon = {
   isPersonalized: boolean;
   /** Lowercased emails from WC `customer_email` / email_restrictions. Empty = unrestricted. */
   emailRestrictions: string[];
+  /** Woo `usage_count` — times this coupon has been redeemed. */
+  usageCount: number;
+  /** Woo `usage_limit` — null means unlimited. */
+  usageLimit: number | null;
 };
 
 /** Parse WooCommerce coupon email_restrictions (`customer_email` postmeta). */
@@ -428,21 +435,36 @@ export function assertCouponEmailAllowed(
 }
 
 export function assertCouponApplicable(
-  coupon: Pick<LoadedCoupon, "code" | "isPersonalized">,
+  coupon: Pick<
+    LoadedCoupon,
+    "code" | "isPersonalized" | "usageCount" | "usageLimit"
+  >,
 ): void {
   if (coupon.isPersonalized) {
     throw new Error(
       "This coupon cannot be applied directly. Use the code sent to your email after signing up.",
     );
   }
+  if (isCouponUsageExhausted(coupon.usageCount, coupon.usageLimit)) {
+    throw new Error("This coupon has already been used.");
+  }
 }
 
+export { isCouponUsageExhausted };
+
 export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
-  const post = await queryOne<{ ID: number; post_excerpt: string }>(
-    `SELECT ID, post_excerpt FROM ${t("posts")}
-     WHERE post_type = 'shop_coupon' AND post_status = 'publish' AND post_title = ?
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) return null;
+  const post = await queryOne<{
+    ID: number;
+    post_excerpt: string;
+    post_title: string;
+  }>(
+    `SELECT ID, post_excerpt, post_title FROM ${t("posts")}
+     WHERE post_type = 'shop_coupon' AND post_status = 'publish'
+       AND UPPER(post_title) = ?
      LIMIT 1`,
-    [code],
+    [normalized],
   );
   if (!post) return null;
   const metaRows = await query<{ meta_key: string; meta_value: string }[]>(
@@ -459,13 +481,15 @@ export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
   }
   return {
     id: post.ID,
-    code,
+    code: (post.post_title || normalized).trim().toUpperCase(),
     description: post.post_excerpt ?? "",
     discountType: meta.discount_type ?? "fixed_cart",
     amount: Number(meta.coupon_amount ?? 0),
     freeShipping: meta.free_shipping === "yes",
     isPersonalized: parseIsPersonalizedCoupon(meta),
     emailRestrictions,
+    usageCount: parseCouponUsageCount(meta.usage_count),
+    usageLimit: parseCouponUsageLimit(meta.usage_limit),
   };
 }
 

@@ -3,6 +3,7 @@ import { getItemFrequency } from "./types.js";
 import { getSubscriptionDiscounts, lineUnitPrice, applyPercentCouponToUnitPrice } from "./pricing.js";
 import {
   applyCoupons,
+  isCouponUsageExhausted,
   loadCoupon,
   resolveShipping,
   type LoadedCoupon,
@@ -253,7 +254,11 @@ export async function calculateCart(
   const couponRows: LoadedCoupon[] = [];
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
-    if (c && !c.isPersonalized) {
+    if (
+      c &&
+      !c.isPersonalized &&
+      !isCouponUsageExhausted(c.usageCount, c.usageLimit)
+    ) {
       couponRows.push(c);
     }
   }
