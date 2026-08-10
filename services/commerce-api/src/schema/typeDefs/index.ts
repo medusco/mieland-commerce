@@ -407,6 +407,16 @@ export const typeDefs = /* GraphQL */ `
     nodes: [TaxLine]
   }
 
+  type CouponLine {
+    code: String
+    discount: String
+    discountTax: String
+  }
+
+  type CouponLineConnection {
+    nodes: [CouponLine]
+  }
+
   type AmazonMcfTracking {
     trackingNumber: String
     trackingUrl: String
@@ -475,6 +485,7 @@ export const typeDefs = /* GraphQL */ `
     lineItems: LineItemConnection
     shippingLines: ShippingLineConnection
     taxLines: TaxLineConnection
+    couponLines: CouponLineConnection
   }
 
   type OrderConnection {

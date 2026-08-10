@@ -121,6 +121,7 @@ export type OrderListNeeds = {
   lineProducts: boolean;
   shippingLines: boolean;
   taxLines: boolean;
+  couponLines: boolean;
   meta: boolean;
   /** Call WP mcf-tra bridge to refresh Amazon TRA when cache is empty (detail views). */
   refreshMcf: boolean;
@@ -158,6 +159,7 @@ export function orderNeedsFromInfo(
     ),
     shippingLines: nodeFields.some((f) => f.name.value === "shippingLines"),
     taxLines: nodeFields.some((f) => f.name.value === "taxLines"),
+    couponLines: nodeFields.some((f) => f.name.value === "couponLines"),
     meta: wantsMcf || hasAny(nodeFields, ["transactionId"]),
     // Live Amazon refresh only for single-order selections (not list `nodes`).
     refreshMcf: wantsMcf && path[path.length - 1] !== "nodes",
@@ -171,6 +173,7 @@ export function orderNeedsAreLean(needs: OrderListNeeds): boolean {
     !needs.lineItems &&
     !needs.shippingLines &&
     !needs.taxLines &&
+    !needs.couponLines &&
     !needs.meta
   );
 }

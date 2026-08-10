@@ -466,6 +466,13 @@ export function assertCouponEmailAllowed(
   }
 }
 
+/** Newsletter/template coupon — not the unique code emailed after signup. */
+export function isPersonalizedTemplateCoupon(
+  coupon: Pick<LoadedCoupon, "isPersonalized" | "isPersonalIssue">,
+): boolean {
+  return coupon.isPersonalized && !coupon.isPersonalIssue;
+}
+
 export function assertCouponApplicable(
   coupon: Pick<
     LoadedCoupon,
@@ -477,7 +484,7 @@ export function assertCouponApplicable(
     | "usedByCount"
   >,
 ): void {
-  if (coupon.isPersonalized) {
+  if (isPersonalizedTemplateCoupon(coupon)) {
     throw new Error(
       "This coupon cannot be applied directly. Use the code sent to your email after signing up.",
     );

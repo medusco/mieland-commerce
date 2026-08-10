@@ -264,7 +264,7 @@ export async function calculateCart(
   });
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
-    if (!c || c.isPersonalized) continue;
+    if (!c || (c.isPersonalized && !c.isPersonalIssue)) continue;
     const holds = await countActiveTentativeCouponHolds(c.id, aliases);
     const globalLimit = c.usageLimit ?? (c.isPersonalIssue ? 1 : null);
     if (
