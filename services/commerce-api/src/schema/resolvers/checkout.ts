@@ -33,6 +33,7 @@ import {
   loadCoupon,
   normalizeApplicantEmails,
 } from "../../engine/shipping.js";
+import { assertCouponNotHeldByUnpaidOrder } from "../../repositories/coupon-holds.js";
 import {
   getOrderById,
   getOrderPaymentContext,
@@ -392,6 +393,11 @@ async function assertCartCouponEmails(
     if (user?.email) candidates.push(user.email);
   }
   const emails = normalizeApplicantEmails(candidates);
+  await assertCouponNotHeldByUnpaidOrder({
+    couponCodes: cart.coupons,
+    customerId: userId ?? cart.customerId,
+    billingEmail: emails[0] ?? cart.billing.email ?? null,
+  });
   for (const code of cart.coupons) {
     const coupon = await loadCoupon(code);
     if (!coupon) continue;

@@ -21,6 +21,8 @@ import {
   type CartTotalsMode,
 } from "../../engine/totals.js";
 import { loadCoupon, assertCouponApplicable } from "../../engine/shipping.js";
+import { assertCouponNotHeldByUnpaidOrder } from "../../repositories/coupon-holds.js";
+import { findUserById } from "../../auth/index.js";
 import {
   cartNeedsFromInfo,
   cartNeedsPricing,
@@ -342,6 +344,17 @@ export const cartResolvers = {
       const code = input.code.trim().toUpperCase();
       const coupon = await loadCoupon(code);
       if (!coupon) throw new Error("Invalid coupon code");
+      const existingCart = await loadCart(ctx.sessionToken);
+      let billingEmail = existingCart.billing.email ?? null;
+      if (!billingEmail && ctx.userId) {
+        const user = await findUserById(ctx.userId);
+        billingEmail = user?.email ?? null;
+      }
+      await assertCouponNotHeldByUnpaidOrder({
+        couponCodes: [code],
+        customerId: ctx.userId ?? existingCart.customerId,
+        billingEmail,
+      });
       assertCouponApplicable(coupon);
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
         const existing = c.coupons.map((c) => c.toUpperCase());
