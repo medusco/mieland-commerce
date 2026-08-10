@@ -283,9 +283,6 @@ export async function resolveShipping(
   // (WP checkbox) so customers can upgrade; hide other paid non-expedited rates.
   // Subscription carts force free shipping and cannot use expedited delivery.
   const freeRates = rates.filter((r) => Number(r.cost) === 0);
-  const existingChosen = cart.chosenShippingMethods.filter((id) =>
-    rates.some((r) => r.id === id),
-  );
   const availableRates =
     freeRates.length > 0
       ? [
@@ -305,14 +302,25 @@ export async function resolveShipping(
     },
   ];
 
-  let chosenIds = existingChosen.filter((id) =>
-    availableRates.some((r) => r.id === id),
-  );
-  if (!chosenIds.length) {
-    if (freeRates.length > 0) {
-      chosenIds = [freeRates[0]!.id];
-    } else if (availableRates.length) {
-      chosenIds = [availableRates[0]!.id];
+  // Subscription: always select a free rate — never keep a prior paid method
+  // (e.g. flat_rate still present on the cart from before the sub line was added).
+  let chosenIds: string[];
+  if (forceFreeShipping && freeRates.length > 0) {
+    const priorFree = cart.chosenShippingMethods.find((id) =>
+      freeRates.some((r) => r.id === id),
+    );
+    chosenIds = [priorFree ?? freeRates[0]!.id];
+  } else {
+    const existingChosen = cart.chosenShippingMethods.filter((id) =>
+      availableRates.some((r) => r.id === id),
+    );
+    chosenIds = existingChosen;
+    if (!chosenIds.length) {
+      if (freeRates.length > 0) {
+        chosenIds = [freeRates[0]!.id];
+      } else if (availableRates.length) {
+        chosenIds = [availableRates[0]!.id];
+      }
     }
   }
 

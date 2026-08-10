@@ -80,11 +80,12 @@ async function shapeCartGraphql(
     }));
   if (
     !preCalculated &&
-    needs.shippingMethods &&
     mode === "full" &&
     JSON.stringify(calculated.chosenShippingMethods) !==
       JSON.stringify(cart.chosenShippingMethods)
   ) {
+    // Always persist auto-selected methods (e.g. free shipping after a
+    // subscription line is added) even when the operation only asked for totals.
     await saveCart(ctx.sessionToken, calculated.cart);
   }
 
@@ -167,12 +168,16 @@ async function shapeCartGraphql(
     availableShippingMethods: needs.shippingMethods
       ? calculated.availableShippingMethods
       : [],
-    chosenShippingMethods: needs.shippingMethods
-      ? calculated.chosenShippingMethods
-      : [],
-    freeShippingInfo: needs.shippingMethods
-      ? calculated.freeShippingInfo
-      : null,
+    // Return chosen methods whenever totals are computed so clients see the
+    // auto-selected free-shipping method after subscription line changes.
+    chosenShippingMethods:
+      needs.shippingMethods || needs.cartTotals
+        ? calculated.chosenShippingMethods
+        : [],
+    freeShippingInfo:
+      needs.shippingMethods || needs.cartTotals
+        ? calculated.freeShippingInfo
+        : null,
   };
 }
 
