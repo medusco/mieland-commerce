@@ -3,13 +3,14 @@ import { getItemFrequency } from "./types.js";
 import { getSubscriptionDiscounts, lineUnitPrice, applyPercentCouponToUnitPrice } from "./pricing.js";
 import {
   applyCoupons,
-  isCouponUsageExhausted,
   loadCoupon,
   resolveShipping,
   type LoadedCoupon,
   type ShippingPackage,
   type FreeShippingInfo,
 } from "./shipping.js";
+import { isCouponUsageLimitReached } from "./coupon-meta.js";
+import { countActiveTentativeCouponHolds } from "../repositories/coupon-holds.js";
 import {
   getProductPrices,
   getStockInfo,
@@ -252,15 +253,35 @@ export async function calculateCart(
   }
 
   const couponRows: LoadedCoupon[] = [];
+  const aliases = [
+    cart.billing.email?.trim().toLowerCase() || "",
+    cart.customerId != null && cart.customerId > 0
+      ? String(cart.customerId)
+      : "",
+  ].filter(Boolean);
   for (const code of cart.coupons) {
     const c = await loadCoupon(code);
+    if (!c || c.isPersonalized) continue;
+    const holds = await countActiveTentativeCouponHolds(c.id, aliases);
+    const globalLimit = c.usageLimit ?? (c.isPersonalIssue ? 1 : null);
     if (
-      c &&
-      !c.isPersonalized &&
-      !isCouponUsageExhausted(c.usageCount, c.usageLimit)
+      isCouponUsageLimitReached(c.usageCount, holds.global, globalLimit)
     ) {
-      couponRows.push(c);
+      continue;
     }
+    const perUserLimit =
+      c.usageLimitPerUser ?? (c.isPersonalIssue ? 1 : null);
+    if (
+      perUserLimit != null &&
+      isCouponUsageLimitReached(
+        c.isPersonalIssue ? c.usedByCount : 0,
+        holds.perUser,
+        perUserLimit,
+      )
+    ) {
+      continue;
+    }
+    couponRows.push(c);
   }
   const { discountTotal, applied } = applyCoupons(
     subtotalNum,

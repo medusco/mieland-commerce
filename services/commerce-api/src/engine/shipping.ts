@@ -376,6 +376,8 @@ export type LoadedCoupon = {
   usageCount: number;
   /** Woo `usage_limit` — null means unlimited. */
   usageLimit: number | null;
+  /** Woo `usage_limit_per_user` — null means unlimited. */
+  usageLimitPerUser: number | null;
   /** Count of Woo `_used_by` rows (permanent redemptions). */
   usedByCount: number;
 };
@@ -473,14 +475,18 @@ export function assertCouponApplicable(
   const limit =
     coupon.usageLimit ?? (coupon.isPersonalIssue ? 1 : null);
   if (isCouponUsageExhausted(coupon.usageCount, limit)) {
-    throw new Error("This coupon has already been used.");
+    throw new Error(
+      `Usage limit for coupon "${coupon.code}" has been reached.`,
+    );
   }
   if (
     coupon.isPersonalIssue &&
     limit != null &&
     coupon.usedByCount >= limit
   ) {
-    throw new Error("This coupon has already been used.");
+    throw new Error(
+      `Usage limit for coupon "${coupon.code}" has been reached.`,
+    );
   }
 }
 
@@ -529,6 +535,7 @@ export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
     emailRestrictions,
     usageCount: parseCouponUsageCount(meta.usage_count),
     usageLimit: parseCouponUsageLimit(meta.usage_limit),
+    usageLimitPerUser: parseCouponUsageLimit(meta.usage_limit_per_user),
     usedByCount,
   };
 }

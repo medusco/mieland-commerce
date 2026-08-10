@@ -38,3 +38,16 @@ export function isCouponUsageExhausted(
   if (usageLimit == null) return false;
   return usageCount >= usageLimit;
 }
+
+/**
+ * WooCommerce-style availability: usage_count + active tentative holds
+ * must stay strictly below usage_limit.
+ */
+export function isCouponUsageLimitReached(
+  usageCount: number,
+  tentativeHolds: number,
+  usageLimit: number | null,
+): boolean {
+  if (usageLimit == null) return false;
+  return usageCount + Math.max(0, tentativeHolds) >= usageLimit;
+}

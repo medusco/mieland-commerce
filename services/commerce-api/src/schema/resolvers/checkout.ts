@@ -36,7 +36,7 @@ import {
 import {
   assertCouponNotHeldByUnpaidOrder,
   assertCouponNotRedeemedOnPaidOrder,
-  assertCouponNotTentativelyHeld,
+  assertCouponUsageLimitLikeWoo,
 } from "../../repositories/coupon-holds.js";
 import {
   getOrderById,
@@ -403,7 +403,7 @@ async function assertCartCouponEmails(
     billingEmail: emails[0] ?? cart.billing.email ?? null,
   };
   await assertCouponNotRedeemedOnPaidOrder(holder);
-  await assertCouponNotTentativelyHeld(holder);
+  await assertCouponUsageLimitLikeWoo(holder);
   await assertCouponNotHeldByUnpaidOrder(holder);
   for (const code of cart.coupons) {
     const coupon = await loadCoupon(code);

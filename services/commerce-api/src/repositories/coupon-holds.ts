@@ -1,4 +1,5 @@
 import { query, t, type SqlParam } from "../db/mysql.js";
+import { isCouponUsageLimitReached } from "../engine/coupon-meta.js";
 import { loadCoupon } from "../engine/shipping.js";
 
 /** HPOS may store statuses with or without the `wc-` prefix. */
@@ -187,7 +188,7 @@ export async function assertCouponNotRedeemedOnPaidOrder(args: {
 export async function countActiveTentativeCouponHolds(
   couponId: number,
   aliases: string[] = [],
-): Promise<number> {
+): Promise<{ global: number; perUser: number }> {
   const now = Math.floor(Date.now() / 1000);
   const heldPrefix = `_coupon_held_${now}`;
   const maybePrefix = `_maybe_used_by_${now}`;
@@ -199,7 +200,7 @@ export async function countActiveTentativeCouponHolds(
        AND meta_key > ?`,
     [couponId, heldPrefix],
   );
-  let total = Number(globalRows[0]?.n ?? 0);
+  const global = Number(globalRows[0]?.n ?? 0);
 
   const normalizedAliases = [
     ...new Set(
@@ -208,9 +209,11 @@ export async function countActiveTentativeCouponHolds(
         .filter(Boolean),
     ),
   ];
+
+  let perUser = 0;
   if (normalizedAliases.length) {
     const ph = normalizedAliases.map(() => "?").join(",");
-    const perUser = await query<{ n: number }[]>(
+    const rows = await query<{ n: number }[]>(
       `SELECT COUNT(*) AS n FROM ${t("postmeta")}
        WHERE post_id = ?
          AND meta_key LIKE '_maybe_used_by_%'
@@ -218,26 +221,41 @@ export async function countActiveTentativeCouponHolds(
          AND LOWER(meta_value) IN (${ph})`,
       [couponId, maybePrefix, ...normalizedAliases],
     );
-    total += Number(perUser[0]?.n ?? 0);
-  } else {
-    const anyUser = await query<{ n: number }[]>(
-      `SELECT COUNT(*) AS n FROM ${t("postmeta")}
-       WHERE post_id = ?
-         AND meta_key LIKE '_maybe_used_by_%'
-         AND meta_key > ?`,
-      [couponId, maybePrefix],
-    );
-    total += Number(anyUser[0]?.n ?? 0);
+    perUser = Number(rows[0]?.n ?? 0);
   }
 
-  return total;
+  return { global, perUser };
+}
+
+async function countUsedByForAliases(
+  couponId: number,
+  aliases: string[],
+): Promise<number> {
+  const normalizedAliases = [
+    ...new Set(
+      aliases
+        .map((a) => String(a ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (!normalizedAliases.length) return 0;
+  const ph = normalizedAliases.map(() => "?").join(",");
+  const rows = await query<{ n: number }[]>(
+    `SELECT COUNT(*) AS n FROM ${t("postmeta")}
+     WHERE post_id = ?
+       AND meta_key IN ('_used_by', 'used_by')
+       AND LOWER(meta_value) IN (${ph})`,
+    [couponId, ...normalizedAliases],
+  );
+  return Number(rows[0]?.n ?? 0);
 }
 
 /**
- * Reject when Woo still has an active tentative hold on the coupon
- * (the usual cause of "usage limit reached" after a failed checkout).
+ * Same rule Woo uses before attaching a coupon to an order:
+ * `usage_count + active _coupon_held_* >= usage_limit` (and the per-user
+ * equivalent with `_maybe_used_by_*` / `_used_by`).
  */
-export async function assertCouponNotTentativelyHeld(args: {
+export async function assertCouponUsageLimitLikeWoo(args: {
   couponCodes: string[];
   customerId?: number | null;
   billingEmail?: string | null;
@@ -253,10 +271,48 @@ export async function assertCouponNotTentativelyHeld(args: {
   for (const code of codes) {
     const coupon = await loadCoupon(code);
     if (!coupon) continue;
+
     const holds = await countActiveTentativeCouponHolds(coupon.id, aliases);
-    if (holds <= 0) continue;
-    throw new Error(
-      `Coupon "${coupon.code}" cannot be applied because it is already on an incomplete checkout. Complete or cancel that order first, then try again.`,
-    );
+    const globalLimit =
+      coupon.usageLimit ?? (coupon.isPersonalIssue ? 1 : null);
+    if (
+      isCouponUsageLimitReached(
+        coupon.usageCount,
+        holds.global,
+        globalLimit,
+      )
+    ) {
+      const stuck = holds.global > 0 && coupon.usageCount < (globalLimit ?? 0);
+      throw new Error(
+        stuck
+          ? `Coupon "${coupon.code}" cannot be applied because it is already on an incomplete checkout. Complete or cancel that order first, then try again.`
+          : `Usage limit for coupon "${coupon.code}" has been reached.`,
+      );
+    }
+
+    const perUserLimit =
+      coupon.usageLimitPerUser ?? (coupon.isPersonalIssue ? 1 : null);
+    if (perUserLimit != null && aliases.length) {
+      const usedBy = await countUsedByForAliases(coupon.id, aliases);
+      if (
+        isCouponUsageLimitReached(usedBy, holds.perUser, perUserLimit)
+      ) {
+        const stuck = holds.perUser > 0 && usedBy < perUserLimit;
+        throw new Error(
+          stuck
+            ? `Coupon "${coupon.code}" cannot be applied because it is already on an incomplete checkout. Complete or cancel that order first, then try again.`
+            : `Usage limit for coupon "${coupon.code}" has been reached.`,
+        );
+      }
+    }
   }
+}
+
+/** @deprecated Prefer assertCouponUsageLimitLikeWoo */
+export async function assertCouponNotTentativelyHeld(args: {
+  couponCodes: string[];
+  customerId?: number | null;
+  billingEmail?: string | null;
+}): Promise<void> {
+  return assertCouponUsageLimitLikeWoo(args);
 }
