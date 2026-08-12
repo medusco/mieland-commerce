@@ -163,11 +163,11 @@ async function shapeCartGraphql(
     total: needs.cartTotals ? calculated.total : null,
     subtotal: needs.cartTotals ? calculated.subtotal : null,
     shippingTotal: needs.cartTotals ? calculated.shippingTotal : null,
-    totalTax: needs.cartTotals ? calculated.totalTax : null,
-    taxSuccess: needs.cartTotals
+    totalTax: needs.tax ? calculated.totalTax : null,
+    taxSuccess: needs.tax
       ? (calculated.taxBreakdown?.success ?? null)
       : null,
-    taxMessage: needs.cartTotals
+    taxMessage: needs.tax
       ? (calculated.taxBreakdown?.message ?? null)
       : null,
     appliedCoupons: needs.coupons ? calculated.appliedCoupons : [],
