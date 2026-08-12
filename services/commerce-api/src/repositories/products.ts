@@ -124,28 +124,39 @@ export async function getPostMetaKeysMany(
   return out;
 }
 
+export type ProductPriceParts = {
+  /** Catalog regular / list price — base for subscription & percent coupons. */
+  regular: number;
+  /** Catalog sale price when set; otherwise null. */
+  sale: number | null;
+};
+
 export async function getProductPrices(
   productIds: number[],
-): Promise<Map<number, number>> {
+): Promise<Map<number, ProductPriceParts>> {
   const metaMap = await getPostMetaKeysMany(productIds, [
     "_price",
     "_regular_price",
     "_sale_price",
   ]);
-  const prices = new Map<number, number>();
+  const prices = new Map<number, ProductPriceParts>();
   for (const id of productIds) {
     const meta = metaMap.get(id) ?? {};
-    const sale = meta._sale_price;
-    const regular = meta._regular_price || meta._price;
-    if (sale && Number(sale) > 0) prices.set(id, Number(sale));
-    else prices.set(id, Number(regular || meta._price || 0));
+    const regular = Number(meta._regular_price || meta._price || 0);
+    const saleRaw = meta._sale_price;
+    const saleNum = saleRaw && Number(saleRaw) > 0 ? Number(saleRaw) : null;
+    prices.set(id, { regular, sale: saleNum });
   }
   return prices;
 }
 
+/** Effective catalog unit price (sale when present, else regular). */
 export async function getProductPrice(productId: number): Promise<number> {
   const prices = await getProductPrices([productId]);
-  return prices.get(productId) ?? 0;
+  const parts = prices.get(productId);
+  if (!parts) return 0;
+  if (parts.sale != null && parts.sale > 0) return parts.sale;
+  return parts.regular;
 }
 
 export async function getStockStatus(productId: number): Promise<string> {

@@ -1,6 +1,11 @@
 import type { CartAddress, CartState } from "./types.js";
 import { getItemFrequency } from "./types.js";
-import { getSubscriptionDiscounts, lineUnitPrice, applyPercentCouponToUnitPrice } from "./pricing.js";
+import {
+  getSubscriptionDiscounts,
+  lineUnitPrice,
+  applyPercentCouponToUnitPrice,
+  chooseBestUnitPrice,
+} from "./pricing.js";
 import {
   applyCoupons,
   loadCoupon,
@@ -237,23 +242,31 @@ export async function calculateCart(
   const priceIds = cart.items.map((i) => i.variationId || i.productId);
   const prices = await getProductPrices(priceIds);
 
-  const lines = [];
-  let subtotalNum = 0;
-  for (const item of cart.items) {
-    const base = prices.get(item.variationId || item.productId) ?? 0;
-    const unit = lineUnitPrice(base, item, discounts);
+  // Subscription % always from regular; sale wins only when cheaper than that.
+  const pricedLines = cart.items.map((item) => {
+    const parts = prices.get(item.variationId || item.productId) ?? {
+      regular: 0,
+      sale: null,
+    };
+    const afterSubFromRegular = lineUnitPrice(parts.regular, item, discounts);
+    const unit = chooseBestUnitPrice(afterSubFromRegular, parts.sale);
     const lineSub = roundMoney(unit * item.quantity);
-    subtotalNum = roundMoney(subtotalNum + lineSub);
-    lines.push({
+    return {
       key: item.key,
       productId: item.productId,
       variationId: item.variationId,
       quantity: item.quantity,
       extraData: item.extraData,
+      regular: parts.regular,
+      sale: parts.sale,
       unitPrice: unit,
       subtotal: moneyStr(lineSub),
       frequency: getItemFrequency(item),
-    });
+    };
+  });
+  let subtotalNum = 0;
+  for (const line of pricedLines) {
+    subtotalNum = roundMoney(subtotalNum + Number(line.subtotal));
   }
 
   const couponRows: LoadedCoupon[] = [];
@@ -284,18 +297,90 @@ export async function calculateCart(
     }
     couponRows.push(c);
   }
-  const { discountTotal, applied } = applyCoupons(
-    subtotalNum,
-    couponRows,
-    lines.map((line) => ({
-      quantity: line.quantity,
-      unitPrice: line.unitPrice,
-    })),
+
+  const percentCoupons = couponRows.filter((c) => c.discountType === "percent");
+  const nonPercentCoupons = couponRows.filter(
+    (c) => c.discountType !== "percent",
   );
-  const displayLines = lines.map((line) => ({
-    ...line,
-    displayUnitPrice: applyPercentCouponToUnitPrice(line.unitPrice, couponRows),
+
+  // Percent coupons from regular (not post-subscription); sale floors promo; subscription
+  // still wins when it beats coupon-from-regular.
+  const displayLines = pricedLines.map((line) => {
+    const promoFromRegular = applyPercentCouponToUnitPrice(
+      line.regular,
+      couponRows,
+    );
+    const promoUnit = chooseBestUnitPrice(promoFromRegular, line.sale);
+    const displayUnitPrice = roundMoney(Math.min(line.unitPrice, promoUnit));
+    return {
+      key: line.key,
+      productId: line.productId,
+      variationId: line.variationId,
+      quantity: line.quantity,
+      extraData: line.extraData,
+      unitPrice: line.unitPrice,
+      subtotal: line.subtotal,
+      frequency: line.frequency,
+      displayUnitPrice,
+    };
+  });
+
+  let percentDiscountTotal = 0;
+  for (const line of displayLines) {
+    percentDiscountTotal = roundMoney(
+      percentDiscountTotal +
+        roundMoney((line.unitPrice - line.displayUnitPrice) * line.quantity),
+    );
+  }
+
+  // Attribute percent coupon amounts from regular-price subtotal, then scale
+  // to the sale-floored savings actually taken on the cart.
+  let regularPathSubtotal = 0;
+  for (const line of pricedLines) {
+    regularPathSubtotal = roundMoney(
+      regularPathSubtotal + roundMoney(line.regular * line.quantity),
+    );
+  }
+  const { discountTotal: idealPercentTotal, applied: percentAppliedIdeal } =
+    applyCoupons(
+      regularPathSubtotal,
+      percentCoupons,
+      pricedLines.map((line) => ({
+        quantity: line.quantity,
+        unitPrice: line.regular,
+      })),
+    );
+  const percentScale =
+    idealPercentTotal > 0 ? percentDiscountTotal / idealPercentTotal : 0;
+  const percentApplied = percentAppliedIdeal.map((row) => ({
+    ...row,
+    discountAmount: roundMoney(Number(row.discountAmount) * percentScale).toFixed(
+      2,
+    ),
   }));
+  // Keep attributed percent amounts summing to the sale-floored total.
+  if (percentApplied.length > 0) {
+    let attributed = 0;
+    for (let i = 0; i < percentApplied.length - 1; i++) {
+      attributed = roundMoney(attributed + Number(percentApplied[i].discountAmount));
+    }
+    percentApplied[percentApplied.length - 1].discountAmount = roundMoney(
+      Math.max(0, percentDiscountTotal - attributed),
+    ).toFixed(2);
+  }
+
+  const afterPercent = roundMoney(Math.max(0, subtotalNum - percentDiscountTotal));
+  const { discountTotal: fixedDiscountTotal, applied: fixedApplied } =
+    applyCoupons(
+      afterPercent,
+      nonPercentCoupons,
+      displayLines.map((line) => ({
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+      })),
+    );
+  const discountTotal = roundMoney(percentDiscountTotal + fixedDiscountTotal);
+  const applied = [...percentApplied, ...fixedApplied];
   const afterDiscount = roundMoney(Math.max(0, subtotalNum - discountTotal));
 
   let shippingTotal = 0;

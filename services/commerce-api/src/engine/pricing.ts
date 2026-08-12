@@ -18,25 +18,46 @@ export async function getSubscriptionDiscounts(): Promise<
   return defaults;
 }
 
+/**
+ * Apply subscription frequency % off. Always pass the catalog regular price —
+ * never the sale price.
+ */
 export function applyFrequencyDiscount(
-  unitPrice: number,
+  regularPrice: number,
   frequency: string,
   discounts: Record<string, number>,
 ): number {
-  if (!frequency || !isValidFrequency(frequency) || unitPrice <= 0) {
-    return roundMoney(unitPrice);
+  if (!frequency || !isValidFrequency(frequency) || regularPrice <= 0) {
+    return roundMoney(regularPrice);
   }
   const discount = discounts[frequency] ?? 0;
-  if (discount <= 0) return roundMoney(unitPrice);
-  return roundMoney(unitPrice * (1 - discount / 100));
+  if (discount <= 0) return roundMoney(regularPrice);
+  return roundMoney(regularPrice * (1 - discount / 100));
 }
 
+/**
+ * Unit price after subscription discount from regular.
+ * Callers should then {@link chooseBestUnitPrice} against catalog sale.
+ */
 export function lineUnitPrice(
-  basePrice: number,
+  regularPrice: number,
   item: CartItem,
   discounts: Record<string, number>,
 ): number {
-  return applyFrequencyDiscount(basePrice, getItemFrequency(item), discounts);
+  return applyFrequencyDiscount(regularPrice, getItemFrequency(item), discounts);
+}
+
+/**
+ * Prefer catalog sale when it beats the price after discounts from regular.
+ * `discountedFromRegular` is subscription and/or percent-coupon off regular.
+ */
+export function chooseBestUnitPrice(
+  discountedFromRegular: number,
+  salePrice: number | null | undefined,
+): number {
+  const discounted = roundMoney(discountedFromRegular);
+  if (!(salePrice != null && salePrice > 0)) return discounted;
+  return roundMoney(Math.min(discounted, salePrice));
 }
 
 /** Combined multiplier from sequential percent coupons (e.g. 10% + 10% → 0.81). */
@@ -52,13 +73,17 @@ export function percentCouponMultiplier(
   }, 1);
 }
 
+/**
+ * Apply percent coupons to catalog regular price (not sale, not post-subscription).
+ * Then {@link chooseBestUnitPrice} against sale and compare with subscription price.
+ */
 export function applyPercentCouponToUnitPrice(
-  unitPrice: number,
+  regularPrice: number,
   coupons: Array<{ discountType: string; amount: number }>,
 ): number {
   const multiplier = percentCouponMultiplier(coupons);
-  if (multiplier >= 1) return roundMoney(unitPrice);
-  return roundMoney(unitPrice * multiplier);
+  if (multiplier >= 1) return roundMoney(regularPrice);
+  return roundMoney(regularPrice * multiplier);
 }
 
 type PricedProductNode = {
