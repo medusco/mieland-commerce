@@ -1,5 +1,7 @@
 import { query, queryOne, t } from "../db/mysql.js";
 import { getOption, maybeUnserializePhp } from "../repositories/options.js";
+import { getRedis } from "../redis/client.js";
+import { loadConfig } from "../config.js";
 import type { CartAddress, CartState } from "./types.js";
 import { getItemFrequency, isValidFrequency } from "./types.js";
 import { roundMoney } from "../utils/index.js";
@@ -53,28 +55,55 @@ type ZoneMethod = {
   is_enabled: number;
 };
 
+function shippingCacheTtl(): number {
+  return loadConfig().CATALOG_CACHE_TTL_SECONDS;
+}
+
+async function cachedShippingTable<T>(
+  cacheKey: string,
+  loader: () => Promise<T>,
+): Promise<T> {
+  const redis = getRedis();
+  const cached = await redis.get(cacheKey);
+  if (cached) return JSON.parse(cached) as T;
+  const value = await loader();
+  await redis.set(cacheKey, JSON.stringify(value), "EX", shippingCacheTtl());
+  return value;
+}
+
+function shippingTableCacheKey(suffix: string): string {
+  const cfg = loadConfig();
+  return `ship:${cfg.tablePrefix}:${suffix}`;
+}
+
 async function loadZoneLocations(): Promise<
   Array<{ zone_id: number; location_code: string; location_type: string }>
 > {
-  return query(
-    `SELECT zone_id, location_code, location_type FROM ${t("woocommerce_shipping_zone_locations")}`,
+  return cachedShippingTable(shippingTableCacheKey("zone_locations"), () =>
+    query(
+      `SELECT zone_id, location_code, location_type FROM ${t("woocommerce_shipping_zone_locations")}`,
+    ),
   );
 }
 
 async function loadZones(): Promise<
   Array<{ zone_id: number; zone_name: string; zone_order: number }>
 > {
-  return query(
-    `SELECT zone_id, zone_name, zone_order FROM ${t("woocommerce_shipping_zones")} ORDER BY zone_order ASC`,
+  return cachedShippingTable(shippingTableCacheKey("zones"), () =>
+    query(
+      `SELECT zone_id, zone_name, zone_order FROM ${t("woocommerce_shipping_zones")} ORDER BY zone_order ASC`,
+    ),
   );
 }
 
 async function loadMethods(): Promise<ZoneMethod[]> {
-  return query(
-    `SELECT zone_id, instance_id, method_id, method_order, is_enabled
-     FROM ${t("woocommerce_shipping_zone_methods")}
-     WHERE is_enabled = 1
-     ORDER BY method_order ASC`,
+  return cachedShippingTable(shippingTableCacheKey("zone_methods"), () =>
+    query(
+      `SELECT zone_id, instance_id, method_id, method_order, is_enabled
+       FROM ${t("woocommerce_shipping_zone_methods")}
+       WHERE is_enabled = 1
+       ORDER BY method_order ASC`,
+    ),
   );
 }
 

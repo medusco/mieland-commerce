@@ -37,8 +37,12 @@ import { findUserById } from "../../auth/index.js";
 import {
   cartNeedsFromInfo,
   cartNeedsPricing,
+  cartProductListNeedsFromInfo,
+  CART_PRODUCT_LIST_NEEDS,
   type CartFieldNeeds,
+  type ProductListNeeds,
 } from "../../utils/selection.js";
+import { getProductNodes } from "../../repositories/products.js";
 
 function mapAddressInput(
   input?: CartAddress | null,
@@ -70,13 +74,14 @@ async function shapeCartGraphql(
   mode: CartTotalsMode,
   needs: CartFieldNeeds,
   preCalculated?: CalculatedCart | null,
+  productListNeeds?: ProductListNeeds | null,
 ) {
   const calculated =
     preCalculated ??
     (await calculateCart(cart, mode, {
       pricing: cartNeedsPricing(needs),
       userId: ctx.userId,
-      calculateTax: mode === "full" && needs.cartTotals,
+      calculateTax: mode === "full" && needs.tax,
     }));
   if (
     !preCalculated &&
@@ -101,9 +106,14 @@ async function shapeCartGraphql(
         ),
       ]
     : [];
-  const productNodes = loadProducts
-    ? await ctx.productLoader.loadMany(productIds)
-    : [];
+  const hydrateNeeds =
+    productListNeeds ??
+    (loadProducts ? CART_PRODUCT_LIST_NEEDS : null);
+
+  const productNodes =
+    loadProducts && hydrateNeeds != null
+      ? await getProductNodes(productIds, hydrateNeeds, "cart")
+      : [];
   const productById = new Map<number, unknown>();
   for (let i = 0; i < productIds.length; i++) {
     const node = productNodes[i];
@@ -202,6 +212,16 @@ function modeForCart(
   );
 }
 
+function cartSelectionFromInfo(
+  info: GraphQLResolveInfo,
+  kind: "root" | "payload",
+) {
+  return {
+    needs: cartNeedsFromInfo(info, kind),
+    productNeeds: cartProductListNeedsFromInfo(info, kind),
+  };
+}
+
 export const cartResolvers = {
   Query: {
     cart: async (
@@ -211,11 +231,14 @@ export const cartResolvers = {
       info: GraphQLResolveInfo,
     ) => {
       const cart = await loadCart(ctx.sessionToken);
+      const sel = cartSelectionFromInfo(info, "root");
       return shapeCartGraphql(
         ctx,
         cart,
         "full",
-        cartNeedsFromInfo(info, "root"),
+        sel.needs,
+        undefined,
+        sel.productNeeds,
       );
     },
   },
@@ -261,13 +284,16 @@ export const cartResolvers = {
       });
 
       const mode = modeForCart(cart, input);
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
           ctx,
           cart,
           mode,
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
+          undefined,
+          sel.productNeeds,
         ),
       };
     },
@@ -283,13 +309,16 @@ export const cartResolvers = {
         c.items = c.items.filter((i) => !keys.has(String(i.key)));
         return { cart: c, result: c };
       });
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
           ctx,
           cart,
           modeForCart(cart, input),
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
+          undefined,
+          sel.productNeeds,
         ),
       };
     },
@@ -322,13 +351,16 @@ export const cartResolvers = {
         }
         return { cart: c, result: c };
       });
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
           ctx,
           cart,
           modeForCart(cart, input),
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
+          undefined,
+          sel.productNeeds,
         ),
       };
     },
@@ -343,13 +375,16 @@ export const cartResolvers = {
         c.chosenShippingMethods = (input.shippingMethods ?? []).filter(Boolean);
         return { cart: c, result: c };
       });
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
           ctx,
           cart,
           "full",
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
+          undefined,
+          sel.productNeeds,
         ),
       };
     },
@@ -415,13 +450,16 @@ export const cartResolvers = {
         c.coupons = c.coupons.map((c) => c.trim().toUpperCase());
         return { cart: c, result: c };
       });
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
           ctx,
           cart,
           modeFromArgs(input, true),
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
+          undefined,
+          sel.productNeeds,
         ),
       };
     },
@@ -437,13 +475,16 @@ export const cartResolvers = {
         c.coupons = c.coupons.filter((c) => !codes.has(c.toLowerCase()));
         return { cart: c, result: c };
       });
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input.clientMutationId,
         cart: await shapeCartGraphql(
           ctx,
           cart,
           modeFromArgs(input, true),
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
+          undefined,
+          sel.productNeeds,
         ),
       };
     },
@@ -516,6 +557,7 @@ export const cartResolvers = {
           total: calculated.total,
         });
 
+      const sel = cartSelectionFromInfo(info, "payload");
       return {
         clientMutationId: input?.clientMutationId ?? null,
         tax,
@@ -523,8 +565,9 @@ export const cartResolvers = {
           ctx,
           cart,
           "full",
-          cartNeedsFromInfo(info, "payload"),
+          sel.needs,
           calculated,
+          sel.productNeeds,
         ),
       };
     },

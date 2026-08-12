@@ -4,6 +4,7 @@ import { loadConfig } from "../config.js";
 import { toGlobalId } from "../utils/index.js";
 import {
   productListIsLean,
+  FULL_PRODUCT_LIST_NEEDS,
   type ProductListNeeds,
 } from "../utils/selection.js";
 import { buildMediaItemUrl, getMediaBaseUrl } from "./media.js";
@@ -27,7 +28,11 @@ function metaCacheKey(postId: number): string {
   return `postmeta:${postId}`;
 }
 
-function productCacheKey(productId: number): string {
+function productCacheKey(
+  productId: number,
+  profile: "full" | "cart" = "full",
+): string {
+  if (profile === "cart") return `product:v2:cart:${productId}`;
   return `product:v2:${productId}`;
 }
 
@@ -171,8 +176,14 @@ export type StockInfo = {
   allowsBackorders: boolean;
 };
 
-export async function getStockInfo(productId: number): Promise<StockInfo> {
-  const meta = await getPostMeta(productId);
+const STOCK_META_KEYS = [
+  "_stock_status",
+  "_manage_stock",
+  "_stock",
+  "_backorders",
+] as const;
+
+function stockInfoFromMeta(meta: Record<string, string>): StockInfo {
   const manageStock = (meta._manage_stock || "no").toLowerCase() === "yes";
   const backorders = (meta._backorders || "no").toLowerCase();
   const raw = meta._stock;
@@ -183,11 +194,17 @@ export async function getStockInfo(productId: number): Promise<StockInfo> {
   return {
     status: (meta._stock_status || "instock").toLowerCase(),
     manageStock,
-    stockQuantity: stockQuantity != null && Number.isFinite(stockQuantity)
-      ? stockQuantity
-      : null,
+    stockQuantity:
+      stockQuantity != null && Number.isFinite(stockQuantity)
+        ? stockQuantity
+        : null,
     allowsBackorders: backorders === "yes" || backorders === "notify",
   };
+}
+
+export async function getStockInfo(productId: number): Promise<StockInfo> {
+  const map = await getPostMetaKeysMany([productId], [...STOCK_META_KEYS]);
+  return stockInfoFromMeta(map.get(productId) ?? {});
 }
 
 export async function getAttachmentUrl(id: number): Promise<{
@@ -627,13 +644,18 @@ async function shapeProducts(
 
 export async function getProductNodes(
   productIds: readonly number[],
+  needs?: ProductListNeeds,
+  cacheProfile: "full" | "cart" = "full",
 ): Promise<Array<unknown | null>> {
   const ids = [...productIds];
   if (!ids.length) return [];
 
+  const hydrateNeeds = needs ?? FULL_PRODUCT_LIST_NEEDS;
+  const profile = needs ? cacheProfile : "full";
+
   const redis = getRedis();
   const ttl = catalogTtl();
-  const keys = ids.map(productCacheKey);
+  const keys = ids.map((id) => productCacheKey(id, profile));
   const cached = await redis.mget(...keys);
   const results: Array<unknown | null> = new Array(ids.length).fill(null);
   const missingIdx: number[] = [];
@@ -658,17 +680,9 @@ export async function getProductNodes(
   const variationRows = rows.filter((r) => r.post_type === "product_variation");
   const productRows = rows.filter((r) => r.post_type !== "product_variation");
 
-  const shapedProducts = await shapeProducts(productRows, {
-    price: true,
-    images: true,
-    categories: true,
-    attributes: true,
-    variations: true,
-    content: true,
-    reviews: true,
-    stock: true,
-    featured: true,
-  });
+  const shapedProducts = productListIsLean(hydrateNeeds)
+    ? await shapeProductsLean(productRows, hydrateNeeds)
+    : await shapeProducts(productRows, hydrateNeeds);
   const shapedById = new Map<number, unknown>();
   for (const node of shapedProducts) {
     const id = (node as { databaseId: number }).databaseId;
@@ -676,23 +690,44 @@ export async function getProductNodes(
   }
 
   if (variationRows.length) {
-    const varMeta = await getPostMetaMany(variationRows.map((r) => r.ID));
-    const thumbIds = variationRows
-      .map((r) => Number((varMeta.get(r.ID) ?? {})._thumbnail_id || 0))
-      .filter((id) => id > 0);
-    const images = await getAttachmentUrls(thumbIds);
+    const varIds = variationRows.map((r) => r.ID);
+    const varMeta = hydrateNeeds.attributes
+      ? await getPostMetaMany(varIds)
+      : await getPostMetaKeysMany(
+          varIds,
+          [
+            ...(hydrateNeeds.price
+              ? ["_price", "_regular_price", "_sale_price"]
+              : []),
+            ...(hydrateNeeds.images ? ["_thumbnail_id"] : []),
+          ],
+        );
+    const thumbIds = hydrateNeeds.images
+      ? variationRows
+          .map((r) => Number((varMeta.get(r.ID) ?? {})._thumbnail_id || 0))
+          .filter((id) => id > 0)
+      : [];
+    const images = thumbIds.length
+      ? await getAttachmentUrls(thumbIds)
+      : new Map();
     for (const row of variationRows) {
       const meta = varMeta.get(row.ID) ?? {};
       const imageId = Number(meta._thumbnail_id || 0);
       shapedById.set(row.ID, {
         databaseId: row.ID,
         name: row.post_title,
-        image: imageId ? images.get(imageId) ?? null : null,
-        price: meta._price ?? "",
-        regularPrice: meta._regular_price ?? "",
-        salePrice: meta._sale_price || null,
-        onSale: Boolean(meta._sale_price),
-        attributes: { nodes: variationAttributesFromMeta(meta) },
+        image:
+          hydrateNeeds.images && imageId
+            ? (images.get(imageId) ?? null)
+            : null,
+        price: hydrateNeeds.price ? (meta._price ?? "") : "",
+        regularPrice: hydrateNeeds.price ? (meta._regular_price ?? "") : "",
+        salePrice:
+          hydrateNeeds.price && meta._sale_price ? meta._sale_price : null,
+        onSale: hydrateNeeds.price ? Boolean(meta._sale_price) : false,
+        attributes: hydrateNeeds.attributes
+          ? { nodes: variationAttributesFromMeta(meta) }
+          : { nodes: [] },
       });
     }
   }
@@ -702,7 +737,14 @@ export async function getProductNodes(
     const id = ids[i];
     const node = byId.has(id) ? shapedById.get(id) ?? null : null;
     results[i] = node;
-    if (node) pipeline.set(productCacheKey(id), JSON.stringify(node), "EX", ttl);
+    if (node) {
+      pipeline.set(
+        productCacheKey(id, profile),
+        JSON.stringify(node),
+        "EX",
+        ttl,
+      );
+    }
   }
   await pipeline.exec();
 

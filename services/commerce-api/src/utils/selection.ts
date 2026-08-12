@@ -54,9 +54,66 @@ export type CartFieldNeeds = {
   lineSubtotal: boolean;
   lineExtraData: boolean;
   cartTotals: boolean;
+  /** TaxCloud bridge — only when totalTax / taxSuccess / taxMessage selected. */
+  tax: boolean;
   shippingMethods: boolean;
   coupons: boolean;
 };
+
+function fieldNamesUnder(
+  parentFields: FieldNode[],
+  fragments: Record<string, FragmentDefinitionNode>,
+  childName: string,
+): Set<string> {
+  const child = parentFields.find((f) => f.name.value === childName);
+  if (!child?.selectionSet) return new Set();
+  const under = expandSelections(child.selectionSet.selections, fragments);
+  return new Set(under.map((f) => f.name.value));
+}
+
+function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
+  return {
+    price:
+      names.has("price") ||
+      names.has("regularPrice") ||
+      names.has("salePrice") ||
+      names.has("onSale"),
+    images:
+      names.has("image") ||
+      names.has("thumbnailFields") ||
+      names.has("galleryImages"),
+    categories: names.has("productCategories"),
+    attributes: names.has("attributes"),
+    variations: names.has("variations"),
+    content: names.has("description") || names.has("shortDescription"),
+    reviews:
+      names.has("reviews") ||
+      names.has("averageRating") ||
+      names.has("reviewCount"),
+    stock:
+      names.has("stockStatus") ||
+      names.has("stockQuantity") ||
+      names.has("manageStock"),
+    featured: names.has("featured"),
+  };
+}
+
+function mergeProductListNeeds(
+  a: ProductListNeeds,
+  b: ProductListNeeds,
+): ProductListNeeds {
+  return {
+    price: a.price || b.price,
+    images: a.images || b.images,
+    categories: a.categories || b.categories,
+    attributes: a.attributes || b.attributes,
+    variations: a.variations || b.variations,
+    content: a.content || b.content,
+    reviews: a.reviews || b.reviews,
+    stock: a.stock || b.stock,
+    featured: a.featured || b.featured,
+  };
+}
 
 /** Detect which cart fields the operation actually selects. */
 export function cartNeedsFromInfo(
@@ -94,6 +151,7 @@ export function cartNeedsFromInfo(
       "taxSuccess",
       "taxMessage",
     ]),
+    tax: hasAny(cartFields, ["totalTax", "taxSuccess", "taxMessage"]),
     shippingMethods: hasAny(cartFields, [
       "availableShippingMethods",
       "chosenShippingMethods",
@@ -101,6 +159,89 @@ export function cartNeedsFromInfo(
     ]),
     coupons: hasAny(cartFields, ["appliedCoupons"]),
   };
+}
+
+/**
+ * Product hydrate needs from cart line `product { node { ... } }` and
+ * `variation { node { ... } }` selections. Never loads parent `variations`.
+ */
+export function cartProductListNeedsFromInfo(
+  info: GraphQLResolveInfo,
+  kind: "root" | "payload",
+): ProductListNeeds | null {
+  const cartFields =
+    kind === "payload" ? selectionsAt(info, ["cart"]) : selectionsAt(info, []);
+  const contentFields = cartFields
+    ? expandSelections(
+        cartFields.find((f) => f.name.value === "contents")?.selectionSet
+          ?.selections ?? [],
+        info.fragments,
+      )
+    : [];
+  const nodeFields = contentFields.length
+    ? expandSelections(
+        contentFields.find((f) => f.name.value === "nodes")?.selectionSet
+          ?.selections ?? [],
+        info.fragments,
+      )
+    : [];
+
+  const wantsProduct = nodeFields.some((f) => f.name.value === "product");
+  const wantsVariation = nodeFields.some((f) => f.name.value === "variation");
+  if (!wantsProduct && !wantsVariation) return null;
+
+  let merged: ProductListNeeds = {
+    price: false,
+    images: false,
+    categories: false,
+    attributes: false,
+    variations: false,
+    content: false,
+    reviews: false,
+    stock: false,
+    featured: false,
+  };
+
+  if (wantsProduct) {
+    const productNames = fieldNamesUnder(nodeFields, info.fragments, "product");
+    const productNodeNames = fieldNamesUnder(
+      expandSelections(
+        nodeFields.find((f) => f.name.value === "product")?.selectionSet
+          ?.selections ?? [],
+        info.fragments,
+      ),
+      info.fragments,
+      "node",
+    );
+    merged = mergeProductListNeeds(
+      merged,
+      productListNeedsFromNames(new Set([...productNames, ...productNodeNames])),
+    );
+  }
+
+  if (wantsVariation) {
+    const variationNames = fieldNamesUnder(nodeFields, info.fragments, "variation");
+    const variationNodeNames = fieldNamesUnder(
+      expandSelections(
+        nodeFields.find((f) => f.name.value === "variation")?.selectionSet
+          ?.selections ?? [],
+        info.fragments,
+      ),
+      info.fragments,
+      "node",
+    );
+    merged = mergeProductListNeeds(
+      merged,
+      productListNeedsFromNames(
+        new Set([...variationNames, ...variationNodeNames]),
+      ),
+    );
+  }
+
+  // Cart never hydrates all parent variations — only the line's variation node.
+  merged.variations = false;
+
+  return merged;
 }
 
 export function cartNeedsPricing(needs: CartFieldNeeds): boolean {
@@ -193,6 +334,32 @@ export type ProductListNeeds = {
   reviews: boolean;
   stock: boolean;
   featured: boolean;
+};
+
+/** Default product hydrate for cart line items (no all-variations load). */
+export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
+  price: true,
+  images: true,
+  categories: false,
+  attributes: false,
+  variations: false,
+  content: false,
+  reviews: true,
+  stock: true,
+  featured: false,
+};
+
+/** Full catalog hydrate (orders, productLoader default). */
+export const FULL_PRODUCT_LIST_NEEDS: ProductListNeeds = {
+  price: true,
+  images: true,
+  categories: true,
+  attributes: true,
+  variations: true,
+  content: true,
+  reviews: true,
+  stock: true,
+  featured: true,
 };
 
 /** Field needs under `products { nodes { ... } }`. */
