@@ -125,6 +125,12 @@ const envSchema = z.object({
     z.coerce.number().default(60),
   ),
   DISABLE_INTROSPECTION: boolFromEnv,
+  SENTRY_DSN: z.preprocess(emptyToUndefined, z.string().optional()),
+  SENTRY_ENVIRONMENT: z.preprocess(emptyToUndefined, z.string().optional()),
+  SENTRY_TRACES_SAMPLE_RATE: z.preprocess(
+    emptyToUndefined,
+    z.string().optional(),
+  ),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

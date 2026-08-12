@@ -1,3 +1,8 @@
+import {
+  captureSentryException,
+  initSentry,
+  setupSentryExpress,
+} from "./sentry.js";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -46,6 +51,8 @@ try {
   );
   process.exit(1);
 }
+
+initSentry(cfg);
 
 const schema = createSchema<AppContext>({
   typeDefs,
@@ -235,6 +242,7 @@ app.use(
         res.status(200).json({ errors: [err] });
         return;
       }
+      captureSentryException(err);
       logJson("error", {
         msg: "graphql_handler_error",
         err: String(err),
@@ -244,6 +252,8 @@ app.use(
     }
   },
 );
+
+setupSentryExpress(app);
 
 // Bind 0.0.0.0 so Railway healthchecks (IPv4) reach the process on Alpine.
 const server = app.listen(cfg.PORT, "0.0.0.0", () => {
