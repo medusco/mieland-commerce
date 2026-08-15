@@ -1,8 +1,16 @@
 import { phpUnserialize } from "./options.js";
 import { getAttachmentUrl } from "./products.js";
 
+const PRODUCT_ID_FIELD =
+  /(?:^|_)(products?_?ids|bestsellerproductids)(?:_|$)/i;
+
 const IMAGE_FIELD =
   /(^|_)(image|icon|svg_icon|svg_image|video_url|pdf_file|background_image|hero_image|logo_image|badge_image|badge_icon|product_image|main_image)s?$/i;
+
+function isProductIdField(field: string): boolean {
+  const normalized = field.replace(/-/g, "_");
+  return PRODUCT_ID_FIELD.test(normalized);
+}
 
 export function snakeToCamel(key: string): string {
   return key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
@@ -213,11 +221,11 @@ export async function shapeAcfField(
     return mediaEdge(Number(raw));
   }
 
-  if (/^\d+$/.test(raw.trim()) && /product/i.test(field)) {
+  if (/^\d+$/.test(raw.trim()) && isProductIdField(field)) {
     return relationshipConnection(raw);
   }
 
-  if (/product/i.test(field) && (raw.includes(",") || raw.includes(" "))) {
+  if (isProductIdField(field) && (raw.includes(",") || raw.includes(" "))) {
     return relationshipConnection(raw);
   }
 
