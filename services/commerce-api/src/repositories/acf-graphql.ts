@@ -142,12 +142,32 @@ function templateFileToGraphqlType(file: string): string {
   return `Template_${graphqlFormatTypeName(base)}`;
 }
 
+function normalizeTemplateSlug(value: string): string {
+  return value
+    .replace(/^\/+/, "")
+    .replace(/\\/g, "/")
+    .toLowerCase()
+    .replace(/\.php$/i, "")
+    .replace(/^template-?/i, "")
+    .replace(/^.*\//, "");
+}
+
+function templateValueToGraphqlType(value: string): string {
+  const slug = normalizeTemplateSlug(value);
+  if (!slug || slug === "default") return "DefaultTemplate";
+  return `Template_${graphqlFormatTypeName(slug.replace(/[-_]/g, " "))}`;
+}
+
 function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] {
   const types = new Set<string>();
   for (const andGroup of location) {
     for (const rule of andGroup) {
-      if (rule.param === "page_template" && rule.value) {
+      if (
+        (rule.param === "page_template" || rule.param === "post_template") &&
+        rule.value
+      ) {
         types.add(templateFileToGraphqlType(rule.value));
+        types.add(templateValueToGraphqlType(rule.value));
       }
       if (rule.param === "post_type" && rule.value === "page") types.add("Page");
       if (rule.param === "post_type" && rule.value === "post") types.add("Post");
@@ -333,7 +353,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v4";
+const ACF_GROUPS_CACHE_VERSION = "v5";
 
 let memoryGroups: {
   key: string;
@@ -402,6 +422,15 @@ function normalizeTemplateFile(file: string): string {
   return file.replace(/^\/+/, "").replace(/\\/g, "/").toLowerCase();
 }
 
+function templateFilesMatch(pageFile: string, ruleValue: string): boolean {
+  const normalizedPage = normalizeTemplateFile(pageFile);
+  const normalizedRule = normalizeTemplateFile(ruleValue);
+  if (normalizedPage === normalizedRule) return true;
+  if (normalizedPage.endsWith(`/${normalizedRule}`)) return true;
+  if (normalizedRule.endsWith(`/${normalizedPage}`)) return true;
+  return normalizeTemplateSlug(pageFile) === normalizeTemplateSlug(ruleValue);
+}
+
 export function locationMatchesPage(
   group: AcfGraphqlGroup,
   page: { databaseId: number; templateFile: string },
@@ -410,9 +439,8 @@ export function locationMatchesPage(
   const pageFile = normalizeTemplateFile(page.templateFile);
   return group.location.some((andGroup) =>
     andGroup.every((rule) => {
-      if (rule.param === "page_template") {
-        const want = normalizeTemplateFile(rule.value);
-        const eq = pageFile === want || pageFile.endsWith(`/${want}`) || want.endsWith(`/${pageFile}`);
+      if (rule.param === "page_template" || rule.param === "post_template") {
+        const eq = templateFilesMatch(pageFile, rule.value);
         return rule.operator === "!=" ? !eq : eq;
       }
       if (rule.param === "page") {
