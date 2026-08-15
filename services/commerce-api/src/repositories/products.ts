@@ -447,8 +447,10 @@ async function getVariationsMany(
   if (!parentIds.length) return out;
 
   const placeholders = parentIds.map(() => "?").join(",");
-  const rows = await query<ProductRow[]>(
-    `SELECT ID, post_title, post_name, post_content, post_excerpt, post_type, post_status, post_parent
+  const rows = await query<
+    (ProductRow & { menu_order: number })[]
+  >(
+    `SELECT ID, post_title, post_name, post_content, post_excerpt, post_type, post_status, post_parent, menu_order
      FROM ${t("posts")}
      WHERE post_parent IN (${placeholders})
        AND post_type = 'product_variation'
@@ -473,6 +475,7 @@ async function getVariationsMany(
     list.push({
       databaseId: r.ID,
       name: r.post_title,
+      menuOrder: r.menu_order,
       price: meta._price ?? "",
       regularPrice: meta._regular_price ?? meta._price ?? "",
       salePrice: meta._sale_price || null,

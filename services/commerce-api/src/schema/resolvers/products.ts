@@ -39,10 +39,40 @@ export const productResolvers = {
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
     variations: (
-      parent: { variations?: { nodes: unknown[] } },
-      args: { first?: number },
+      parent: {
+        variations?: {
+          nodes: Array<{
+            databaseId?: number;
+            menuOrder?: number;
+          }>;
+        };
+      },
+      args: {
+        first?: number;
+        where?: {
+          orderby?: { field?: string; order?: string };
+        };
+      },
     ) => {
-      const nodes = parent.variations?.nodes ?? [];
+      const field = (args.where?.orderby?.field ?? "MENU_ORDER").toUpperCase();
+      const order = args.where?.orderby?.order?.toUpperCase() === "DESC" ? -1 : 1;
+      const nodes = [...(parent.variations?.nodes ?? [])];
+
+      nodes.sort((a, b) => {
+        let cmp = 0;
+        switch (field) {
+          case "ID":
+            cmp = (a.databaseId ?? 0) - (b.databaseId ?? 0);
+            break;
+          case "MENU_ORDER":
+          default:
+            cmp = (a.menuOrder ?? 0) - (b.menuOrder ?? 0);
+            if (cmp === 0) cmp = (a.databaseId ?? 0) - (b.databaseId ?? 0);
+            break;
+        }
+        return cmp * order;
+      });
+
       return { nodes: args.first ? nodes.slice(0, args.first) : nodes };
     },
   },

@@ -61,6 +61,13 @@ export const typeDefs = /* GraphQL */ `
     DESC
   }
 
+  enum ProductVariationOrderByEnum {
+    MENU_ORDER
+    DATE
+    MODIFIED
+    ID
+  }
+
   type MediaItem {
     sourceUrl: String
     mediaItemUrl: String
@@ -752,8 +759,8 @@ export const typeDefs = /* GraphQL */ `
   }
 
   input ProductVariationOrderbyInput {
-    field: String
-    order: String
+    field: ProductVariationOrderByEnum
+    order: OrderEnum
   }
 
   input ProductVariationQueryInput {
