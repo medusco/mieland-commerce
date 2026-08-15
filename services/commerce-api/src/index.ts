@@ -1,4 +1,5 @@
 import {
+  annotateGraphqlOperationFromBody,
   captureSentryException,
   initSentry,
   setupSentryExpress,
@@ -231,6 +232,7 @@ app.use(
   authSensitiveBodyGuard,
   async (req, res) => {
     const started = Date.now();
+    const operationName = annotateGraphqlOperationFromBody(req.body);
     const existing =
       parseSessionHeader(req.header("woocommerce-session")) ||
       parseSessionHeader(req.header("Woocommerce-Session"));
@@ -289,6 +291,7 @@ app.use(
       logJson("info", {
         msg: "graphql",
         requestId: req.header("x-request-id"),
+        operationName: operationName ?? null,
         ms: Date.now() - started,
         status: response.status,
         method: req.method,
@@ -301,10 +304,11 @@ app.use(
         res.status(200).json({ errors: [err] });
         return;
       }
-      captureSentryException(err);
+      captureSentryException(err, { operationName });
       logJson("error", {
         msg: "graphql_handler_error",
         err: String(err),
+        operationName: operationName ?? null,
         requestId: req.header("x-request-id"),
       });
       res.status(500).json({ errors: [{ message: "Internal server error" }] });

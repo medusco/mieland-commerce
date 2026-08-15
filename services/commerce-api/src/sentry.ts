@@ -33,69 +33,19 @@ function getTracePropagationTargets(cfg: AppConfig): (string | RegExp)[] {
 
 let enabled = false;
 
-export function isSentryEnabled(): boolean {
-  return enabled;
-}
-
-/** operationName from POST JSON body or GET query string (APQ). */
-export function parseGraphqlOperationName(
-  body?: unknown,
-  requestUrl?: string,
-): string | undefined {
-  if (body && typeof body === "object" && body !== null) {
-    const name = (body as { operationName?: unknown }).operationName;
-    if (typeof name === "string" && name.trim()) return name.trim();
-  }
-  if (requestUrl) {
-    try {
-      const params = new URL(requestUrl, "http://localhost").searchParams;
-      const fromQuery = params.get("operationName");
-      if (fromQuery?.trim()) return fromQuery.trim();
-    } catch {
-      /* ignore malformed URL */
-    }
-  }
-  return undefined;
-}
-
-export function annotateGraphqlOperation(
-  operationName: string | undefined,
-  extra?: Record<string, string | number | boolean>,
-): string {
-  const name = operationName?.trim() || "anonymous";
-  Sentry.setTag("graphql.operation", name);
-  const span = Sentry.getActiveSpan();
-  span?.setAttribute("graphql.operation.name", name);
-  if (extra) {
-    for (const [key, value] of Object.entries(extra)) {
-      span?.setAttribute(key, value);
-    }
-  }
-  return name;
-}
-
-/** Wrap a GraphQL handler so every request gets a named Sentry span. */
-export async function withGraphqlSentryTrace<T>(
-  operationName: string | undefined,
-  fn: () => Promise<T>,
-): Promise<T> {
-  if (!enabled) return fn();
-
-  const name = operationName?.trim() || "anonymous";
-  return Sentry.startSpan(
-    {
-      name: `graphql ${name}`,
-      op: "graphql.request",
-      attributes: {
-        "graphql.operation.name": name,
-      },
-    },
-    async (span) => {
-      Sentry.setTag("graphql.operation", name);
-      span.setAttribute("graphql.operation.name", name);
-      return fn();
-    },
-  );
+/** Tag the active Sentry scope from POST /graphql JSON `operationName`. */
+export function annotateGraphqlOperationFromBody(body?: unknown): string | undefined {
+  if (!enabled) return undefined;
+  const raw =
+    body && typeof body === "object" && body !== null
+      ? (body as { operationName?: unknown }).operationName
+      : undefined;
+  const operationName =
+    typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  const label = operationName ?? "anonymous";
+  Sentry.setTag("graphql.operation", label);
+  Sentry.getActiveSpan()?.setAttribute("graphql.operation.name", label);
+  return operationName;
 }
 
 export function initSentry(cfg: AppConfig): boolean {
