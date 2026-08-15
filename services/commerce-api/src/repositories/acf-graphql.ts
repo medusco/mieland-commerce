@@ -277,7 +277,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v2";
+const ACF_GROUPS_CACHE_VERSION = "v1";
 
 let memoryGroups: {
   key: string;
@@ -416,9 +416,8 @@ async function shapeDefinedField(
           field.layouts.find((l) => l.name === layoutName) ??
           field.layouts.find((l) => l.graphqlName === layoutName);
         if (layout) {
-          const typename = `${flexPrefix}${toPascal(layout.name)}Layout`;
-          obj.__typename = typename;
-          obj.fieldGroupName = typename;
+          obj.__typename = `${flexPrefix}${toPascal(layout.name)}Layout`;
+          obj.fieldGroupName = layout.name;
         }
         return obj;
       });
@@ -433,9 +432,7 @@ async function shapeDefinedField(
   if (
     field.type === "relationship" ||
     field.type === "post_object" ||
-    field.type === "page_link" ||
-    /products?_?ids$/i.test(field.graphqlName || field.name) ||
-    /bestsellerproductids/i.test(field.graphqlName || field.name)
+    field.type === "page_link"
   ) {
     const shaped = await shapeAcfField(meta, field.name);
     if (shaped && typeof shaped === "object") return shaped;
@@ -445,14 +442,6 @@ async function shapeDefinedField(
   if (field.type === "true_false") {
     const raw = meta[field.name];
     return raw === "1" || raw === "true";
-  }
-
-  if (field.graphqlName === "trustTags" || field.name === "trust_tags") {
-    const shaped = await shapeAcfField(meta, field.name);
-    if (Array.isArray(shaped)) {
-      return shaped.map(String).filter(Boolean).join(", ");
-    }
-    return shaped;
   }
 
   return shapeAcfField(meta, field.name);

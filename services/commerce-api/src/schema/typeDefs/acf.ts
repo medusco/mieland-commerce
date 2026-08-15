@@ -5,11 +5,6 @@ import type { PageRecord } from "../../repositories/content.js";
 
 const SKIP_TYPES = new Set(["tab", "accordion", "message", "separator"]);
 
-type EmitContext = {
-  emitted: Map<string, string>;
-  interfaces: Map<string, string[]>;
-};
-
 function gqlName(name: string): string {
   const pascal = toPascal(name.replace(/[^a-zA-Z0-9_]/g, "_"));
   return pascal || "AcfType";
@@ -17,14 +12,6 @@ function gqlName(name: string): string {
 
 function groupTypeName(group: AcfGraphqlGroup): string {
   return gqlName(group.graphqlFieldName);
-}
-
-function flexBaseName(parentType: string, field: AcfFieldDef): string {
-  return `${parentType}${gqlName(field.graphqlName || field.name)}`;
-}
-
-function layoutTypeName(flexBase: string, layoutName: string): string {
-  return `${flexBase}${gqlName(layoutName)}Layout`;
 }
 
 function scalarForAcfType(type: string): string {
@@ -52,79 +39,59 @@ function scalarForAcfType(type: string): string {
   }
 }
 
-/** WPGraphQL-for-ACF field typing with commerce overrides for known CMS fields. */
-function scalarForField(field: AcfFieldDef): string {
-  const name = field.graphqlName || field.name;
-  if (/products?_?ids$/i.test(name) || /bestsellerproductids/i.test(name)) {
-    return "AcfContentNodeConnection";
-  }
-  if (name === "trustTags" || name === "trust_tags") {
-    return "String";
-  }
-  return scalarForAcfType(field.type);
-}
-
 function emitObjectType(
   typeName: string,
   fields: AcfFieldDef[],
   extraFields: string[],
-  ctx: EmitContext,
-  options?: { flexBasePrefix?: string; implementsInterface?: string },
+  emitted: Map<string, string>,
+  unions: Map<string, string[]>,
 ): void {
-  if (ctx.emitted.has(typeName)) return;
-
+  if (emitted.has(typeName)) return;
+  emitted.set(typeName, "");
   const lines: string[] = [...extraFields];
   for (const field of fields) {
     if (SKIP_TYPES.has(field.type) || !field.graphqlName) continue;
-    const gqlType = fieldGraphQLType(typeName, field, ctx, options?.flexBasePrefix);
+    const gqlType = fieldGraphQLType(typeName, field, emitted, unions);
     lines.push(`    ${field.graphqlName}: ${gqlType}`);
   }
-
-  const implementsClause = options?.implementsInterface
-    ? ` implements ${options.implementsInterface}`
-    : "";
-  ctx.emitted.set(
+  emitted.set(
     typeName,
-    `  type ${typeName}${implementsClause} {\n${lines.join("\n")}\n  }`,
+    `  type ${typeName} {\n${lines.join("\n")}\n  }`,
   );
 }
 
 function fieldGraphQLType(
   parentType: string,
   field: AcfFieldDef,
-  ctx: EmitContext,
-  flexBasePrefix?: string,
+  emitted: Map<string, string>,
+  unions: Map<string, string[]>,
 ): string {
   if (field.type === "flexible_content") {
-    const flexBase = flexBaseName(parentType, field);
-    const interfaceName = `${flexBase}_Layout`;
+    const unionName = `${parentType}${gqlName(field.graphqlName || field.name)}`;
     const members: string[] = [];
-
     for (const layout of field.layouts) {
-      const layoutType = layoutTypeName(flexBase, layout.name);
+      const layoutType = `${unionName}${gqlName(layout.name)}Layout`;
       emitObjectType(
         layoutType,
         layout.subFields,
         ["    fieldGroupName: String"],
-        ctx,
-        { flexBasePrefix: flexBase, implementsInterface: interfaceName },
+        emitted,
+        unions,
       );
       members.push(layoutType);
     }
-
     if (!members.length) return "[String]";
-    ctx.interfaces.set(interfaceName, members);
-    return `[${interfaceName}]`;
+    unions.set(unionName, members);
+    return `[${unionName}]`;
   }
 
   if (field.type === "repeater" || field.type === "group") {
-    const prefix = flexBasePrefix ?? parentType;
-    const nested = `${prefix}${gqlName(field.graphqlName || field.name)}`;
-    emitObjectType(nested, field.subFields, [], ctx, { flexBasePrefix });
+    const nested = `${parentType}${gqlName(field.graphqlName || field.name)}`;
+    emitObjectType(nested, field.subFields, [], emitted, unions);
     return field.type === "repeater" ? `[${nested}]` : nested;
   }
 
-  return scalarForField(field);
+  return scalarForAcfType(field.type);
 }
 
 function collectTemplateTypes(groups: AcfGraphqlGroup[]): Map<string, AcfGraphqlGroup[]> {
@@ -142,17 +109,15 @@ function collectTemplateTypes(groups: AcfGraphqlGroup[]): Map<string, AcfGraphql
 
 /** SDL for ACF field groups (WPGraphQL-for-ACF settings). */
 export function generateAcfTypeDefs(groups: AcfGraphqlGroup[]): string {
-  const ctx: EmitContext = {
-    emitted: new Map<string, string>(),
-    interfaces: new Map<string, string[]>(),
-  };
+  const emitted = new Map<string, string>();
+  const unions = new Map<string, string[]>();
   const pageFields: string[] = [];
   const postFields: string[] = [];
   const templates = collectTemplateTypes(groups);
 
   for (const group of groups) {
     const typeName = groupTypeName(group);
-    emitObjectType(typeName, group.fields, [], ctx);
+    emitObjectType(typeName, group.fields, [], emitted, unions);
     const fieldLine = `    ${group.graphqlFieldName}: ${typeName}`;
     if (group.graphqlTypes.includes("Page")) pageFields.push(fieldLine);
     if (group.graphqlTypes.includes("Post")) postFields.push(fieldLine);
@@ -169,13 +134,13 @@ export function generateAcfTypeDefs(groups: AcfGraphqlGroup[]): string {
     );
   }
 
-  const interfaceSdl = [...ctx.interfaces.keys()].map(
-    (name) => `  interface ${name} {\n    fieldGroupName: String\n  }`,
+  const unionSdl = [...unions.entries()].map(
+    ([name, members]) => `  union ${name} = ${members.join(" | ")}`,
   );
 
   const parts = [
-    ...interfaceSdl,
-    ...ctx.emitted.values(),
+    ...emitted.values(),
+    ...unionSdl,
     ...templateSdl,
   ];
   if (pageFields.length) {
@@ -223,15 +188,15 @@ export function generateAcfResolvers(
     }
   }
 
-  const layoutResolve = (obj: { __typename?: string }) =>
+  const unionResolve = (obj: { __typename?: string; fieldGroupName?: string }) =>
     obj.__typename ?? "DefaultTemplate";
 
   for (const group of groups) {
     const parent = groupTypeName(group);
     for (const field of group.fields) {
       if (field.type !== "flexible_content") continue;
-      const interfaceName = `${flexBaseName(parent, field)}_Layout`;
-      resolvers[interfaceName] = { __resolveType: layoutResolve };
+      const unionName = `${parent}${gqlName(field.graphqlName || field.name)}`;
+      resolvers[unionName] = { __resolveType: unionResolve };
     }
   }
 
