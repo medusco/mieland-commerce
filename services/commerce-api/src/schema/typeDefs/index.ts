@@ -63,10 +63,6 @@ export const typeDefs = /* GraphQL */ `
     node: MediaItem
   }
 
-  type ThumbnailFields {
-    productThumbnailImage: ProductThumbnailImage
-  }
-
   type ProductAttribute {
     name: String
     label: String

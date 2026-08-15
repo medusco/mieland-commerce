@@ -145,9 +145,9 @@ export async function shapeAcfField(
       const childNames = collectIndexedChildNames(meta, itemPrefix);
       const obj: Record<string, unknown> = {};
       if (layout) {
-        obj.fieldGroupName = layout;
+        obj.fieldGroupName = `${opts.flexTypePrefix}${toPascal(layout)}Layout`;
         if (opts.flexTypePrefix) {
-          obj.__typename = `${opts.flexTypePrefix}${toPascal(layout)}Layout`;
+          obj.__typename = obj.fieldGroupName;
         }
       }
       for (const child of childNames) {
@@ -192,6 +192,10 @@ export async function shapeAcfField(
   }
 
   if (/^\d+$/.test(raw.trim()) && /product/i.test(field)) {
+    return relationshipConnection(raw);
+  }
+
+  if (/product/i.test(field) && (raw.includes(",") || raw.includes(" "))) {
     return relationshipConnection(raw);
   }
 

@@ -12,8 +12,9 @@ import { GraphQLError } from "graphql";
 import depthLimit from "graphql-depth-limit";
 import { typeDefs } from "./schema/typeDefs/index.js";
 import {
+  buildAcfSchema,
   generateAcfResolvers,
-  generateAcfTypeDefs,
+  logAcfSchemaBuild,
 } from "./schema/typeDefs/acf.js";
 import { mergeResolvers, resolvers } from "./schema/resolvers/index.js";
 import {
@@ -59,10 +60,27 @@ try {
 
 initSentry(cfg);
 
+logJson("info", {
+  msg: "boot_start",
+  port: cfg.PORT,
+  env: cfg.NODE_ENV,
+  mysqlHost: cfg.MYSQL_HOST,
+  mysqlDatabase: cfg.MYSQL_DATABASE,
+});
+
 let acfGroups: Awaited<ReturnType<typeof loadAcfGraphqlGroups>> = [];
 try {
   acfGroups = await loadAcfGraphqlGroups();
-  logJson("info", { msg: "acf_schema_loaded", groups: acfGroups.length });
+  logJson("info", {
+    msg: "acf_groups_loaded",
+    count: acfGroups.length,
+    groups: acfGroups.map((group) => ({
+      id: group.id,
+      title: group.title,
+      graphqlFieldName: group.graphqlFieldName,
+      graphqlTypes: group.graphqlTypes,
+    })),
+  });
 } catch (err) {
   logJson("warn", {
     msg: "acf_schema_load_failed",
@@ -70,11 +88,31 @@ try {
   });
 }
 
-const acfTypeDefs = generateAcfTypeDefs(acfGroups);
-const schema = createSchema<AppContext>({
-  typeDefs: acfTypeDefs.trim() ? [typeDefs, acfTypeDefs] : typeDefs,
-  resolvers: mergeResolvers(resolvers, generateAcfResolvers(acfGroups)),
-});
+const acfSchema = buildAcfSchema(acfGroups);
+logAcfSchemaBuild(acfSchema.summary);
+
+let schema;
+try {
+  schema = createSchema<AppContext>({
+    typeDefs: acfSchema.sdl.trim() ? [typeDefs, acfSchema.sdl] : typeDefs,
+    resolvers: mergeResolvers(resolvers, generateAcfResolvers(acfGroups)),
+  });
+  logJson("info", {
+    msg: "schema_build_ok",
+    mergedAcfSdl: acfSchema.sdl.trim().length > 0,
+    acfSdlLength: acfSchema.summary.sdlLength,
+  });
+} catch (err) {
+  logJson("error", {
+    msg: "schema_build_failed",
+    err: err instanceof Error ? err.message : String(err),
+    acfGroups: acfGroups.length,
+    acfSdlLength: acfSchema.summary.sdlLength,
+    skippedGroups: acfSchema.summary.skippedGroups,
+    emittedTypes: acfSchema.summary.emittedTypes,
+  });
+  process.exit(1);
+}
 
 const yoga = createYoga<AppContext>({
   schema,

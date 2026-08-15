@@ -389,7 +389,6 @@ async function shapeProductsLean(
         stockQuantity != null && Number.isFinite(stockQuantity) ? stockQuantity : null,
       manageStock,
       image: null,
-      thumbnailFields: { productThumbnailImage: null },
       attributes: { nodes: [] },
       price: needs.price ? price : "",
       regularPrice: needs.price ? regularPrice : "",
@@ -604,17 +603,6 @@ async function shapeProducts(
         stockQtyRaw != null && Number.isFinite(stockQtyRaw) ? stockQtyRaw : null,
       manageStock,
       image,
-      thumbnailFields: {
-        productThumbnailImage: image
-          ? {
-              node: {
-                mediaItemUrl: image.mediaItemUrl,
-                sourceUrl: image.sourceUrl,
-                altText: image.altText,
-              },
-            }
-          : null,
-      },
       attributes: { nodes: attrs },
       price: needs.price ? price : "",
       regularPrice: needs.price ? regularPrice : "",

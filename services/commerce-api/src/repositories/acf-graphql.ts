@@ -8,6 +8,7 @@ import {
   toPascal,
   unserializeAcf,
 } from "./acf.js";
+import { logJson } from "../utils/index.js";
 
 export type AcfLocationRule = {
   param: string;
@@ -124,6 +125,11 @@ function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] {
       }
       if (rule.param === "post_type" && rule.value === "page") types.add("Page");
       if (rule.param === "post_type" && rule.value === "post") types.add("Post");
+      if (rule.param === "post_type" && rule.value === "product") {
+        types.add("Product");
+        types.add("SimpleProduct");
+        types.add("VariableProduct");
+      }
     }
   }
   return [...types];
@@ -277,7 +283,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v1";
+const ACF_GROUPS_CACHE_VERSION = "v3";
 
 let memoryGroups: {
   key: string;
@@ -300,6 +306,11 @@ export async function loadAcfGraphqlGroups(): Promise<AcfGraphqlGroup[]> {
   const cacheKey = acfGroupsCacheKey(cfg.MYSQL_TABLE_PREFIX);
   const now = Date.now();
   if (memoryGroups && memoryGroups.key === cacheKey && memoryGroups.expiresAt > now) {
+    logJson("info", {
+      msg: "acf_groups_cache_hit",
+      source: "memory",
+      count: memoryGroups.value.length,
+    });
     return memoryGroups.value;
   }
   if (inflight) return inflight;
@@ -308,12 +319,20 @@ export async function loadAcfGraphqlGroups(): Promise<AcfGraphqlGroup[]> {
     const ttl = acfGroupsTtlSeconds();
     const redis = getRedis();
     const hit = await redis.get(cacheKey);
+    const source = hit ? "redis" : "mysql";
     const groups = hit
       ? (JSON.parse(hit) as AcfGraphqlGroup[])
       : await loadAcfGraphqlGroupsUncached();
     if (!hit) {
       await redis.set(cacheKey, JSON.stringify(groups), "EX", ttl);
     }
+    logJson("info", {
+      msg: hit ? "acf_groups_cache_hit" : "acf_groups_loaded_from_mysql",
+      source,
+      count: groups.length,
+      cacheKey,
+      ttlSeconds: ttl,
+    });
     memoryGroups = {
       key: cacheKey,
       value: groups,
@@ -416,8 +435,9 @@ async function shapeDefinedField(
           field.layouts.find((l) => l.name === layoutName) ??
           field.layouts.find((l) => l.graphqlName === layoutName);
         if (layout) {
-          obj.__typename = `${flexPrefix}${toPascal(layout.name)}Layout`;
-          obj.fieldGroupName = layout.name;
+          const typename = `${flexPrefix}${toPascal(layout.name)}Layout`;
+          obj.__typename = typename;
+          obj.fieldGroupName = typename;
         }
         return obj;
       });
@@ -432,7 +452,9 @@ async function shapeDefinedField(
   if (
     field.type === "relationship" ||
     field.type === "post_object" ||
-    field.type === "page_link"
+    field.type === "page_link" ||
+    /products?_?ids$/i.test(field.graphqlName || field.name) ||
+    /bestsellerproductids/i.test(field.graphqlName || field.name)
   ) {
     const shaped = await shapeAcfField(meta, field.name);
     if (shaped && typeof shaped === "object") return shaped;
@@ -442,6 +464,14 @@ async function shapeDefinedField(
   if (field.type === "true_false") {
     const raw = meta[field.name];
     return raw === "1" || raw === "true";
+  }
+
+  if (field.graphqlName === "trustTags" || field.name === "trust_tags") {
+    const shaped = await shapeAcfField(meta, field.name);
+    if (Array.isArray(shaped)) {
+      return shaped.map(String).filter(Boolean).join(", ");
+    }
+    return shaped;
   }
 
   return shapeAcfField(meta, field.name);
