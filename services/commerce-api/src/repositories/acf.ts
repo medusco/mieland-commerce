@@ -120,6 +120,25 @@ function collectIndexedChildNames(meta: Record<string, string>, itemPrefix: stri
   return [...names];
 }
 
+/** ACF flexible content stores layout names in the parent field value as index → layout slug. */
+function flexLayoutMap(raw: string | undefined): Map<number, string> | null {
+  if (!raw || !looksSerialized(raw)) return null;
+  const parsed = unserializeAcf(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const entries = Array.isArray(parsed)
+    ? parsed.map((value, index) => [String(index), value] as const)
+    : Object.entries(parsed as Record<string, unknown>);
+
+  const map = new Map<number, string>();
+  for (const [key, value] of entries) {
+    const index = Number(key);
+    if (!Number.isFinite(index) || typeof value !== "string" || !value.trim()) continue;
+    map.set(index, value.trim());
+  }
+  return map.size ? map : null;
+}
+
 export async function shapeAcfField(
   meta: Record<string, string>,
   field: string,
@@ -129,19 +148,22 @@ export async function shapeAcfField(
   const isList = hasIndexedChildren(meta, field);
 
   if (isList) {
-    const count = Math.max(
-      Number(raw) || 0,
-      ...Object.keys(meta)
-        .filter((k) => k.startsWith(`${field}_`) && /_\d+/.test(k))
-        .map((k) => {
-          const m = k.slice(field.length + 1).match(/^(\d+)/);
-          return m ? Number(m[1]) + 1 : 0;
-        }),
-    );
+    const layoutMap = flexLayoutMap(raw);
+    const count = layoutMap
+      ? Math.max(...layoutMap.keys()) + 1
+      : Math.max(
+          Number(raw) || 0,
+          ...Object.keys(meta)
+            .filter((k) => k.startsWith(`${field}_`) && /_\d+/.test(k))
+            .map((k) => {
+              const m = k.slice(field.length + 1).match(/^(\d+)/);
+              return m ? Number(m[1]) + 1 : 0;
+            }),
+        );
     const items: unknown[] = [];
     for (let i = 0; i < count; i++) {
       const itemPrefix = `${field}_${i}`;
-      const layout = meta[`${itemPrefix}_acf_fc_layout`];
+      const layout = meta[`${itemPrefix}_acf_fc_layout`] ?? layoutMap?.get(i);
       const childNames = collectIndexedChildNames(meta, itemPrefix);
       const obj: Record<string, unknown> = {};
       if (layout) {

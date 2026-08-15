@@ -459,11 +459,17 @@ async function shapeDefinedField(
         const layoutName = String(obj.fieldGroupName ?? "");
         const layout =
           field.layouts.find((l) => l.name === layoutName) ??
-          field.layouts.find((l) => l.graphqlName === layoutName);
+          field.layouts.find((l) => l.graphqlName === layoutName) ??
+          field.layouts.find(
+            (l) => `${flexPrefix}${toPascal(l.name)}Layout` === layoutName,
+          );
         if (layout) {
           const typename = `${flexPrefix}${toPascal(layout.name)}Layout`;
           obj.__typename = typename;
           obj.fieldGroupName = typename;
+        } else if (layoutName.endsWith("Layout") && layoutName.startsWith(flexPrefix)) {
+          obj.__typename = layoutName;
+          obj.fieldGroupName = layoutName;
         }
         return obj;
       });
