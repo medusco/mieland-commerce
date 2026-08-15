@@ -121,6 +121,9 @@ function scalarForField(field: AcfFieldDef): string {
   if (name === "trustTags" || name === "trust_tags") {
     return "String";
   }
+  if (name === "applyDiscountCoupon" || name === "apply_discount_coupon") {
+    return "Boolean";
+  }
   return scalarForAcfType(field.type);
 }
 

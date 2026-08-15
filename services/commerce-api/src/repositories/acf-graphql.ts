@@ -58,6 +58,23 @@ function asBool(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
+function asApplyDiscountCoupon(value: unknown, defaultValue?: string): boolean {
+  if (value === true || value === 1 || value === "1" || value === "true") return true;
+  if (value === false || value === 0 || value === "0" || value === "false" || value == null) {
+    if (defaultValue != null) return defaultValue === "1" || defaultValue === "true";
+    return false;
+  }
+  if (Array.isArray(value)) return value.map(String).filter(Boolean).length > 0;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    if (trimmed === "0" || trimmed === "false") return false;
+    if (trimmed === "1" || trimmed === "true") return true;
+    return Boolean(trimmed);
+  }
+  return Boolean(value);
+}
+
 function asStringList(value: unknown): string[] {
   if (!value) return [];
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -568,6 +585,14 @@ async function shapeDefinedField(
     const fallback = field.defaultValue;
     if (fallback != null) return fallback === "1" || fallback === "true";
     return false;
+  }
+
+  if (field.graphqlName === "applyDiscountCoupon" || field.name === "apply_discount_coupon") {
+    const raw = meta[field.name];
+    if (raw != null && raw !== "") {
+      return asApplyDiscountCoupon(await shapeAcfField(meta, field.name));
+    }
+    return asApplyDiscountCoupon(null, field.defaultValue);
   }
 
   if (field.graphqlName === "trustTags" || field.name === "trust_tags") {
