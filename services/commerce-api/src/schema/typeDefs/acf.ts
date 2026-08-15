@@ -1,5 +1,9 @@
 import type { AcfFieldDef, AcfGraphqlGroup } from "../../repositories/acf-graphql.js";
-import { shapeAcfGroupFields } from "../../repositories/acf-graphql.js";
+import {
+  graphqlTemplateTypename,
+  registerKnownTemplateTypes,
+  shapeAcfGroupFields,
+} from "../../repositories/acf-graphql.js";
 import { getPostMeta } from "../../repositories/products.js";
 import { toPascal } from "../../repositories/acf.js";
 import type { PageRecord } from "../../repositories/content.js";
@@ -197,7 +201,10 @@ function collectTemplateTypes(groups: AcfGraphqlGroup[]): Map<string, AcfGraphql
 }
 
 /** SDL for ACF field groups (WPGraphQL-for-ACF settings). */
-export function buildAcfSchema(groups: AcfGraphqlGroup[]): AcfSchemaBuildResult {
+export function buildAcfSchema(
+  groups: AcfGraphqlGroup[],
+  pageTemplateFiles: string[] = [],
+): AcfSchemaBuildResult {
   const ctx: EmitContext = {
     emitted: new Map<string, string>(),
     interfaces: new Map<string, string[]>(),
@@ -207,6 +214,11 @@ export function buildAcfSchema(groups: AcfGraphqlGroup[]): AcfSchemaBuildResult 
   const productFields = new Map<string, string[]>();
   const skippedGroups: AcfSchemaBuildSummary["skippedGroups"] = [];
   const templates = collectTemplateTypes(groups);
+  for (const file of pageTemplateFiles) {
+    const typename = graphqlTemplateTypename("", file);
+    if (typename === "DefaultTemplate" || templates.has(typename)) continue;
+    templates.set(typename, []);
+  }
 
   for (const group of groups) {
     const typeName = groupTypeName(group);
@@ -262,6 +274,8 @@ export function buildAcfSchema(groups: AcfGraphqlGroup[]): AcfSchemaBuildResult 
   }
 
   const sdl = `  ${parts.join("\n\n")}`;
+
+  registerKnownTemplateTypes(templateTypes);
 
   return {
     sdl,

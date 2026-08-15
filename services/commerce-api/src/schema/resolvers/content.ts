@@ -11,6 +11,7 @@ import {
   shapePageTemplate,
   type PageRecord,
 } from "../../repositories/content.js";
+import { resolveContentTemplateType } from "../../repositories/acf-graphql.js";
 
 export const contentResolvers = {
   Query: {
@@ -54,7 +55,7 @@ export const contentResolvers = {
   },
   ContentTemplate: {
     __resolveType(obj: { __typename?: string }) {
-      return obj.__typename ?? "DefaultTemplate";
+      return resolveContentTemplateType(obj.__typename);
     },
   },
 };

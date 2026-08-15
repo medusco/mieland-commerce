@@ -263,6 +263,20 @@ function humanTemplateName(file: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+export async function listPageTemplateFiles(): Promise<string[]> {
+  const rows = await query<{ meta_value: string }[]>(
+    `SELECT DISTINCT pm.meta_value
+     FROM ${t("postmeta")} pm
+     INNER JOIN ${t("posts")} p ON p.ID = pm.post_id
+     WHERE pm.meta_key = '_wp_page_template'
+       AND p.post_type = 'page'
+       AND p.post_status = 'publish'
+       AND pm.meta_value IS NOT NULL
+       AND pm.meta_value != ''`,
+  );
+  return rows.map((row) => row.meta_value).filter(Boolean);
+}
+
 export async function listPages(first = 100) {
   const rows = await query<
     {

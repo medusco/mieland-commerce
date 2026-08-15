@@ -11,9 +11,10 @@ import {
 } from "../schema/typeDefs/acf.js";
 import { mergeResolvers, resolvers } from "../schema/resolvers/index.js";
 import { loadAcfGraphqlGroups } from "../repositories/acf-graphql.js";
+import { listPageTemplateFiles } from "../repositories/content.js";
 
 const acfGroups = await loadAcfGraphqlGroups();
-const acfSchema = buildAcfSchema(acfGroups);
+const acfSchema = buildAcfSchema(acfGroups, await listPageTemplateFiles());
 logAcfSchemaBuild(acfSchema.summary);
 
 try {

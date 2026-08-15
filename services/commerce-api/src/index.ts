@@ -27,6 +27,7 @@ import {
 import { loadConfig } from "./config.js";
 import { pingMysql, closeMysql } from "./db/mysql.js";
 import { loadAcfGraphqlGroups } from "./repositories/acf-graphql.js";
+import { listPageTemplateFiles } from "./repositories/content.js";
 import { pingRedis, closeRedis } from "./redis/client.js";
 import { createApqPlugin } from "./apq/plugin.js";
 import {
@@ -89,7 +90,7 @@ try {
   });
 }
 
-const acfSchema = buildAcfSchema(acfGroups);
+const acfSchema = buildAcfSchema(acfGroups, await listPageTemplateFiles());
 logAcfSchemaBuild(acfSchema.summary);
 
 let schema;
