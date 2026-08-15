@@ -49,6 +49,18 @@ export const typeDefs = /* GraphQL */ `
     PRIVATE
   }
 
+  enum TermObjectsConnectionOrderbyEnum {
+    TERM_ORDER
+    NAME
+    SLUG
+    COUNT
+  }
+
+  enum OrderEnum {
+    ASC
+    DESC
+  }
+
   type MediaItem {
     sourceUrl: String
     mediaItemUrl: String
@@ -749,8 +761,8 @@ export const typeDefs = /* GraphQL */ `
   }
 
   input RootQueryToCategoryConnectionWhereArgs {
-    orderby: String
-    order: String
+    orderby: TermObjectsConnectionOrderbyEnum
+    order: OrderEnum
   }
 
   input ProductCategoryConnectionWhereArgs {

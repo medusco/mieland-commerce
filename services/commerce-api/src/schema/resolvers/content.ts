@@ -28,8 +28,13 @@ export const contentResolvers = {
       }),
     post: async (_: unknown, args: { id: string; idType?: string }) =>
       getPostBySlug(String(args.id)),
-    categories: async (_: unknown, args: { first?: number }) =>
-      listCategories(args.first ?? 50),
+    categories: async (
+      _: unknown,
+      args: {
+        first?: number;
+        where?: { orderby?: string; order?: string };
+      },
+    ) => listCategories(args.first ?? 50, args.where),
     productCategories: async (_: unknown, args: { first?: number }) =>
       listProductCategories(args.first ?? 100),
     pages: async (

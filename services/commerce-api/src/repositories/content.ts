@@ -157,15 +157,48 @@ export async function getPostBySlug(slug: string) {
   return row ? shapePost(row) : null;
 }
 
-export async function listCategories(first = 50) {
+export async function listCategories(
+  first = 50,
+  where?: { orderby?: string; order?: string },
+) {
+  const orderby = (where?.orderby ?? "TERM_ORDER").toUpperCase();
+  const order = where?.order?.toUpperCase() === "DESC" ? "DESC" : "ASC";
+
+  const termOrderJoin = `LEFT JOIN (
+       SELECT term_id, MIN(CAST(meta_value AS UNSIGNED)) AS sort_order
+       FROM ${t("termmeta")}
+       WHERE meta_key IN ('order', 'term_order')
+       GROUP BY term_id
+     ) tm_order ON tm_order.term_id = terms.term_id`;
+
+  let orderClause: string;
+  switch (orderby) {
+    case "NAME":
+      orderClause = `terms.name ${order}`;
+      break;
+    case "SLUG":
+      orderClause = `terms.slug ${order}`;
+      break;
+    case "COUNT":
+      orderClause = `tt.count ${order}`;
+      break;
+    case "TERM_ORDER":
+    default:
+      orderClause = `COALESCE(tm_order.sort_order, terms.term_id) ${order}, terms.name ASC`;
+      break;
+  }
+
+  const join = orderby === "TERM_ORDER" ? termOrderJoin : "";
+
   const rows = await query<
     { name: string; slug: string; description: string; count: number }[]
   >(
     `SELECT terms.name, terms.slug, tt.description, tt.count
      FROM ${t("term_taxonomy")} tt
      JOIN ${t("terms")} terms ON terms.term_id = tt.term_id
+     ${join}
      WHERE tt.taxonomy = 'category'
-     ORDER BY terms.term_order ASC, terms.name ASC
+     ORDER BY ${orderClause}
      LIMIT ?`,
     [first],
   );
