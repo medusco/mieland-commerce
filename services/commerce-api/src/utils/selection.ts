@@ -78,6 +78,7 @@ function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
       names.has("regularPrice") ||
       names.has("salePrice") ||
       names.has("onSale"),
+    acfThumbnail: names.has("thumbnailFields"),
     images:
       names.has("image") ||
       names.has("thumbnailFields") ||
@@ -104,6 +105,7 @@ function mergeProductListNeeds(
 ): ProductListNeeds {
   return {
     price: a.price || b.price,
+    acfThumbnail: a.acfThumbnail || b.acfThumbnail,
     images: a.images || b.images,
     categories: a.categories || b.categories,
     attributes: a.attributes || b.attributes,
@@ -192,6 +194,7 @@ export function cartProductListNeedsFromInfo(
 
   let merged: ProductListNeeds = {
     price: false,
+    acfThumbnail: false,
     images: false,
     categories: false,
     attributes: false,
@@ -326,6 +329,8 @@ export function orderListNeedsFromInfo(info: GraphQLResolveInfo): OrderListNeeds
 
 export type ProductListNeeds = {
   price: boolean;
+  /** ACF card thumbnail — pre-hydrated into product Redis cache when true. */
+  acfThumbnail: boolean;
   images: boolean;
   categories: boolean;
   attributes: boolean;
@@ -339,6 +344,7 @@ export type ProductListNeeds = {
 /** Default product hydrate for cart line items (no all-variations load). */
 export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   price: true,
+  acfThumbnail: true,
   images: true,
   categories: false,
   attributes: false,
@@ -352,6 +358,7 @@ export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
 /** Full catalog hydrate (orders, productLoader default). */
 export const FULL_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   price: true,
+  acfThumbnail: false,
   images: true,
   categories: true,
   attributes: true,
@@ -374,6 +381,7 @@ export function productListNeedsFromInfo(
       names.has("regularPrice") ||
       names.has("salePrice") ||
       names.has("onSale"),
+    acfThumbnail: names.has("thumbnailFields"),
     images:
       names.has("image") ||
       names.has("thumbnailFields") ||

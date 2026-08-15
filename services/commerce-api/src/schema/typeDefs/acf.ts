@@ -340,9 +340,13 @@ export function logAcfSchemaBuild(summary: AcfSchemaBuildSummary): void {
 }
 
 function productAcfFieldResolver(group: AcfGraphqlGroup) {
-  return async (product: { databaseId?: number }) => {
+  return async (product: { databaseId?: number; [key: string]: unknown }) => {
     const id = product.databaseId;
     if (!id) return null;
+
+    const hydrated = product[group.graphqlFieldName];
+    if (hydrated !== undefined) return hydrated;
+
     const meta = await getPostMeta(id);
     return shapeAcfGroupFields(meta, group);
   };

@@ -514,6 +514,76 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
 }
 
+function mediaUrlFromShaped(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (value && typeof value === "object" && "node" in (value as object)) {
+    const node = (value as { node?: { sourceUrl?: string; mediaItemUrl?: string } }).node;
+    return node?.sourceUrl?.trim() || node?.mediaItemUrl?.trim() || null;
+  }
+  return null;
+}
+
+/** Map repeater/group rows from postmeta keys to ACF GraphQL field names. */
+function remapAcfSubfields(
+  item: unknown,
+  subFields: AcfFieldDef[],
+): Record<string, unknown> {
+  if (!item || typeof item !== "object") return {};
+  const src = item as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+
+  for (const sub of subFields) {
+    const metaKey = snakeToCamel(sub.name);
+    const value = src[metaKey] ?? src[sub.graphqlName];
+    if (value === undefined) continue;
+
+    if (sub.type === "repeater" && Array.isArray(value)) {
+      out[sub.graphqlName] = value.map((entry) => remapAcfSubfields(entry, sub.subFields));
+      continue;
+    }
+    if (sub.type === "group" && value && typeof value === "object") {
+      out[sub.graphqlName] = remapAcfSubfields(value, sub.subFields);
+      continue;
+    }
+
+    out[sub.graphqlName] = value;
+
+    // Image attachments (e.g. trust badge svg_image) share the `ico` GraphQL field.
+    if (
+      sub.graphqlName === "svgImage" &&
+      (sub.type === "image" || sub.name === "svg_image") &&
+      out.ico == null
+    ) {
+      const url = mediaUrlFromShaped(value);
+      if (url) out.ico = url;
+    }
+  }
+
+  return out;
+}
+
+function normalizeFlexLayoutRow(
+  obj: Record<string, unknown>,
+  subFields: AcfFieldDef[],
+): Record<string, unknown> {
+  for (const sub of subFields) {
+    const metaKey = snakeToCamel(sub.name);
+    const existing = obj[metaKey] ?? obj[sub.graphqlName];
+    if (existing === undefined) continue;
+
+    if (sub.type === "repeater" && Array.isArray(existing)) {
+      obj[sub.graphqlName] = existing.map((item) => remapAcfSubfields(item, sub.subFields));
+    } else if (sub.type === "group" && existing && typeof existing === "object") {
+      obj[sub.graphqlName] = remapAcfSubfields(existing, sub.subFields);
+    } else {
+      obj[sub.graphqlName] = existing;
+    }
+
+    if (sub.graphqlName !== metaKey) delete obj[metaKey];
+  }
+  return obj;
+}
+
 export async function shapeAcfGroupFields(
   meta: Record<string, string>,
   group: AcfGraphqlGroup,
@@ -551,6 +621,7 @@ async function shapeDefinedField(
           const typename = `${flexPrefix}${toPascal(layout.name)}Layout`;
           obj.__typename = typename;
           obj.fieldGroupName = typename;
+          normalizeFlexLayoutRow(obj, layout.subFields);
         } else if (layoutName.endsWith("Layout") && layoutName.startsWith(flexPrefix)) {
           obj.__typename = layoutName;
           obj.fieldGroupName = layoutName;
@@ -562,7 +633,14 @@ async function shapeDefinedField(
   }
 
   if (field.type === "repeater" || field.type === "group") {
-    return shapeAcfField(meta, field.name);
+    const shaped = await shapeAcfField(meta, field.name);
+    if (field.type === "repeater" && Array.isArray(shaped) && field.subFields.length) {
+      return shaped.map((item) => remapAcfSubfields(item, field.subFields));
+    }
+    if (field.type === "group" && shaped && typeof shaped === "object" && field.subFields.length) {
+      return remapAcfSubfields(shaped, field.subFields);
+    }
+    return shaped;
   }
 
   if (

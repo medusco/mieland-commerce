@@ -8,6 +8,10 @@ import {
   type ProductListNeeds,
 } from "../utils/selection.js";
 import { buildMediaItemUrl, getMediaBaseUrl } from "./media.js";
+import {
+  PRODUCT_THUMBNAIL_META_KEYS,
+  shapeProductThumbnailFields,
+} from "./product-acf.js";
 
 export type ProductRow = {
   ID: number;
@@ -32,8 +36,19 @@ function productCacheKey(
   productId: number,
   profile: "full" | "cart" = "full",
 ): string {
-  if (profile === "cart") return `product:v2:cart:${productId}`;
-  return `product:v2:${productId}`;
+  if (profile === "cart") return `product:v3:cart:${productId}`;
+  return `product:v3:${productId}`;
+}
+
+async function attachProductAcfThumbnail<T extends Record<string, unknown>>(
+  node: T,
+  meta: Record<string, string>,
+  hydrateAcfThumbnail: boolean,
+): Promise<T> {
+  if (!hydrateAcfThumbnail) return node;
+  const thumbnailFields = await shapeProductThumbnailFields(meta);
+  if (!thumbnailFields) return node;
+  return { ...node, thumbnailFields };
 }
 
 async function cachedJson<T>(key: string, ttl: number, loader: () => Promise<T>): Promise<T> {
@@ -292,6 +307,7 @@ export async function listProducts(args: {
   const status = args.status || "publish";
   const needs: ProductListNeeds = args.needs ?? {
     price: true,
+    acfThumbnail: false,
     images: true,
     categories: true,
     attributes: true,
@@ -341,13 +357,16 @@ export async function listProducts(args: {
 async function shapeProductsLean(
   rows: ProductRow[],
   needs: ProductListNeeds,
+  options?: { hydrateAcfThumbnail?: boolean },
 ): Promise<unknown[]> {
   if (!rows.length) return [];
+  const hydrateAcfThumbnail = options?.hydrateAcfThumbnail ?? needs.acfThumbnail;
   const ids = rows.map((r) => r.ID);
   const metaKeys: string[] = [];
   if (needs.price) metaKeys.push("_price", "_regular_price", "_sale_price");
   if (needs.stock) metaKeys.push("_stock_status", "_stock", "_manage_stock");
   if (needs.featured) metaKeys.push("_featured");
+  if (needs.acfThumbnail) metaKeys.push(...PRODUCT_THUMBNAIL_META_KEYS);
 
   const [metaMap, variableIds] = await Promise.all([
     metaKeys.length
@@ -356,7 +375,8 @@ async function shapeProductsLean(
     variableParentIds(ids),
   ]);
 
-  return rows.map((row) => {
+  const out: unknown[] = [];
+  for (const row of rows) {
     const meta = metaMap.get(row.ID) ?? {};
     const isVariable = variableIds.has(row.ID);
     const price = meta._price ?? "";
@@ -369,36 +389,45 @@ async function shapeProductsLean(
       needs.stock && manageStock && meta._stock !== undefined && meta._stock !== ""
         ? Number(meta._stock)
         : null;
-    return {
-      __typename: isVariable ? "VariableProduct" : "SimpleProduct",
-      id: toGlobalId("product", row.ID),
-      databaseId: row.ID,
-      name: row.post_title,
-      slug: row.post_name,
-      uri: `/product/${row.post_name}/`,
-      description: "",
-      shortDescription: "",
-      featured: needs.featured ? meta._featured === "yes" : false,
-      averageRating: 0,
-      reviewCount: 0,
-      onSale: Boolean(salePrice && Number(salePrice) > 0),
-      stockStatus: needs.stock
-        ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
-        : "IN_STOCK",
-      stockQuantity:
-        stockQuantity != null && Number.isFinite(stockQuantity) ? stockQuantity : null,
-      manageStock,
-      image: null,
-      attributes: { nodes: [] },
-      price: needs.price ? price : "",
-      regularPrice: needs.price ? regularPrice : "",
-      salePrice: needs.price && salePrice ? salePrice : null,
-      productCategories: { nodes: [] },
-      galleryImages: { nodes: [] },
-      reviews: { averageRating: 0, edges: [] },
-      variations: { nodes: [] },
-    };
-  });
+    out.push(
+      await attachProductAcfThumbnail(
+        {
+          __typename: isVariable ? "VariableProduct" : "SimpleProduct",
+          id: toGlobalId("product", row.ID),
+          databaseId: row.ID,
+          name: row.post_title,
+          slug: row.post_name,
+          uri: `/product/${row.post_name}/`,
+          description: "",
+          shortDescription: "",
+          featured: needs.featured ? meta._featured === "yes" : false,
+          averageRating: 0,
+          reviewCount: 0,
+          onSale: Boolean(salePrice && Number(salePrice) > 0),
+          stockStatus: needs.stock
+            ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
+            : "IN_STOCK",
+          stockQuantity:
+            stockQuantity != null && Number.isFinite(stockQuantity)
+              ? stockQuantity
+              : null,
+          manageStock,
+          image: null,
+          attributes: { nodes: [] },
+          price: needs.price ? price : "",
+          regularPrice: needs.price ? regularPrice : "",
+          salePrice: needs.price && salePrice ? salePrice : null,
+          productCategories: { nodes: [] },
+          galleryImages: { nodes: [] },
+          reviews: { averageRating: 0, edges: [] },
+          variations: { nodes: [] },
+        },
+        meta,
+        hydrateAcfThumbnail,
+      ),
+    );
+  }
+  return out;
 }
 
 async function variableParentIds(productIds: number[]): Promise<Set<number>> {
@@ -516,8 +545,10 @@ async function getProductAttributesAsync(
 async function shapeProducts(
   rows: ProductRow[],
   needs: ProductListNeeds,
+  options?: { hydrateAcfThumbnail?: boolean },
 ): Promise<unknown[]> {
   if (!rows.length) return [];
+  const hydrateAcfThumbnail = options?.hydrateAcfThumbnail ?? needs.acfThumbnail;
   const ids = rows.map((r) => r.ID);
   const metaMap = await getPostMetaMany(ids);
   const variableIds = await variableParentIds(ids);
@@ -619,15 +650,27 @@ async function shapeProducts(
     };
 
     if (isVariable && needs.variations) {
-      out.push({
-        ...base,
-        variations: { nodes: variations.get(row.ID) ?? [] },
-      });
+      out.push(
+        await attachProductAcfThumbnail(
+          {
+            ...base,
+            variations: { nodes: variations.get(row.ID) ?? [] },
+          },
+          meta,
+          hydrateAcfThumbnail,
+        ),
+      );
     } else {
-      out.push({
-        ...base,
-        variations: { nodes: [] },
-      });
+      out.push(
+        await attachProductAcfThumbnail(
+          {
+            ...base,
+            variations: { nodes: [] },
+          },
+          meta,
+          hydrateAcfThumbnail,
+        ),
+      );
     }
   }
   return out;
@@ -643,6 +686,9 @@ export async function getProductNodes(
 
   const hydrateNeeds = needs ?? FULL_PRODUCT_LIST_NEEDS;
   const profile = needs ? cacheProfile : "full";
+  const hydrateAcfThumbnail =
+    profile === "cart" || Boolean(hydrateNeeds.acfThumbnail);
+  const shapeOptions = { hydrateAcfThumbnail };
 
   const redis = getRedis();
   const ttl = catalogTtl();
@@ -672,8 +718,8 @@ export async function getProductNodes(
   const productRows = rows.filter((r) => r.post_type !== "product_variation");
 
   const shapedProducts = productListIsLean(hydrateNeeds)
-    ? await shapeProductsLean(productRows, hydrateNeeds)
-    : await shapeProducts(productRows, hydrateNeeds);
+    ? await shapeProductsLean(productRows, hydrateNeeds, shapeOptions)
+    : await shapeProducts(productRows, hydrateNeeds, shapeOptions);
   const shapedById = new Map<number, unknown>();
   for (const node of shapedProducts) {
     const id = (node as { databaseId: number }).databaseId;
