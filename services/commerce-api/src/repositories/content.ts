@@ -61,7 +61,7 @@ async function shapePost(row: {
     databaseId: row.ID,
     id: toGlobalId("post", row.ID),
     slug: row.post_name,
-    title: row.post_title,
+    title: decodeHtmlEntities(row.post_title),
     excerpt: row.post_excerpt,
     content: row.post_content,
     date:
