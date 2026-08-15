@@ -332,7 +332,10 @@ export async function shapePageTemplate(page: PageRecord) {
       locationMatchesPage(g, page) &&
       g.location.some((andGroup) =>
         andGroup.some(
-          (rule) => rule.param === "page_template" || rule.param === "page",
+          (rule) =>
+            rule.param === "page_template" ||
+            rule.param === "post_template" ||
+            rule.param === "page",
         ),
       ),
   );

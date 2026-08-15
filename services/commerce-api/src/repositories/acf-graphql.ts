@@ -23,6 +23,8 @@ export type AcfFieldDef = {
   graphqlName: string;
   parentId: number;
   parentLayout?: string;
+  /** ACF `default_value` when no postmeta is saved (matches WPGraphQL-for-ACF). */
+  defaultValue?: string;
   layouts: AcfLayoutDef[];
   subFields: AcfFieldDef[];
 };
@@ -232,9 +234,22 @@ function parseFieldFromConfig(
     graphqlName: fieldGraphqlName(config, name),
     parentId,
     parentLayout: String(config.parent_layout ?? "").trim() || undefined,
+    defaultValue: acfDefaultValue(config),
     layouts,
     subFields,
   };
+}
+
+function acfDefaultValue(config: Record<string, unknown>): string | undefined {
+  const raw = config.default_value;
+  if (raw == null || raw === false) return undefined;
+  const value = String(raw).trim();
+  return value || undefined;
+}
+
+function withAcfDefault(shaped: unknown, field: AcfFieldDef): unknown {
+  if (shaped != null && shaped !== "") return shaped;
+  return field.defaultValue ?? null;
 }
 
 function attachLayoutChildren(field: AcfFieldDef, directChildren: AcfFieldDef[]): void {
@@ -353,7 +368,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v5";
+const ACF_GROUPS_CACHE_VERSION = "v6";
 
 let memoryGroups: {
   key: string;
@@ -547,7 +562,12 @@ async function shapeDefinedField(
 
   if (field.type === "true_false") {
     const raw = meta[field.name];
-    return raw === "1" || raw === "true";
+    if (raw != null && raw !== "") {
+      return raw === "1" || raw === "true";
+    }
+    const fallback = field.defaultValue;
+    if (fallback != null) return fallback === "1" || fallback === "true";
+    return false;
   }
 
   if (field.graphqlName === "trustTags" || field.name === "trust_tags") {
@@ -555,8 +575,8 @@ async function shapeDefinedField(
     if (Array.isArray(shaped)) {
       return shaped.map(String).filter(Boolean).join(", ");
     }
-    return shaped;
+    return withAcfDefault(shaped, field);
   }
 
-  return shapeAcfField(meta, field.name);
+  return withAcfDefault(await shapeAcfField(meta, field.name), field);
 }
