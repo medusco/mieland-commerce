@@ -456,6 +456,37 @@ export async function updateUserPassword(
   userId: number,
   password: string,
 ): Promise<void> {
+  if (!password) return;
+
+  try {
+    const { setWpUserPassword } = await import(
+      "../clients/mieland-wp-bridge.js"
+    );
+    await setWpUserPassword(userId, password);
+    return;
+  } catch (err) {
+    logJson("warn", {
+      msg: "wp_set_password_bridge_failed",
+      userId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  try {
+    const { updateWcCustomerPassword } = await import(
+      "../clients/woocommerce-rest.js"
+    );
+    await updateWcCustomerPassword(userId, password);
+    return;
+  } catch (err) {
+    logJson("warn", {
+      msg: "wc_rest_update_customer_password_failed",
+      userId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Last resort: shared WP users table (Headless Login reads user_pass).
   const hash = hashWpPassword(password);
   await query(`UPDATE ${t("users")} SET user_pass = ? WHERE ID = ?`, [
     hash,

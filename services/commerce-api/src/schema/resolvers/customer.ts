@@ -154,6 +154,9 @@ export const customerResolvers = {
       // `id` and expect the Bearer token to identify the customer. Without this,
       // delivery/billing updates only hit the cart session and never usermeta.
       const requestedId = input.id ? parseDatabaseId(input.id) : 0;
+      if (input.password) {
+        requireUser(ctx);
+      }
       const userId =
         ctx.userId != null
           ? (() => {

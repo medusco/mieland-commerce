@@ -350,3 +350,19 @@ export async function createWcProductReview(
       typeof body.date_created === "string" ? body.date_created : null,
   };
 }
+
+/**
+ * Set a customer password via WooCommerce REST (`PUT /wc/v3/customers/{id}`).
+ * Woo calls `WC_Customer::set_password` → `wp_set_password`.
+ */
+export async function updateWcCustomerPassword(
+  customerId: number,
+  password: string,
+): Promise<void> {
+  await wcRestRequest(
+    "PUT",
+    wcRestUrl(`/customers/${customerId}`),
+    { password },
+    "wc_rest_update_customer_password",
+  );
+}
