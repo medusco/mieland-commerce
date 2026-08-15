@@ -451,10 +451,41 @@ function normalizeFooter(footer: unknown): Record<string, unknown> {
 function hasNavigationPayload(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const obj = value as Record<string, unknown>;
-  if (obj.topMenu && typeof obj.topMenu === "object") return true;
-  if (obj.footer && typeof obj.footer === "object") return true;
-  if (obj.navigationFields && typeof obj.navigationFields === "object") return true;
+  const topMenu = obj.topMenu as { toplinks?: unknown[] } | undefined;
+  if (Array.isArray(topMenu?.toplinks) && topMenu.toplinks.length > 0) return true;
+  const footer = obj.footer as { footerColumns?: unknown[] } | undefined;
+  if (Array.isArray(footer?.footerColumns) && footer.footerColumns.length > 0) return true;
   return false;
+}
+
+async function buildNavigationFromOptionsMeta(optionMeta: Record<string, string>) {
+  const toplinks = await shapeAcfField(optionMeta, "toplinks");
+  const footerColumns = await shapeAcfField(optionMeta, "footer_columns");
+  const socialMediaLinks = await shapeAcfField(optionMeta, "social_media_links");
+  const subscriptionBox = await shapeAcfField(optionMeta, "subscription_box");
+  const trustBadges = await shapeAcfField(optionMeta, "trust_badges");
+  const logo = await shapeAcfField(optionMeta, "logo_image");
+  const cta = await shapeAcfField(optionMeta, "top_menu_cta");
+
+  return {
+    id: "navigation",
+    pageTitle: pickMeta(optionMeta, "page_title"),
+    menuTitle: pickMeta(optionMeta, "menu_title"),
+    topMenu: normalizeTopMenu(toplinks),
+    footer: normalizeFooter({
+      fdaDisclousure: pickMeta(optionMeta, "fda_disclousure"),
+      footerCopyright: pickMeta(optionMeta, "footer_copyright"),
+      footerColumns: footerColumns ?? [],
+      socialMediaLinks: socialMediaLinks ?? [],
+      subscriptionBox: subscriptionBox ?? null,
+      trustBadges: trustBadges ?? [],
+    }),
+    navigationFields: {
+      logoImage: asMediaString(logo),
+      promoText: pickMeta(optionMeta, "promo_text"),
+      topMenuCta: (cta as AcfLinkShape) ?? null,
+    },
+  };
 }
 
 export async function getNavigation() {
@@ -473,24 +504,7 @@ export async function getNavigation() {
   }
 
   const optionMeta = optionsToMeta(await getOptionsByPrefix("options_"), "options_");
-  const topMenu = await shapeAcfField(optionMeta, "top_menu");
-  const footer = await shapeAcfField(optionMeta, "footer");
-  const logo = await shapeAcfField(optionMeta, "logo_image");
-  const cta = await shapeAcfField(optionMeta, "top_menu_cta");
-  const logoImage = asMediaString(logo);
-
-  return {
-    id: "navigation",
-    pageTitle: pickMeta(optionMeta, "page_title"),
-    menuTitle: pickMeta(optionMeta, "menu_title"),
-    topMenu: normalizeTopMenu(topMenu),
-    footer: normalizeFooter(footer),
-    navigationFields: {
-      logoImage,
-      promoText: pickMeta(optionMeta, "promo_text"),
-      topMenuCta: (cta as AcfLinkShape) ?? null,
-    },
-  };
+  return buildNavigationFromOptionsMeta(optionMeta);
 }
 
 export async function searchLabResults(lotNumber: string) {
