@@ -204,8 +204,14 @@ export async function shapeAcfField(
     const link = asLink(parsed);
     if (link) return link;
     const ids = asIdList(parsed);
-    if (ids.length && IMAGE_FIELD.test(field)) {
-      if (ids.length === 1) return mediaEdge(ids[0]);
+    if (ids.length && (IMAGE_FIELD.test(field) || field === "ico")) {
+      if (ids.length === 1) {
+        if (field === "ico") {
+          const edge = await mediaEdge(ids[0]!);
+          return edge?.node?.sourceUrl ?? edge?.node?.mediaItemUrl ?? raw;
+        }
+        return mediaEdge(ids[0]!);
+      }
       const nodes = [];
       for (const id of ids) {
         const edge = await mediaEdge(id);
@@ -217,8 +223,12 @@ export async function shapeAcfField(
     return parsed;
   }
 
-  if (/^\d+$/.test(raw.trim()) && IMAGE_FIELD.test(field)) {
-    return mediaEdge(Number(raw));
+  if (/^\d+$/.test(raw.trim()) && (IMAGE_FIELD.test(field) || field === "ico")) {
+    const edge = await mediaEdge(Number(raw));
+    if (field === "ico") {
+      return edge?.node?.sourceUrl ?? edge?.node?.mediaItemUrl ?? raw;
+    }
+    return edge;
   }
 
   if (/^\d+$/.test(raw.trim()) && isProductIdField(field)) {
