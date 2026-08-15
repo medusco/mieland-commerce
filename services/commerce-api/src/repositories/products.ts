@@ -232,7 +232,7 @@ export async function getAttachmentUrl(id: number): Promise<{
   return map.get(id) ?? null;
 }
 
-async function getAttachmentUrls(
+export async function getAttachmentUrls(
   ids: number[],
 ): Promise<Map<number, { sourceUrl: string; mediaItemUrl: string; altText: string }>> {
   const unique = [...new Set(ids.filter((id) => id > 0))];

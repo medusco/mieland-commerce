@@ -410,3 +410,73 @@ export function productListIsLean(needs: ProductListNeeds): boolean {
     !needs.reviews
   );
 }
+
+export type PostHydrateNeeds = {
+  excerpt: boolean;
+  content: boolean;
+  author: boolean;
+  categories: boolean;
+  tags: boolean;
+  featuredImage: boolean;
+  honeyGuideFeatured: boolean;
+  honeyGuideRecommended: boolean;
+  shopContentBlocks: boolean;
+};
+
+export const FULL_POST_HYDRATE_NEEDS: PostHydrateNeeds = {
+  excerpt: true,
+  content: true,
+  author: true,
+  categories: true,
+  tags: true,
+  featuredImage: true,
+  honeyGuideFeatured: true,
+  honeyGuideRecommended: true,
+  shopContentBlocks: true,
+};
+
+function postHydrateNeedsFromNames(
+  names: Set<string>,
+  honeyGuideNames: Set<string>,
+  shopNames: Set<string>,
+): PostHydrateNeeds {
+  return {
+    excerpt: names.has("excerpt"),
+    content: names.has("content"),
+    author: names.has("author"),
+    categories: names.has("categories"),
+    tags: names.has("tags"),
+    featuredImage: names.has("featuredImage"),
+    honeyGuideFeatured:
+      honeyGuideNames.has("isFeatured") || names.has("honeyGuideFields"),
+    honeyGuideRecommended: honeyGuideNames.has("recommendedProducts"),
+    shopContentBlocks:
+      shopNames.has("contentBlocks") || names.has("shopFields"),
+  };
+}
+
+function postHydrateNeedsFromFields(
+  info: GraphQLResolveInfo,
+  path: string[],
+): PostHydrateNeeds {
+  const nodeFields = selectionsAt(info, path) ?? [];
+  if (!nodeFields.length) return FULL_POST_HYDRATE_NEEDS;
+  const names = new Set(nodeFields.map((field) => field.name.value));
+  const honeyGuideNames = fieldNamesUnder(
+    nodeFields,
+    info.fragments,
+    "honeyGuideFields",
+  );
+  const shopNames = fieldNamesUnder(nodeFields, info.fragments, "shopFields");
+  return postHydrateNeedsFromNames(names, honeyGuideNames, shopNames);
+}
+
+/** Field needs under `posts { nodes { ... } }`. */
+export function postListNeedsFromInfo(info: GraphQLResolveInfo): PostHydrateNeeds {
+  return postHydrateNeedsFromFields(info, ["nodes"]);
+}
+
+/** Field needs under `post { ... }` (single article). */
+export function postDetailNeedsFromInfo(info: GraphQLResolveInfo): PostHydrateNeeds {
+  return postHydrateNeedsFromFields(info, []);
+}

@@ -1,5 +1,11 @@
 import { query, queryOne, t, type SqlParam } from "../db/mysql.js";
-import { getAttachmentUrl, getPostMeta, getProductNode } from "./products.js";
+import {
+  getAttachmentUrls,
+  getPostMeta,
+  getPostMetaKeysMany,
+  getPostMetaMany,
+  getProductNode,
+} from "./products.js";
 import { getOption, getOptionsByPrefix } from "./options.js";
 import {
   pickMeta,
@@ -21,6 +27,10 @@ import {
 } from "./lab-results-meta.js";
 import { toGlobalId } from "../utils/index.js";
 import { decodeHtmlEntities } from "../utils/html-entities.js";
+import {
+  FULL_POST_HYDRATE_NEEDS,
+  type PostHydrateNeeds,
+} from "../utils/selection.js";
 
 export type PageRecord = {
   databaseId: number;
@@ -38,7 +48,7 @@ function statusWhere(status?: string): string {
   return status.toLowerCase();
 }
 
-async function shapePost(row: {
+type PostRow = {
   ID: number;
   post_title: string;
   post_name: string;
@@ -46,33 +56,213 @@ async function shapePost(row: {
   post_excerpt: string;
   post_date: string | Date;
   post_author: number;
-}) {
-  const meta = await getPostMeta(row.ID);
-  const thumbId = Number(meta._thumbnail_id || 0);
-  const featuredImage = thumbId ? await getAttachmentUrl(thumbId) : null;
-  const author = await queryOne<{ display_name: string }>(
-    `SELECT display_name FROM ${t("users")} WHERE ID = ?`,
-    [row.post_author],
+};
+
+type PostTerm = {
+  name: string;
+  slug: string;
+  description: string;
+  count?: number;
+};
+
+type PostBatchContext = {
+  metaByPostId: Map<number, Record<string, string>>;
+  termsByPostId: Map<number, { categories: PostTerm[]; tags: PostTerm[] }>;
+  authorsById: Map<number, string>;
+  imagesByAttachmentId: Map<
+    number,
+    { sourceUrl: string; mediaItemUrl: string; altText: string }
+  >;
+  needs: PostHydrateNeeds;
+};
+
+function metaKeysForPostNeeds(needs: PostHydrateNeeds): string[] {
+  const keys = new Set<string>();
+  if (needs.featuredImage) keys.add("_thumbnail_id");
+  if (needs.honeyGuideFeatured) {
+    keys.add("is_featured");
+    keys.add("isFeatured");
+  }
+  if (needs.honeyGuideRecommended) keys.add("recommended_products");
+  if (needs.shopContentBlocks) keys.add("content_blocks");
+  return [...keys];
+}
+
+function postSelectColumns(needs: PostHydrateNeeds, tableAlias = "p"): string {
+  const prefix = tableAlias ? `${tableAlias}.` : "";
+  const cols = [
+    `${prefix}ID`,
+    `${prefix}post_title`,
+    `${prefix}post_name`,
+    `${prefix}post_date`,
+    `${prefix}post_author`,
+  ];
+  if (needs.excerpt || needs.content) cols.push(`${prefix}post_excerpt`);
+  if (needs.content) cols.push(`${prefix}post_content`);
+  return cols.join(", ");
+}
+
+function mapTermRow(row: {
+  name: string;
+  slug: string;
+  description: string;
+  count?: number;
+}): PostTerm {
+  return {
+    ...row,
+    name: decodeHtmlEntities(row.name),
+    description: row.description
+      ? decodeHtmlEntities(row.description)
+      : row.description,
+  };
+}
+
+async function queryTermsMany(
+  postIds: number[],
+  taxonomies: string[],
+): Promise<Map<number, { categories: PostTerm[]; tags: PostTerm[] }>> {
+  const out = new Map<number, { categories: PostTerm[]; tags: PostTerm[] }>();
+  for (const id of postIds) out.set(id, { categories: [], tags: [] });
+  if (!postIds.length || !taxonomies.length) return out;
+
+  const idPh = postIds.map(() => "?").join(",");
+  const taxPh = taxonomies.map(() => "?").join(",");
+  const rows = await query<
+    {
+      object_id: number;
+      taxonomy: string;
+      name: string;
+      slug: string;
+      description: string;
+      count?: number;
+    }[]
+  >(
+    `SELECT tr.object_id, tt.taxonomy, terms.name, terms.slug, tt.description, tt.count
+     FROM ${t("term_relationships")} tr
+     JOIN ${t("term_taxonomy")} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+     JOIN ${t("terms")} terms ON terms.term_id = tt.term_id
+     WHERE tr.object_id IN (${idPh}) AND tt.taxonomy IN (${taxPh})`,
+    [...postIds, ...taxonomies],
   );
-  const categories = await queryTerms(row.ID, "category");
-  const tags = await queryTerms(row.ID, "post_tag");
-  const recommended = await shapeAcfField(meta, "recommended_products");
+
+  for (const row of rows) {
+    const bucket = out.get(Number(row.object_id)) ?? { categories: [], tags: [] };
+    const term = mapTermRow(row);
+    if (row.taxonomy === "category") bucket.categories.push(term);
+    if (row.taxonomy === "post_tag") bucket.tags.push(term);
+    out.set(Number(row.object_id), bucket);
+  }
+  return out;
+}
+
+async function getAuthorNamesMany(
+  authorIds: number[],
+): Promise<Map<number, string>> {
+  const unique = [...new Set(authorIds.filter((id) => Number.isFinite(id) && id > 0))];
+  const out = new Map<number, string>();
+  if (!unique.length) return out;
+
+  const placeholders = unique.map(() => "?").join(",");
+  const rows = await query<{ ID: number; display_name: string }[]>(
+    `SELECT ID, display_name FROM ${t("users")} WHERE ID IN (${placeholders})`,
+    unique,
+  );
+  for (const row of rows) out.set(Number(row.ID), row.display_name ?? "");
+  return out;
+}
+
+async function loadPostBatchContext(
+  rows: PostRow[],
+  needs: PostHydrateNeeds,
+): Promise<PostBatchContext> {
+  const ids = rows.map((row) => row.ID);
+  const metaKeys = metaKeysForPostNeeds(needs);
+  const needsFullMeta = needs.shopContentBlocks || needs.honeyGuideRecommended;
+  const taxonomies = [
+    ...(needs.categories ? (["category"] as const) : []),
+    ...(needs.tags ? (["post_tag"] as const) : []),
+  ];
+
+  const [metaByPostId, termsByPostId, authorsById] = await Promise.all([
+    needsFullMeta
+      ? getPostMetaMany(ids)
+      : metaKeys.length
+        ? getPostMetaKeysMany(ids, metaKeys)
+        : Promise.resolve(new Map<number, Record<string, string>>()),
+    taxonomies.length
+      ? queryTermsMany(ids, [...taxonomies])
+      : Promise.resolve(new Map<number, { categories: PostTerm[]; tags: PostTerm[] }>()),
+    needs.author
+      ? getAuthorNamesMany(rows.map((row) => row.post_author))
+      : Promise.resolve(new Map<number, string>()),
+  ]);
+
+  let imagesByAttachmentId = new Map<
+    number,
+    { sourceUrl: string; mediaItemUrl: string; altText: string }
+  >();
+  if (needs.featuredImage) {
+    const thumbIds = [
+      ...new Set(
+        ids
+          .map((id) => Number(metaByPostId.get(id)?._thumbnail_id || 0))
+          .filter((id) => id > 0),
+      ),
+    ];
+    if (thumbIds.length) {
+      imagesByAttachmentId = await getAttachmentUrls(thumbIds);
+    }
+  }
 
   return {
+    metaByPostId,
+    termsByPostId,
+    authorsById,
+    imagesByAttachmentId,
+    needs,
+  };
+}
+
+async function shapePostRow(row: PostRow, batch: PostBatchContext) {
+  const { needs } = batch;
+  const meta = batch.metaByPostId.get(row.ID) ?? {};
+  const terms = batch.termsByPostId.get(row.ID) ?? { categories: [], tags: [] };
+  const thumbId = Number(meta._thumbnail_id || 0);
+  const featuredImage =
+    needs.featuredImage && thumbId
+      ? (batch.imagesByAttachmentId.get(thumbId) ?? null)
+      : null;
+
+  const node: Record<string, unknown> = {
     databaseId: row.ID,
     id: toGlobalId("post", row.ID),
     slug: row.post_name,
     title: decodeHtmlEntities(row.post_title),
-    excerpt: row.post_excerpt,
-    content: row.post_content,
     date:
       typeof row.post_date === "string"
         ? row.post_date
         : row.post_date?.toISOString?.() ?? null,
-    author: { node: { name: author?.display_name ?? "" } },
-    categories: { nodes: categories },
-    tags: { nodes: tags },
-    featuredImage: featuredImage
+  };
+
+  if (needs.excerpt || needs.content) {
+    node.excerpt = row.post_excerpt ?? "";
+  }
+  if (needs.content) {
+    node.content = row.post_content ?? "";
+  }
+  if (needs.author) {
+    node.author = {
+      node: { name: batch.authorsById.get(row.post_author) ?? "" },
+    };
+  }
+  if (needs.categories) {
+    node.categories = { nodes: terms.categories };
+  }
+  if (needs.tags) {
+    node.tags = { nodes: terms.tags };
+  }
+  if (needs.featuredImage) {
+    node.featuredImage = featuredImage
       ? {
           node: {
             sourceUrl: featuredImage.sourceUrl,
@@ -80,46 +270,46 @@ async function shapePost(row: {
             altText: featuredImage.altText,
           },
         }
-      : null,
-    honeyGuideFields: {
-      isFeatured: meta.is_featured === "1" || meta.isFeatured === "1",
-      recommendedProducts:
+      : null;
+  }
+
+  if (needs.honeyGuideFeatured || needs.honeyGuideRecommended) {
+    const honeyGuideFields: Record<string, unknown> = {};
+    if (needs.honeyGuideFeatured) {
+      honeyGuideFields.isFeatured =
+        meta.is_featured === "1" || meta.isFeatured === "1";
+    }
+    if (needs.honeyGuideRecommended) {
+      const recommended = await shapeAcfField(meta, "recommended_products");
+      honeyGuideFields.recommendedProducts =
         recommended && typeof recommended === "object"
           ? recommended
-          : relationshipConnection(meta.recommended_products),
-    },
-    shopFields: {
+          : relationshipConnection(meta.recommended_products);
+    }
+    node.honeyGuideFields = honeyGuideFields;
+  }
+
+  if (needs.shopContentBlocks) {
+    node.shopFields = {
       contentBlocks: await shapeAcfField(meta, "content_blocks", {
         flexTypePrefix: "ShopFieldsContentBlocks",
       }),
-    },
-  };
-}
+    };
+  }
 
-async function queryTerms(postId: number, taxonomy: string) {
-  const rows = await query<{ name: string; slug: string; description: string; count?: number }[]>(
-    `SELECT terms.name, terms.slug, tt.description, tt.count
-     FROM ${t("term_relationships")} tr
-     JOIN ${t("term_taxonomy")} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-     JOIN ${t("terms")} terms ON terms.term_id = tt.term_id
-     WHERE tr.object_id = ? AND tt.taxonomy = ?`,
-    [postId, taxonomy],
-  );
-  return rows.map((row) => ({
-    ...row,
-    name: decodeHtmlEntities(row.name),
-    description: row.description ? decodeHtmlEntities(row.description) : row.description,
-  }));
+  return node;
 }
 
 export async function listPosts(args: {
   first?: number;
   categoryName?: string;
   status?: string;
+  needs?: PostHydrateNeeds;
 }) {
+  const needs = args.needs ?? FULL_POST_HYDRATE_NEEDS;
   const first = Math.min(args.first ?? 100, 100);
   const status = statusWhere(args.status);
-  let sql = `SELECT p.ID, p.post_title, p.post_name, p.post_content, p.post_excerpt, p.post_date, p.post_author
+  let sql = `SELECT ${postSelectColumns(needs)}
              FROM ${t("posts")} p`;
   const params: SqlParam[] = [];
   if (args.categoryName) {
@@ -131,37 +321,30 @@ export async function listPosts(args: {
   }
   sql += ` WHERE p.post_type = 'post' AND p.post_status = ? ORDER BY p.post_date DESC LIMIT ?`;
   params.push(status, first);
-  const rows = await query<
-    {
-      ID: number;
-      post_title: string;
-      post_name: string;
-      post_content: string;
-      post_excerpt: string;
-      post_date: string | Date;
-      post_author: number;
-    }[]
-  >(sql, params);
+  const rows = await query<PostRow[]>(sql, params);
+  if (!rows.length) return { nodes: [] };
+
+  const batch = await loadPostBatchContext(rows, needs);
   const nodes = [];
-  for (const r of rows) nodes.push(await shapePost(r));
+  for (const row of rows) {
+    nodes.push(await shapePostRow(row, batch));
+  }
   return { nodes };
 }
 
-export async function getPostBySlug(slug: string) {
-  const row = await queryOne<{
-    ID: number;
-    post_title: string;
-    post_name: string;
-    post_content: string;
-    post_excerpt: string;
-    post_date: string | Date;
-    post_author: number;
-  }>(
-    `SELECT ID, post_title, post_name, post_content, post_excerpt, post_date, post_author
-     FROM ${t("posts")} WHERE post_type = 'post' AND post_name = ? AND post_status = 'publish' LIMIT 1`,
+export async function getPostBySlug(
+  slug: string,
+  needs: PostHydrateNeeds = FULL_POST_HYDRATE_NEEDS,
+) {
+  const row = await queryOne<PostRow>(
+    `SELECT ${postSelectColumns(needs, "")}
+     FROM ${t("posts")}
+     WHERE post_type = 'post' AND post_name = ? AND post_status = 'publish' LIMIT 1`,
     [slug],
   );
-  return row ? shapePost(row) : null;
+  if (!row) return null;
+  const batch = await loadPostBatchContext([row], needs);
+  return shapePostRow(row, batch);
 }
 
 export async function listCategories(

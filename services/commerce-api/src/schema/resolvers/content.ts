@@ -1,3 +1,4 @@
+import type { GraphQLResolveInfo } from "graphql";
 import type { AppContext } from "../../context.js";
 import {
   getNavigation,
@@ -12,6 +13,10 @@ import {
   type PageRecord,
 } from "../../repositories/content.js";
 import { resolveContentTemplateType } from "../../repositories/acf-graphql.js";
+import {
+  postDetailNeedsFromInfo,
+  postListNeedsFromInfo,
+} from "../../utils/selection.js";
 
 export const contentResolvers = {
   Query: {
@@ -21,14 +26,21 @@ export const contentResolvers = {
         first?: number;
         where?: { status?: string; categoryName?: string };
       },
+      _ctx: unknown,
+      info: GraphQLResolveInfo,
     ) =>
       listPosts({
         first: args.first,
         categoryName: args.where?.categoryName,
         status: args.where?.status,
+        needs: postListNeedsFromInfo(info),
       }),
-    post: async (_: unknown, args: { id: string; idType?: string }) =>
-      getPostBySlug(String(args.id)),
+    post: async (
+      _: unknown,
+      args: { id: string; idType?: string },
+      _ctx: unknown,
+      info: GraphQLResolveInfo,
+    ) => getPostBySlug(String(args.id), postDetailNeedsFromInfo(info)),
     categories: async (
       _: unknown,
       args: {
