@@ -1,12 +1,35 @@
 import { query, queryOne, t, type SqlParam } from "../db/mysql.js";
 import { getAttachmentUrl, getPostMeta, getProductNode } from "./products.js";
-import { getOption, phpUnserialize } from "./options.js";
+import { getOption, getOptionsByPrefix } from "./options.js";
+import {
+  pickMeta,
+  relationshipConnection,
+  shapeAcfField,
+} from "./acf.js";
+import {
+  groupsForGraphqlType,
+  loadAcfGraphqlGroups,
+  locationMatchesPage,
+  resolvePageTemplateType,
+  shapeAcfGroupFields,
+} from "./acf-graphql.js";
 import {
   resolveAttachedProductId,
   shapeLabReports,
   shapeManualProduct,
 } from "./lab-results-meta.js";
 import { toGlobalId } from "../utils/index.js";
+
+export type PageRecord = {
+  databaseId: number;
+  title: string;
+  slug: string;
+  uri: string;
+  content: string;
+  templateName: string;
+  templateFile: string;
+  meta: Record<string, string>;
+};
 
 function statusWhere(status?: string): string {
   if (!status || status === "PUBLISH" || status === "publish") return "publish";
@@ -31,6 +54,7 @@ async function shapePost(row: {
   );
   const categories = await queryTerms(row.ID, "category");
   const tags = await queryTerms(row.ID, "post_tag");
+  const recommended = await shapeAcfField(meta, "recommended_products");
 
   return {
     databaseId: row.ID,
@@ -57,6 +81,15 @@ async function shapePost(row: {
       : null,
     honeyGuideFields: {
       isFeatured: meta.is_featured === "1" || meta.isFeatured === "1",
+      recommendedProducts:
+        recommended && typeof recommended === "object"
+          ? recommended
+          : relationshipConnection(meta.recommended_products),
+    },
+    shopFields: {
+      contentBlocks: await shapeAcfField(meta, "content_blocks", {
+        flexTypePrefix: "ShopFieldsContentBlocks",
+      }),
     },
   };
 }
@@ -139,6 +172,52 @@ export async function listCategories(first = 50) {
   return { nodes: rows };
 }
 
+export async function listProductCategories(first = 100) {
+  const rows = await query<
+    { name: string; slug: string; badge: string | null }[]
+  >(
+    `SELECT terms.name, terms.slug, tm.meta_value AS badge
+     FROM ${t("term_taxonomy")} tt
+     JOIN ${t("terms")} terms ON terms.term_id = tt.term_id
+     LEFT JOIN ${t("termmeta")} tm
+       ON tm.term_id = terms.term_id AND tm.meta_key = 'badge'
+     WHERE tt.taxonomy = 'product_cat'
+     ORDER BY terms.name ASC
+     LIMIT ?`,
+    [first],
+  );
+  return { nodes: rows };
+}
+
+async function pageRowToRecord(row: {
+  ID: number;
+  post_title: string;
+  post_name: string;
+  post_content: string;
+}): Promise<PageRecord> {
+  const meta = await getPostMeta(row.ID);
+  const templateFile = meta._wp_page_template || "default";
+  return {
+    databaseId: row.ID,
+    title: row.post_title,
+    slug: row.post_name,
+    uri: `/${row.post_name}/`,
+    content: row.post_content,
+    templateName: humanTemplateName(templateFile),
+    templateFile,
+    meta,
+  };
+}
+
+function humanTemplateName(file: string): string {
+  const base = file.replace(/^.*\//, "").replace(/\.php$/i, "");
+  if (!base || base === "default") return "Default";
+  return base
+    .replace(/^template-?/, "")
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export async function listPages(first = 100) {
   const rows = await query<
     {
@@ -153,18 +232,8 @@ export async function listPages(first = 100) {
      ORDER BY post_title ASC LIMIT ?`,
     [first],
   );
-  const nodes = [];
-  for (const r of rows) {
-    const meta = await getPostMeta(r.ID);
-    nodes.push({
-      databaseId: r.ID,
-      title: r.post_title,
-      slug: r.post_name,
-      content: r.post_content,
-      template: { templateName: meta._wp_page_template || "default" },
-      homepageFields: await shapeHomepageFields(meta),
-    });
-  }
+  const nodes: PageRecord[] = [];
+  for (const r of rows) nodes.push(await pageRowToRecord(r));
   return { nodes };
 }
 
@@ -180,69 +249,87 @@ export async function getPageByUri(uri: string) {
      WHERE post_type = 'page' AND post_name = ? AND post_status = 'publish' LIMIT 1`,
     [slug],
   );
-  if (!row) return null;
-  const meta = await getPostMeta(row.ID);
-  return {
-    databaseId: row.ID,
-    title: row.post_title,
-    slug: row.post_name,
-    content: row.post_content,
-    template: { templateName: meta._wp_page_template || "default" },
-  };
+  return row ? pageRowToRecord(row) : null;
 }
 
-/** Best-effort ACF homepage fields from postmeta (JSON or PHP serialized). */
-async function shapeHomepageFields(meta: Record<string, string>) {
-  // If ACF stores as individual keys, surface a minimal structure; full flexible content
-  // is stored in serialized form under field keys — attempt JSON option first.
-  const raw = meta.homepage_fields || meta.homepageFields;
-  if (raw) {
-    try {
-      if (raw.startsWith("a:") || raw.startsWith("{")) {
-        const parsed =
-          raw.startsWith("{") ? JSON.parse(raw) : phpUnserialize(raw);
-        return parsed;
-      }
-    } catch {
-      /* fallthrough */
-    }
-  }
-  return {
-    heroBanner: null,
-    pageBlocks: [],
+export async function shapePageTemplate(page: PageRecord) {
+  const groups = await loadAcfGraphqlGroups();
+  const typename = resolvePageTemplateType(page, groups);
+  const byType = groupsForGraphqlType(groups, typename);
+  const byLocation = groups.filter(
+    (g) =>
+      locationMatchesPage(g, page) &&
+      g.location.some((andGroup) =>
+        andGroup.some(
+          (rule) => rule.param === "page_template" || rule.param === "page",
+        ),
+      ),
+  );
+  const attached = [...byType, ...byLocation].filter(
+    (g, i, all) => all.findIndex((x) => x.id === g.id) === i,
+  );
+
+  const base: Record<string, unknown> = {
+    __typename: typename,
+    templateName: page.templateName,
   };
+  for (const group of attached) {
+    base[group.graphqlFieldName] = await shapeAcfGroupFields(page.meta, group);
+  }
+  return base;
+}
+
+function optionsToMeta(options: Record<string, string>, prefix: string): Record<string, string> {
+  const meta: Record<string, string> = {};
+  for (const [name, value] of Object.entries(options)) {
+    const key = name.startsWith(prefix) ? name.slice(prefix.length) : name;
+    meta[key] = value;
+  }
+  return meta;
 }
 
 export async function getNavigation() {
-  // ACF options often live as option `options_navigation` or similar
-  const candidates = [
-    "options_navigation",
-    "navigation",
-    "acf_navigation",
-  ];
+  const candidates = ["options_navigation", "navigation", "acf_navigation"];
   for (const name of candidates) {
     const opt = await getOption(name);
     if (opt && typeof opt === "object") {
       return { id: "navigation", ...(opt as object) };
     }
   }
+
+  const optionMeta = optionsToMeta(await getOptionsByPrefix("options_"), "options_");
+  const topMenu = await shapeAcfField(optionMeta, "top_menu");
+  const footer = await shapeAcfField(optionMeta, "footer");
+  const logo = await shapeAcfField(optionMeta, "logo_image");
+  const cta = await shapeAcfField(optionMeta, "top_menu_cta");
+  let logoImage = "";
+  if (logo && typeof logo === "object" && "node" in (logo as object)) {
+    logoImage =
+      ((logo as { node?: { sourceUrl?: string } }).node?.sourceUrl ?? "") || "";
+  } else if (typeof logo === "string") {
+    logoImage = logo;
+  }
+
   return {
     id: "navigation",
-    pageTitle: "",
-    menuTitle: "",
-    topMenu: { toplinks: [] },
-    footer: {
-      fdaDisclousure: "",
-      footerColumns: [],
-      footerCopyright: "",
-      socialMediaLinks: [],
-      subscriptionBox: null,
-      trustBadges: [],
-    },
+    pageTitle: pickMeta(optionMeta, "page_title"),
+    menuTitle: pickMeta(optionMeta, "menu_title"),
+    topMenu: topMenu && typeof topMenu === "object" ? topMenu : { toplinks: [] },
+    footer:
+      footer && typeof footer === "object"
+        ? footer
+        : {
+            fdaDisclousure: "",
+            footerColumns: [],
+            footerCopyright: "",
+            socialMediaLinks: [],
+            subscriptionBox: null,
+            trustBadges: [],
+          },
     navigationFields: {
-      logoImage: null,
-      promoText: "",
-      topMenuCta: null,
+      logoImage,
+      promoText: pickMeta(optionMeta, "promo_text"),
+      topMenuCta: cta,
     },
   };
 }
@@ -251,9 +338,7 @@ export async function searchLabResults(lotNumber: string) {
   const trimmed = lotNumber.trim();
   if (!trimmed) return { nodes: [] };
 
-  const rows = await query<
-    { ID: number; post_title: string }[]
-  >(
+  const rows = await query<{ ID: number; post_title: string }[]>(
     `SELECT ID, post_title FROM ${t("posts")}
      WHERE post_type = 'lab_results' AND post_status = 'publish'
        AND (post_title = ? OR post_title LIKE ?)

@@ -91,6 +91,7 @@ export const typeDefs = /* GraphQL */ `
   type ProductCategory {
     name: String
     slug: String
+    badge: String
   }
 
   type ProductCategoryConnection {
@@ -171,6 +172,7 @@ export const typeDefs = /* GraphQL */ `
   type ProductVariation {
     databaseId: Int
     name: String
+    menuOrder: Int
     price(format: PricingFieldFormatEnum): String
     regularPrice(format: PricingFieldFormatEnum): String
     salePrice(format: PricingFieldFormatEnum): String
@@ -233,7 +235,7 @@ export const typeDefs = /* GraphQL */ `
     price(format: PricingFieldFormatEnum): String
     regularPrice(format: PricingFieldFormatEnum): String
     salePrice(format: PricingFieldFormatEnum): String
-    variations(first: Int): ProductVariationConnection
+    variations(first: Int, where: ProductVariationQueryInput): ProductVariationConnection
   }
 
   type RootQueryToProductConnection {
@@ -578,10 +580,6 @@ export const typeDefs = /* GraphQL */ `
     node: MediaItem
   }
 
-  type HoneyGuideFields {
-    isFeatured: Boolean
-  }
-
   type Post {
     databaseId: Int
     id: ID
@@ -594,14 +592,17 @@ export const typeDefs = /* GraphQL */ `
     categories: CategoryConnection
     tags: TagConnection
     featuredImage: FeaturedImageEdge
-    honeyGuideFields: HoneyGuideFields
   }
 
   type RootQueryToPostConnection {
     nodes: [Post]
   }
 
-  type ContentTemplate {
+  interface ContentTemplate {
+    templateName: String
+  }
+
+  type DefaultTemplate implements ContentTemplate {
     templateName: String
   }
 
@@ -611,123 +612,26 @@ export const typeDefs = /* GraphQL */ `
     url: String
   }
 
-  type HomepageHeroBanner {
-    promoText: String
-    backgroundImage: MediaItemEdge
-    backgroundImageMobile: MediaItemEdge
-    primaryCta: AcfLink
-    secondaryCta: AcfLink
-    subtitle: String
-    text: String
-    title: String
-    trustTags: [String]
-    videoUrl: MediaItemEdge
-  }
-
-  union HomepagePageBlock =
-      HomepageFieldsPageBlocksTrustBadgeMarqueeLayout
-    | HomepageFieldsPageBlocksTopSellersLayout
-    | HomepageFieldsPageBlocksBenefitsSpotlightLayout
-    | HomepageFieldsPageBlocksHoneyGuideTilesLayout
-    | HomepageFieldsPageBlocksComparisonBlockLayout
-    | HomepageFieldsPageBlocksInstagramReelsLayout
-    | HomepageFieldsPageBlocksContentTabsLayout
-    | HomepageFieldsPageBlocksFaqBlockLayout
-    | HomepageFieldsPageBlocksQuizPromoLayout
-
-  type HomepageFieldsPageBlocksTrustBadgeMarqueeLayout {
-    fieldGroupName: String
-    badges: [HomepageBadge]
-  }
-  type HomepageBadge {
-    icon: String
-    title: String
-  }
-  type HomepageProductIdNode {
+  type AcfContentNode {
     databaseId: Int
   }
-  type HomepageProductIdsEdge {
-    nodes: [HomepageProductIdNode]
-  }
-  type HomepageTab {
-    productsIds: HomepageProductIdsEdge
-    title: String
-  }
-  type HomepageFieldsPageBlocksTopSellersLayout {
-    fieldGroupName: String
-    subtitle: String
-    tabs: [HomepageTab]
-    title: String
-  }
-  type HomepageIcon {
-    icon: String
-    subtitle: String
-    title: String
-  }
-  type HomepageFieldsPageBlocksBenefitsSpotlightLayout {
-    fieldGroupName: String
-    subtitle: String
-    ctaLink: AcfLink
-    icons: [HomepageIcon]
-    title: String
-  }
-  type HomepageFieldsPageBlocksHoneyGuideTilesLayout {
-    fieldGroupName: String
-    title: String
-    link: AcfLink
-  }
-  type HomepageFieldsPageBlocksComparisonBlockLayout {
-    fieldGroupName: String
-    comparisonTable: String
-    image: MediaItemEdge
-    shopLink: AcfLink
-  }
-  type HomepageSocialLink {
-    icon: String
-    link: AcfLink
-  }
-  type HomepageFieldsPageBlocksInstagramReelsLayout {
-    fieldGroupName: String
-    subtitle: String
-    title: String
-    instagramUrl: AcfLink
-    socialLinks: [HomepageSocialLink]
-  }
-  type HomepageFieldsPageBlocksContentTabsLayout {
-    fieldGroupName: String
-    tabs: [HomepageTab]
-  }
-  type HomepageFaq {
-    answer: String
-    question: String
-  }
-  type HomepageFieldsPageBlocksFaqBlockLayout {
-    fieldGroupName: String
-    title: String
-    questions: [HomepageFaq]
-  }
-  type HomepageFieldsPageBlocksQuizPromoLayout {
-    fieldGroupName: String
-    bestSellerProductIds: [Int]
-    bestSellerTitle: String
-    link: AcfLink
-    quizTabTitle: String
-    quizText: String
-    title: String
+
+  type AcfContentNodeConnection {
+    nodes: [AcfContentNode]
   }
 
-  type HomepageFields {
-    heroBanner: HomepageHeroBanner
-    pageBlocks: [HomepagePageBlock]
+  type AcfIconLink {
+    icon: String
+    link: AcfLink
   }
 
   type Page {
     databaseId: Int
     title: String
     slug: String
+    uri: String
     content: String
     template: ContentTemplate
-    homepageFields: HomepageFields
   }
 
   type RootQueryToPageConnection {
@@ -778,7 +682,7 @@ export const typeDefs = /* GraphQL */ `
     fdaDisclousure: String
     footerColumns: [NavigationFooterColumn]
     footerCopyright: String
-    socialMediaLinks: [HomepageSocialLink]
+    socialMediaLinks: [AcfIconLink]
     subscriptionBox: NavigationSubscriptionBox
     trustBadges: [NavigationTrustBadge]
   }
@@ -837,6 +741,24 @@ export const typeDefs = /* GraphQL */ `
   input ProductQueryInput {
     include: [Int]
     status: String
+  }
+
+  input ProductVariationOrderbyInput {
+    field: String
+    order: String
+  }
+
+  input ProductVariationQueryInput {
+    orderby: ProductVariationOrderbyInput
+  }
+
+  input RootQueryToCategoryConnectionWhereArgs {
+    orderby: String
+    order: String
+  }
+
+  input ProductCategoryConnectionWhereArgs {
+    hideEmpty: Boolean
   }
 
   input RootQueryToPostConnectionWhereArgs {
@@ -1195,7 +1117,8 @@ export const typeDefs = /* GraphQL */ `
     paypalSettings: PaypalSettings
     posts(first: Int, where: RootQueryToPostConnectionWhereArgs): RootQueryToPostConnection
     post(id: ID!, idType: PostIdType): Post
-    categories(first: Int): CategoryConnection
+    categories(first: Int, where: RootQueryToCategoryConnectionWhereArgs): CategoryConnection
+    productCategories(first: Int, where: ProductCategoryConnectionWhereArgs): ProductCategoryConnection
     pages(first: Int, where: RootQueryToPageConnectionWhereArgs): RootQueryToPageConnection
     page(id: ID!, idType: PageIdType): Page
     navigation: Navigation

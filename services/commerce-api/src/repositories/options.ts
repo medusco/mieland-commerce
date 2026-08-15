@@ -1,4 +1,4 @@
-import { queryOne, t } from "../db/mysql.js";
+import { query, queryOne, t } from "../db/mysql.js";
 import { getRedis } from "../redis/client.js";
 import { loadConfig } from "../config.js";
 
@@ -120,6 +120,21 @@ export async function getOption<T = unknown>(name: string): Promise<T | null> {
   const raw = await getOptionRaw(name);
   if (raw == null) return null;
   return maybeUnserializePhp(raw) as T;
+}
+
+export async function getOptionsByPrefix(
+  prefix: string,
+): Promise<Record<string, string>> {
+  const rows = await query<{ option_name: string; option_value: string }[]>(
+    `SELECT option_name, option_value FROM ${t("options")}
+     WHERE option_name LIKE ?`,
+    [`${prefix}%`],
+  );
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    out[row.option_name] = row.option_value ?? "";
+  }
+  return out;
 }
 
 export async function getOptionString(

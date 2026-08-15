@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Requires MySQL (Woo `hy_` tables) and Redis. Point `GRAPHQL_ENDPOINT` in the mieland shop at `http://localhost:4000/graphql`.
+Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `NEXT_PUBLIC_CONTENT_BACKEND=commerce` at `http://localhost:4000/graphql` for cart, profile, and CMS content (posts, pages, navigation, ACF). Keep `GRAPHQL_ENDPOINT` on WordPress only when you still need WPGraphQL-only fields.
 
 Set `MEDIA_BASE_URL` (or `S3_UPLOADS_BUCKET_URL`) to the same public uploads CDN WordPress uses — e.g. `https://img.mieland.com` — so product/media `sourceUrl` values match the media library instead of frozen `posts.guid` hosts.
 

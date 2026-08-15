@@ -11,7 +11,11 @@ import { useDisableIntrospection } from "@graphql-yoga/plugin-disable-introspect
 import { GraphQLError } from "graphql";
 import depthLimit from "graphql-depth-limit";
 import { typeDefs } from "./schema/typeDefs/index.js";
-import { resolvers } from "./schema/resolvers/index.js";
+import {
+  generateAcfResolvers,
+  generateAcfTypeDefs,
+} from "./schema/typeDefs/acf.js";
+import { mergeResolvers, resolvers } from "./schema/resolvers/index.js";
 import {
   buildContext,
   FORCE_LOGOUT_HEADER,
@@ -21,6 +25,7 @@ import {
 } from "./context.js";
 import { loadConfig } from "./config.js";
 import { pingMysql, closeMysql } from "./db/mysql.js";
+import { loadAcfGraphqlGroups } from "./repositories/acf-graphql.js";
 import { pingRedis, closeRedis } from "./redis/client.js";
 import { createApqPlugin } from "./apq/plugin.js";
 import {
@@ -54,9 +59,21 @@ try {
 
 initSentry(cfg);
 
+let acfGroups: Awaited<ReturnType<typeof loadAcfGraphqlGroups>> = [];
+try {
+  acfGroups = await loadAcfGraphqlGroups();
+  logJson("info", { msg: "acf_schema_loaded", groups: acfGroups.length });
+} catch (err) {
+  logJson("warn", {
+    msg: "acf_schema_load_failed",
+    err: err instanceof Error ? err.message : String(err),
+  });
+}
+
+const acfTypeDefs = generateAcfTypeDefs(acfGroups);
 const schema = createSchema<AppContext>({
-  typeDefs,
-  resolvers,
+  typeDefs: acfTypeDefs.trim() ? [typeDefs, acfTypeDefs] : typeDefs,
+  resolvers: mergeResolvers(resolvers, generateAcfResolvers(acfGroups)),
 });
 
 const yoga = createYoga<AppContext>({

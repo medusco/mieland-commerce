@@ -6,7 +6,10 @@ import {
   listCategories,
   listPages,
   listPosts,
+  listProductCategories,
   searchLabResults,
+  shapePageTemplate,
+  type PageRecord,
 } from "../../repositories/content.js";
 
 export const contentResolvers = {
@@ -23,17 +26,12 @@ export const contentResolvers = {
         categoryName: args.where?.categoryName,
         status: args.where?.status,
       }),
-    post: async (
-      _: unknown,
-      args: { id: string; idType?: string },
-    ) => {
-      if (args.idType === "SLUG" || !args.idType) {
-        return getPostBySlug(String(args.id));
-      }
-      return getPostBySlug(String(args.id));
-    },
+    post: async (_: unknown, args: { id: string; idType?: string }) =>
+      getPostBySlug(String(args.id)),
     categories: async (_: unknown, args: { first?: number }) =>
       listCategories(args.first ?? 50),
+    productCategories: async (_: unknown, args: { first?: number }) =>
+      listProductCategories(args.first ?? 100),
     pages: async (
       _: unknown,
       args: { first?: number; where?: { status?: string } },
@@ -46,38 +44,12 @@ export const contentResolvers = {
       args: { where?: { title?: string; status?: string } },
     ) => searchLabResults(args.where?.title ?? ""),
   },
-  HomepagePageBlock: {
-    __resolveType(obj: { fieldGroupName?: string; __typename?: string }) {
-      if (obj.__typename) return obj.__typename;
-      const name = obj.fieldGroupName ?? "";
-      if (name.includes("TrustBadge")) {
-        return "HomepageFieldsPageBlocksTrustBadgeMarqueeLayout";
-      }
-      if (name.includes("TopSellers")) {
-        return "HomepageFieldsPageBlocksTopSellersLayout";
-      }
-      if (name.includes("Benefits")) {
-        return "HomepageFieldsPageBlocksBenefitsSpotlightLayout";
-      }
-      if (name.includes("HoneyGuide")) {
-        return "HomepageFieldsPageBlocksHoneyGuideTilesLayout";
-      }
-      if (name.includes("Comparison")) {
-        return "HomepageFieldsPageBlocksComparisonBlockLayout";
-      }
-      if (name.includes("Instagram")) {
-        return "HomepageFieldsPageBlocksInstagramReelsLayout";
-      }
-      if (name.includes("ContentTabs")) {
-        return "HomepageFieldsPageBlocksContentTabsLayout";
-      }
-      if (name.includes("Faq")) {
-        return "HomepageFieldsPageBlocksFaqBlockLayout";
-      }
-      if (name.includes("Quiz")) {
-        return "HomepageFieldsPageBlocksQuizPromoLayout";
-      }
-      return "HomepageFieldsPageBlocksTrustBadgeMarqueeLayout";
+  Page: {
+    template: (page: PageRecord) => shapePageTemplate(page),
+  },
+  ContentTemplate: {
+    __resolveType(obj: { __typename?: string }) {
+      return obj.__typename ?? "DefaultTemplate";
     },
   },
 };

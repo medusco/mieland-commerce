@@ -6,7 +6,7 @@ import { contentResolvers } from "./content.js";
 import { checkoutResolvers } from "./checkout.js";
 import { reviewResolvers } from "./reviews.js";
 
-function mergeResolvers(
+export function mergeResolvers(
   ...maps: Array<Record<string, Record<string, unknown>>>
 ) {
   const out: Record<string, Record<string, unknown>> = {};
