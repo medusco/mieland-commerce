@@ -10,6 +10,7 @@ import {
   groupsForGraphqlType,
   loadAcfGraphqlGroups,
   locationMatchesPage,
+  pageTemplateTypenames,
   resolvePageTemplateType,
   shapeAcfGroupFields,
 } from "./acf-graphql.js";
@@ -263,6 +264,10 @@ function humanTemplateName(file: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+export async function listPageTemplateTypenames(): Promise<string[]> {
+  return pageTemplateTypenames(await listPageTemplateFiles());
+}
+
 export async function listPageTemplateFiles(): Promise<string[]> {
   const rows = await query<{ meta_value: string }[]>(
     `SELECT DISTINCT pm.meta_value
@@ -277,7 +282,10 @@ export async function listPageTemplateFiles(): Promise<string[]> {
   return rows.map((row) => row.meta_value).filter(Boolean);
 }
 
-export async function listPages(first = 100) {
+export async function listPages(
+  first = 100,
+  where?: { status?: string; templateName?: string },
+) {
   const rows = await query<
     {
       ID: number;
@@ -293,7 +301,11 @@ export async function listPages(first = 100) {
   );
   const nodes: PageRecord[] = [];
   for (const r of rows) nodes.push(await pageRowToRecord(r));
-  return { nodes };
+  const templateFilter = where?.templateName?.trim().toLowerCase();
+  const filtered = templateFilter
+    ? nodes.filter((page) => page.templateName.trim().toLowerCase() === templateFilter)
+    : nodes;
+  return { nodes: filtered };
 }
 
 export async function getPageByUri(uri: string) {

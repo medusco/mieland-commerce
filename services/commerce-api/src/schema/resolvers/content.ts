@@ -40,8 +40,8 @@ export const contentResolvers = {
       listProductCategories(args.first ?? 100),
     pages: async (
       _: unknown,
-      args: { first?: number; where?: { status?: string } },
-    ) => listPages(args.first ?? 100),
+      args: { first?: number; where?: { status?: string; templateName?: string } },
+    ) => listPages(args.first ?? 100, args.where),
     page: async (_: unknown, args: { id: string; idType?: string }) =>
       getPageByUri(String(args.id)),
     navigation: async () => getNavigation(),

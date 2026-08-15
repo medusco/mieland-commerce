@@ -783,6 +783,7 @@ export const typeDefs = /* GraphQL */ `
 
   input RootQueryToPageConnectionWhereArgs {
     status: PostStatusEnum
+    templateName: String
   }
 
   input LabResultsWhereArgs {

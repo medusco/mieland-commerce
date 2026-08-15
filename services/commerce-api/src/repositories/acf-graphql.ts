@@ -108,6 +108,15 @@ export function graphqlTemplateTypename(templateName: string, templateFile: stri
   return `Template_${graphqlFormatTypeName(base)}`;
 }
 
+export function pageTemplateTypenames(templateFiles: string[]): string[] {
+  const types = new Set<string>();
+  for (const file of templateFiles) {
+    const typename = graphqlTemplateTypename("", file);
+    if (typename !== "DefaultTemplate") types.add(typename);
+  }
+  return [...types].sort();
+}
+
 const knownTemplateTypes = new Set<string>(["DefaultTemplate"]);
 
 export function registerKnownTemplateTypes(types: Iterable<string>): void {

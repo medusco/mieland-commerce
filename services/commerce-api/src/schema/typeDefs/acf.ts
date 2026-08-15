@@ -1,6 +1,6 @@
 import type { AcfFieldDef, AcfGraphqlGroup } from "../../repositories/acf-graphql.js";
 import {
-  graphqlTemplateTypename,
+  pageTemplateTypenames,
   registerKnownTemplateTypes,
   shapeAcfGroupFields,
 } from "../../repositories/acf-graphql.js";
@@ -214,10 +214,9 @@ export function buildAcfSchema(
   const productFields = new Map<string, string[]>();
   const skippedGroups: AcfSchemaBuildSummary["skippedGroups"] = [];
   const templates = collectTemplateTypes(groups);
-  for (const file of pageTemplateFiles) {
-    const typename = graphqlTemplateTypename("", file);
-    if (typename === "DefaultTemplate" || templates.has(typename)) continue;
-    templates.set(typename, []);
+  const dbTemplateTypes = new Set(pageTemplateTypenames(pageTemplateFiles));
+  for (const typename of dbTemplateTypes) {
+    if (!templates.has(typename)) templates.set(typename, []);
   }
 
   for (const group of groups) {
@@ -240,14 +239,39 @@ export function buildAcfSchema(
 
   const templateSdl: string[] = [];
   const templateTypes: string[] = [];
+
+  for (const typename of dbTemplateTypes) {
+    templateTypes.push(typename);
+    templateSdl.push(
+      `  type ${typename} implements ContentTemplate {\n    templateName: String\n  }`,
+    );
+  }
+
   for (const [typename, attached] of templates) {
+    if (dbTemplateTypes.has(typename)) {
+      const unique = attached.filter((g, i, a) => a.findIndex((x) => x.id === g.id) === i);
+      const fields = unique.map(
+        (g) => `    ${g.graphqlFieldName}: ${groupTypeName(g)}`,
+      );
+      if (fields.length > 0) {
+        templateSdl.push(`  extend type ${typename} {\n${fields.join("\n")}\n  }`);
+      }
+      continue;
+    }
+
     templateTypes.push(typename);
     const unique = attached.filter((g, i, a) => a.findIndex((x) => x.id === g.id) === i);
     const fields = unique.map(
       (g) => `    ${g.graphqlFieldName}: ${groupTypeName(g)}`,
     );
+    if (fields.length > 0) {
+      templateSdl.push(
+        `  type ${typename} implements ContentTemplate {\n    templateName: String\n${fields.join("\n")}\n  }`,
+      );
+      continue;
+    }
     templateSdl.push(
-      `  type ${typename} implements ContentTemplate {\n    templateName: String\n${fields.join("\n")}\n  }`,
+      `  type ${typename} implements ContentTemplate {\n    templateName: String\n  }`,
     );
   }
 
