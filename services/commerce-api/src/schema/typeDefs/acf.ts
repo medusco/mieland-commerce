@@ -23,14 +23,9 @@ const PRODUCT_GRAPHQL_TYPE_ALIASES: Record<string, string> = {
 const BASE_PRODUCT_FIELDS = new Set(["thumbnailFields"]);
 
 function resolveProductGraphqlType(graphqlType: string): string | null {
+  if (!PRODUCT_GRAPHQL_TYPES.has(graphqlType)) return null;
   if (graphqlType === "Product") return "Product";
-  if (PRODUCT_GRAPHQL_TYPE_ALIASES[graphqlType]) {
-    return PRODUCT_GRAPHQL_TYPE_ALIASES[graphqlType];
-  }
-  if (graphqlType === "SimpleProduct" || graphqlType === "VariableProduct") {
-    return graphqlType;
-  }
-  return null;
+  return PRODUCT_GRAPHQL_TYPE_ALIASES[graphqlType] ?? graphqlType;
 }
 
 function productExtensionSdl(typename: string, fields: string[]): string | null {
@@ -111,7 +106,7 @@ function scalarForAcfType(type: string): string {
 }
 
 /** WPGraphQL-for-ACF field typing with commerce overrides for known CMS fields. */
-function scalarForField(field: AcfFieldDef, parentType?: string): string {
+function scalarForField(field: AcfFieldDef): string {
   const name = field.graphqlName || field.name;
   if (name === "productThumbnailImage") {
     return "ProductThumbnailImage";
@@ -185,7 +180,7 @@ function fieldGraphQLType(
     return field.type === "repeater" ? `[${nested}]` : nested;
   }
 
-  return scalarForField(field, parentType);
+  return scalarForField(field);
 }
 
 function collectTemplateTypes(groups: AcfGraphqlGroup[]): Map<string, AcfGraphqlGroup[]> {
