@@ -124,6 +124,10 @@ const envSchema = z.object({
     emptyToUndefined,
     z.coerce.number().default(60),
   ),
+  MEMORY_CACHE_TTL_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().default(15),
+  ),
   DISABLE_INTROSPECTION: boolFromEnv,
   SENTRY_DSN: z.preprocess(emptyToUndefined, z.string().optional()),
   SENTRY_ENVIRONMENT: z.preprocess(emptyToUndefined, z.string().optional()),

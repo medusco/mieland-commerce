@@ -12,6 +12,9 @@ import {
   PRODUCT_THUMBNAIL_META_KEYS,
   shapeProductThumbnailFields,
 } from "./product-acf.js";
+import { memoryGet, memorySet } from "../utils/memory-cache.js";
+
+const MEMORY_NULL = "__null__";
 
 export type ProductRow = {
   ID: number;
@@ -117,7 +120,7 @@ export async function getPostMeta(
   return map.get(postId) ?? {};
 }
 
-/** Batch-load only specific meta keys (no full-row dump, no Redis full-meta cache). */
+/** Batch-load only specific meta keys. Short-lived memory cache for ACF keys only. */
 export async function getPostMetaKeysMany(
   postIds: number[],
   keys: string[],
@@ -127,21 +130,62 @@ export async function getPostMetaKeysMany(
   for (const id of unique) out.set(id, {});
   if (!unique.length || !keys.length) return out;
 
-  const idPh = unique.map(() => "?").join(",");
-  const keyPh = keys.map(() => "?").join(",");
+  const sortedKeys = [...keys].sort();
+  const acfOnly = isAcfMetaKeysOnly(sortedKeys);
+  const missing: number[] = [];
+
+  if (acfOnly) {
+    for (const id of unique) {
+      const memKey = acfMetaMemoryKey(id, sortedKeys);
+      const hit = memoryGet(memKey);
+      if (hit !== undefined) {
+        out.set(id, hit === MEMORY_NULL ? {} : (JSON.parse(hit) as Record<string, string>));
+      } else {
+        missing.push(id);
+      }
+    }
+    if (!missing.length) return out;
+  } else {
+    missing.push(...unique);
+  }
+
+  const idPh = missing.map(() => "?").join(",");
+  const keyPh = sortedKeys.map(() => "?").join(",");
   const rows = await query<
     { post_id: number; meta_key: string; meta_value: string }[]
   >(
     `SELECT post_id, meta_key, meta_value FROM ${t("postmeta")}
      WHERE post_id IN (${idPh}) AND meta_key IN (${keyPh})`,
-    [...unique, ...keys],
+    [...missing, ...sortedKeys],
   );
+  const grouped = new Map<number, Record<string, string>>();
+  for (const id of missing) grouped.set(id, {});
   for (const row of rows) {
-    const bag = out.get(Number(row.post_id)) ?? {};
+    const bag = grouped.get(Number(row.post_id)) ?? {};
     bag[row.meta_key] = row.meta_value ?? "";
-    out.set(Number(row.post_id), bag);
+    grouped.set(Number(row.post_id), bag);
+  }
+  for (const id of missing) {
+    const meta = grouped.get(id) ?? {};
+    out.set(id, meta);
+    if (acfOnly) {
+      const memKey = acfMetaMemoryKey(id, sortedKeys);
+      memorySet(
+        memKey,
+        Object.keys(meta).length ? JSON.stringify(meta) : MEMORY_NULL,
+      );
+    }
   }
   return out;
+}
+
+function isAcfMetaKeysOnly(keys: readonly string[]): boolean {
+  const allowed = new Set<string>(PRODUCT_THUMBNAIL_META_KEYS);
+  return keys.length > 0 && keys.every((key) => allowed.has(key));
+}
+
+function acfMetaMemoryKey(postId: number, sortedKeys: readonly string[]): string {
+  return `acf-meta:${postId}:${sortedKeys.join(",")}`;
 }
 
 export type ProductPriceParts = {
@@ -151,21 +195,26 @@ export type ProductPriceParts = {
   sale: number | null;
 };
 
+const PRICE_META_KEYS = ["_price", "_regular_price", "_sale_price"] as const;
+
+function pricePartsFromMeta(meta: Record<string, string>): ProductPriceParts {
+  const regular = Number(meta._regular_price || meta._price || 0);
+  const saleRaw = meta._sale_price;
+  const saleNum = saleRaw && Number(saleRaw) > 0 ? Number(saleRaw) : null;
+  return { regular, sale: saleNum };
+}
+
+/** One postmeta IN query for all product/variation price keys. */
 export async function getProductPrices(
   productIds: number[],
 ): Promise<Map<number, ProductPriceParts>> {
-  const metaMap = await getPostMetaKeysMany(productIds, [
-    "_price",
-    "_regular_price",
-    "_sale_price",
-  ]);
+  const unique = [...new Set(productIds.filter((id) => Number.isFinite(id) && id > 0))];
   const prices = new Map<number, ProductPriceParts>();
-  for (const id of productIds) {
-    const meta = metaMap.get(id) ?? {};
-    const regular = Number(meta._regular_price || meta._price || 0);
-    const saleRaw = meta._sale_price;
-    const saleNum = saleRaw && Number(saleRaw) > 0 ? Number(saleRaw) : null;
-    prices.set(id, { regular, sale: saleNum });
+  if (!unique.length) return prices;
+
+  const metaMap = await getPostMetaKeysMany(unique, [...PRICE_META_KEYS]);
+  for (const id of unique) {
+    prices.set(id, pricePartsFromMeta(metaMap.get(id) ?? {}));
   }
   return prices;
 }
@@ -242,25 +291,47 @@ export async function getAttachmentUrls(
   >();
   if (!unique.length) return out;
 
-  const placeholders = unique.map(() => "?").join(",");
+  const missing: number[] = [];
+  for (const id of unique) {
+    const hit = memoryGet(mediaMemoryKey(id));
+    if (hit !== undefined) {
+      out.set(id, JSON.parse(hit) as {
+        sourceUrl: string;
+        mediaItemUrl: string;
+        altText: string;
+      });
+    } else {
+      missing.push(id);
+    }
+  }
+
+  if (!missing.length) return out;
+
+  const placeholders = missing.map(() => "?").join(",");
   const [rows, metaMap, mediaBaseUrl] = await Promise.all([
     query<{ ID: number; guid: string; post_title: string }[]>(
       `SELECT ID, guid, post_title FROM ${t("posts")} WHERE ID IN (${placeholders})`,
-      unique,
+      missing,
     ),
-    getPostMetaMany(unique),
+    getPostMetaMany(missing),
     getMediaBaseUrl(),
   ]);
   for (const row of rows) {
     const meta = metaMap.get(row.ID) ?? {};
     const url = buildMediaItemUrl(meta._wp_attached_file, row.guid, mediaBaseUrl);
-    out.set(row.ID, {
+    const shaped = {
       sourceUrl: url,
       mediaItemUrl: url,
       altText: meta._wp_attachment_image_alt || row.post_title || "",
-    });
+    };
+    out.set(row.ID, shaped);
+    memorySet(mediaMemoryKey(row.ID), JSON.stringify(shaped));
   }
   return out;
+}
+
+function mediaMemoryKey(attachmentId: number): string {
+  return `media:mem:v1:${attachmentId}`;
 }
 
 /** Woo `_product_image_gallery` is a comma-separated list of attachment IDs. */

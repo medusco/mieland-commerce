@@ -1,8 +1,11 @@
 import { query, queryOne, t } from "../db/mysql.js";
 import { getRedis } from "../redis/client.js";
 import { loadConfig } from "../config.js";
+import { memoryGet, memorySet } from "../utils/memory-cache.js";
 
 export type WpOptionMap = Record<string, unknown>;
+
+const OPTION_NULL = "__null__";
 
 export function maybeUnserializePhp(raw: string): unknown {
   // WordSQL options are often PHP-serialized. Handle common shapes without a full unserializer.
@@ -98,21 +101,25 @@ export function phpUnserialize(input: string): unknown {
 export async function getOptionRaw(name: string): Promise<string | null> {
   const cfg = loadConfig();
   const cacheKey = `opt:${cfg.tablePrefix}:${name}`;
+
+  const mem = memoryGet(cacheKey);
+  if (mem !== undefined) return mem === OPTION_NULL ? null : mem;
+
   const redis = getRedis();
   const cached = await redis.get(cacheKey);
-  if (cached !== null) return cached === "__null__" ? null : cached;
+  if (cached !== null) {
+    memorySet(cacheKey, cached);
+    return cached === OPTION_NULL ? null : cached;
+  }
 
   const row = await queryOne<{ option_value: string }>(
     `SELECT option_value FROM ${t("options")} WHERE option_name = ? LIMIT 1`,
     [name],
   );
   const value = row?.option_value ?? null;
-  await redis.set(
-    cacheKey,
-    value ?? "__null__",
-    "EX",
-    cfg.CATALOG_CACHE_TTL_SECONDS,
-  );
+  const stored = value ?? OPTION_NULL;
+  await redis.set(cacheKey, stored, "EX", cfg.CATALOG_CACHE_TTL_SECONDS);
+  memorySet(cacheKey, stored);
   return value;
 }
 
