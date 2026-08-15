@@ -19,6 +19,7 @@ import {
   shapeManualProduct,
 } from "./lab-results-meta.js";
 import { toGlobalId } from "../utils/index.js";
+import { decodeHtmlEntities } from "../utils/html-entities.js";
 
 export type PageRecord = {
   databaseId: number;
@@ -95,7 +96,7 @@ async function shapePost(row: {
 }
 
 async function queryTerms(postId: number, taxonomy: string) {
-  return query<{ name: string; slug: string; description: string; count?: number }[]>(
+  const rows = await query<{ name: string; slug: string; description: string; count?: number }[]>(
     `SELECT terms.name, terms.slug, tt.description, tt.count
      FROM ${t("term_relationships")} tr
      JOIN ${t("term_taxonomy")} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
@@ -103,6 +104,11 @@ async function queryTerms(postId: number, taxonomy: string) {
      WHERE tr.object_id = ? AND tt.taxonomy = ?`,
     [postId, taxonomy],
   );
+  return rows.map((row) => ({
+    ...row,
+    name: decodeHtmlEntities(row.name),
+    description: row.description ? decodeHtmlEntities(row.description) : row.description,
+  }));
 }
 
 export async function listPosts(args: {
@@ -202,7 +208,13 @@ export async function listCategories(
      LIMIT ?`,
     [first],
   );
-  return { nodes: rows };
+  return {
+    nodes: rows.map((row) => ({
+      ...row,
+      name: decodeHtmlEntities(row.name),
+      description: row.description ? decodeHtmlEntities(row.description) : row.description,
+    })),
+  };
 }
 
 export async function listProductCategories(first = 100) {
