@@ -538,7 +538,14 @@ export function assertCouponApplicable(
 
 export { isCouponUsageExhausted };
 
-export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
+const COUPON_CACHE_VERSION = "v1";
+
+function couponCacheKey(code: string): string {
+  const cfg = loadConfig();
+  return `coupon:${COUPON_CACHE_VERSION}:${cfg.tablePrefix}:${code}`;
+}
+
+async function loadCouponUncached(code: string): Promise<LoadedCoupon | null> {
   const normalized = code.trim().toUpperCase();
   if (!normalized) return null;
   const post = await queryOne<{
@@ -584,6 +591,28 @@ export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
     usageLimitPerUser: parseCouponUsageLimit(meta.usage_limit_per_user),
     usedByCount,
   };
+}
+
+export async function loadCoupon(code: string): Promise<LoadedCoupon | null> {
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) return null;
+
+  const cacheKey = couponCacheKey(normalized);
+  const redis = getRedis();
+  const hit = await redis.get(cacheKey);
+  if (hit) {
+    if (hit === "__null__") return null;
+    return JSON.parse(hit) as LoadedCoupon;
+  }
+
+  const coupon = await loadCouponUncached(normalized);
+  await redis.set(
+    cacheKey,
+    coupon ? JSON.stringify(coupon) : "__null__",
+    "EX",
+    shippingCacheTtl(),
+  );
+  return coupon;
 }
 
 export type CouponCartLine = {

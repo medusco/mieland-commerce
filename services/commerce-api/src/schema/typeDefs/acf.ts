@@ -344,8 +344,9 @@ function productAcfFieldResolver(group: AcfGraphqlGroup) {
     const id = product.databaseId;
     if (!id) return null;
 
-    const hydrated = product[group.graphqlFieldName];
-    if (hydrated !== undefined) return hydrated;
+    if (group.graphqlFieldName in product) {
+      return product[group.graphqlFieldName];
+    }
 
     const meta = await getPostMeta(id);
     return shapeAcfGroupFields(meta, group);
