@@ -67,6 +67,95 @@ function internalHeaders(): Record<string, string> {
   return headers;
 }
 
+export type ContactFormFilePayload = {
+  name: string;
+  type: string;
+  data: string;
+};
+
+export type SubmitContactFormRequest = {
+  form_id: string;
+  fields: Record<string, string>;
+  files?: Record<string, ContactFormFilePayload[]>;
+};
+
+export type SubmitContactFormResult = {
+  ok: boolean;
+  status: number;
+  message: string;
+};
+
+/**
+ * POST /wp-json/custom/v1/submit-form/
+ * Forwards CF7-style contact submissions to WordPress.
+ */
+export async function submitContactFormToWordpress(
+  body: SubmitContactFormRequest,
+  options: { origin: string; timeoutMs?: number },
+): Promise<SubmitContactFormResult> {
+  const cfg = loadConfig();
+  const base = cfg.WORDPRESS_URL.replace(/\/$/, "");
+  const url = `${base}/wp-json/custom/v1/submit-form/`;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...internalHeaders(),
+        "Content-Type": "application/json",
+        Origin: options.origin,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    let payload: {
+      status?: string;
+      message?: string;
+      data?: { status?: number; message?: string };
+    } = {};
+
+    try {
+      payload = (await res.json()) as typeof payload;
+    } catch {
+      // Non-JSON upstream response.
+    }
+
+    if (!res.ok) {
+      logJson("warn", {
+        msg: "contact_form_bridge_failed",
+        status: res.status,
+        message: payload.message ?? payload.data?.message ?? null,
+      });
+      return {
+        ok: false,
+        status: res.status,
+        message:
+          payload.message ||
+          payload.data?.message ||
+          "Unable to submit the form. Please try again.",
+      };
+    }
+
+    return {
+      ok: true,
+      status: res.status,
+      message: payload.message || "Form submitted successfully.",
+    };
+  } catch (error) {
+    logJson("warn", {
+      msg: "contact_form_bridge_error",
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ok: false,
+      status: 502,
+      message: "Unable to submit the form. Please try again.",
+    };
+  }
+}
+
 /**
  * Logged-in password change: POST /wp-json/mieland/v1/set-password
  * WordPress runs `reset_password` → `wp_set_password` (same as lost-password confirm).

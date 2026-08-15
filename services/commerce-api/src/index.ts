@@ -44,6 +44,7 @@ import {
 import { WP_AUTH_HEADER_NAME, WP_REFRESH_HEADER_NAME } from "./auth/wp-session.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
+import { registerContactRoutes } from "./routes/contact.js";
 
 let cfg: ReturnType<typeof loadConfig>;
 try {
@@ -178,6 +179,8 @@ app.use(
     ],
   }),
 );
+
+registerContactRoutes(app);
 
 app.use(express.json({ limit: cfg.MAX_BODY_BYTES }));
 

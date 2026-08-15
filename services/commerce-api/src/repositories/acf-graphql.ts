@@ -22,12 +22,14 @@ export type AcfFieldDef = {
   type: string;
   graphqlName: string;
   parentId: number;
+  parentLayout?: string;
   layouts: AcfLayoutDef[];
   subFields: AcfFieldDef[];
 };
 
 export type AcfLayoutDef = {
   name: string;
+  key?: string;
   graphqlName: string;
   subFields: AcfFieldDef[];
 };
@@ -161,6 +163,7 @@ function parseFieldFromConfig(
     const subList = Array.isArray(subRaw) ? subRaw : subRaw ? Object.values(asRecord(subRaw)) : [];
     return {
       name: layoutName,
+      key: String(l.key ?? "").trim() || undefined,
       graphqlName: fieldGraphqlName(l, layoutName),
       subFields: subList.map((sub) => {
         const s = asRecord(sub);
@@ -184,9 +187,28 @@ function parseFieldFromConfig(
     type,
     graphqlName: fieldGraphqlName(config, name),
     parentId,
+    parentLayout: String(config.parent_layout ?? "").trim() || undefined,
     layouts,
     subFields,
   };
+}
+
+function attachLayoutChildren(field: AcfFieldDef, directChildren: AcfFieldDef[]): void {
+  if (!field.layouts.length) return;
+
+  const layoutByKey = new Map(
+    field.layouts.filter((layout) => layout.key).map((layout) => [layout.key!, layout]),
+  );
+
+  for (const child of directChildren) {
+    const layoutKey = child.parentLayout;
+    if (!layoutKey) continue;
+    const layout = layoutByKey.get(layoutKey);
+    if (!layout) continue;
+    if (!layout.subFields.some((existing) => existing.id === child.id)) {
+      layout.subFields.push(child);
+    }
+  }
 }
 
 function parseFieldConfig(id: number, parentId: number, name: string, raw: string): AcfFieldDef {
@@ -237,6 +259,10 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
 
   function attachChildren(def: AcfFieldDef): AcfFieldDef {
     const children = (fieldsByParent.get(def.id) ?? []).map(attachChildren);
+    if (def.type === "flexible_content") {
+      attachLayoutChildren(def, children);
+      return def;
+    }
     if (children.length && !def.subFields.length) {
       def.subFields = children;
     }
@@ -283,7 +309,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v3";
+const ACF_GROUPS_CACHE_VERSION = "v4";
 
 let memoryGroups: {
   key: string;

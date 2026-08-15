@@ -42,6 +42,19 @@ export function createAuthMutationRateLimiter() {
   });
 }
 
+export function createContactRateLimiter() {
+  return rateLimit({
+    windowMs: 60_000,
+    max: 15,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new RedisStore({
+      sendCommand,
+      prefix: "rl:contact:",
+    }),
+  });
+}
+
 export async function accessControlMiddleware(
   req: Request,
   res: Response,
