@@ -333,12 +333,142 @@ function optionsToMeta(options: Record<string, string>, prefix: string): Record<
   return meta;
 }
 
+type AcfLinkShape = { title?: string; url?: string; target?: string } | null;
+
+function asMediaString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "node" in (value as object)) {
+    const node = (value as { node?: { sourceUrl?: string; mediaItemUrl?: string } }).node;
+    return node?.sourceUrl ?? node?.mediaItemUrl ?? "";
+  }
+  return "";
+}
+
+function normalizeSubmenuLink(link: Record<string, unknown>): Record<string, unknown> {
+  const badge = link.linkBadge;
+  const linkBadge = Array.isArray(badge)
+    ? badge.map(String).filter(Boolean)
+    : badge != null && String(badge).trim()
+      ? [String(badge)]
+      : [];
+  return {
+    ...link,
+    linkBadge,
+    link: (link.link as AcfLinkShape) ?? null,
+  };
+}
+
+function normalizeSubmenuColumn(column: Record<string, unknown>): Record<string, unknown> {
+  const links = Array.isArray(column.links)
+    ? column.links
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+        .map((entry) => normalizeSubmenuLink(entry))
+    : [];
+  return { ...column, links };
+}
+
+function normalizeTopLink(item: Record<string, unknown>): Record<string, unknown> {
+  const submenuColumns = Array.isArray(item.submenuColumns)
+    ? item.submenuColumns
+        .filter((column): column is Record<string, unknown> => Boolean(column) && typeof column === "object")
+        .map((column) => normalizeSubmenuColumn(column))
+    : [];
+  const featuredTiles = Array.isArray(item.featuredTiles)
+    ? item.featuredTiles.map((tile) => {
+        if (!tile || typeof tile !== "object") return tile;
+        const row = tile as Record<string, unknown>;
+        return {
+          ...row,
+          image: row.image && typeof row.image === "object" ? row.image : row.image,
+        };
+      })
+    : [];
+  return { ...item, submenuColumns, featuredTiles, link: (item.link as AcfLinkShape) ?? null };
+}
+
+function normalizeTopMenu(topMenu: unknown): { toplinks: Record<string, unknown>[] } {
+  if (Array.isArray(topMenu)) {
+    return {
+      toplinks: topMenu.filter(
+        (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object",
+      ).map((item) => normalizeTopLink(item)),
+    };
+  }
+  if (topMenu && typeof topMenu === "object") {
+    const obj = topMenu as Record<string, unknown>;
+    const toplinks = Array.isArray(obj.toplinks)
+      ? obj.toplinks
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => normalizeTopLink(item))
+      : [];
+    return { toplinks };
+  }
+  return { toplinks: [] };
+}
+
+function normalizeFooter(footer: unknown): Record<string, unknown> {
+  const empty = {
+    fdaDisclousure: "",
+    footerColumns: [],
+    footerCopyright: "",
+    socialMediaLinks: [],
+    subscriptionBox: null,
+    trustBadges: [],
+  };
+  if (!footer || typeof footer !== "object") return empty;
+
+  const obj = footer as Record<string, unknown>;
+  const footerColumns = Array.isArray(obj.footerColumns)
+    ? obj.footerColumns
+        .filter((column): column is Record<string, unknown> => Boolean(column) && typeof column === "object")
+        .map((column) => {
+          const links = Array.isArray(column.links)
+            ? column.links
+                .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+                .map((entry) => normalizeSubmenuLink(entry))
+            : [];
+          return { ...column, links };
+        })
+    : [];
+
+  const trustBadges = Array.isArray(obj.trustBadges)
+    ? obj.trustBadges
+        .filter((badge): badge is Record<string, unknown> => Boolean(badge) && typeof badge === "object")
+        .map((badge) => ({
+          title: typeof badge.title === "string" ? badge.title : "",
+          image: asMediaString(badge.image),
+        }))
+    : [];
+
+  return {
+    ...empty,
+    ...obj,
+    footerColumns,
+    trustBadges,
+  };
+}
+
+function hasNavigationPayload(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+  if (obj.topMenu && typeof obj.topMenu === "object") return true;
+  if (obj.footer && typeof obj.footer === "object") return true;
+  if (obj.navigationFields && typeof obj.navigationFields === "object") return true;
+  return false;
+}
+
 export async function getNavigation() {
   const candidates = ["options_navigation", "navigation", "acf_navigation"];
   for (const name of candidates) {
     const opt = await getOption(name);
-    if (opt && typeof opt === "object") {
-      return { id: "navigation", ...(opt as object) };
+    if (opt && typeof opt === "object" && hasNavigationPayload(opt)) {
+      const shaped = opt as Record<string, unknown>;
+      return {
+        id: "navigation",
+        ...shaped,
+        topMenu: normalizeTopMenu(shaped.topMenu),
+        footer: normalizeFooter(shaped.footer),
+      };
     }
   }
 
@@ -347,34 +477,18 @@ export async function getNavigation() {
   const footer = await shapeAcfField(optionMeta, "footer");
   const logo = await shapeAcfField(optionMeta, "logo_image");
   const cta = await shapeAcfField(optionMeta, "top_menu_cta");
-  let logoImage = "";
-  if (logo && typeof logo === "object" && "node" in (logo as object)) {
-    logoImage =
-      ((logo as { node?: { sourceUrl?: string } }).node?.sourceUrl ?? "") || "";
-  } else if (typeof logo === "string") {
-    logoImage = logo;
-  }
+  const logoImage = asMediaString(logo);
 
   return {
     id: "navigation",
     pageTitle: pickMeta(optionMeta, "page_title"),
     menuTitle: pickMeta(optionMeta, "menu_title"),
-    topMenu: topMenu && typeof topMenu === "object" ? topMenu : { toplinks: [] },
-    footer:
-      footer && typeof footer === "object"
-        ? footer
-        : {
-            fdaDisclousure: "",
-            footerColumns: [],
-            footerCopyright: "",
-            socialMediaLinks: [],
-            subscriptionBox: null,
-            trustBadges: [],
-          },
+    topMenu: normalizeTopMenu(topMenu),
+    footer: normalizeFooter(footer),
     navigationFields: {
       logoImage,
       promoText: pickMeta(optionMeta, "promo_text"),
-      topMenuCta: cta,
+      topMenuCta: (cta as AcfLinkShape) ?? null,
     },
   };
 }

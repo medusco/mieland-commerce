@@ -660,7 +660,7 @@ export const typeDefs = /* GraphQL */ `
   }
   type NavigationSubmenuLink {
     link: AcfLink
-    linkBadge: String
+    linkBadge: [String]
     submenuTitle: String
   }
   type NavigationSubmenuColumn {
