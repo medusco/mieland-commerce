@@ -181,9 +181,12 @@ function fieldGraphQLType(
   }
 
   if (field.type === "repeater" || field.type === "group") {
-    const prefix = flexBasePrefix ?? parentType;
+    // Scope nested types to the flex layout (e.g. Top Sellers vs Content Tabs both
+    // define a `tabs` repeater — sharing one type would drop fields from the first emit).
+    const prefix =
+      flexBasePrefix && parentType.endsWith("Layout") ? parentType : (flexBasePrefix ?? parentType);
     const nested = `${prefix}${gqlName(field.graphqlName || field.name)}`;
-    emitObjectType(nested, field.subFields, [], ctx, { flexBasePrefix });
+    emitObjectType(nested, field.subFields, [], ctx, { flexBasePrefix: prefix });
     return field.type === "repeater" ? `[${nested}]` : nested;
   }
 
