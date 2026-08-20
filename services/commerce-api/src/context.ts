@@ -14,7 +14,6 @@ import {
   decodeWpAuthCookieValue,
   decodeWpRefreshCookieValue,
   inspectWpCookieEncoding,
-  normalizeWpCookieHeader,
   parseWpAuthCookieHeader,
   parseWpRefreshCookieHeader,
   wpAuthHeaderValue,
