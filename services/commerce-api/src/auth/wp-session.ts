@@ -275,3 +275,43 @@ export async function isWpSessionMatchingUser(
   const sessionUserId = await wpSessionUserId(cookieHeader);
   return sessionUserId === userId;
 }
+
+/**
+ * Resolve the live WP user id for a Cookie header via REST.
+ * Stale wordpress_logged_in_* values still parse a login name but WP returns 0
+ * from get_current_user_id(), which breaks Store API pay-for-order ownership.
+ */
+export async function getLiveWpUserIdFromCookie(
+  cookieHeader: string,
+): Promise<number | null> {
+  const trimmed = cookieHeader?.trim() || "";
+  if (!trimmed) return null;
+
+  const cfg = loadConfig();
+  const url = `${cfg.WORDPRESS_URL.replace(/\/$/, "")}/wp-json/wp/v2/users/me`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Cookie: trimmed,
+      },
+      signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { id?: unknown };
+    const id = Number(body.id);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when WP accepts the cookie and the authenticated user matches. */
+export async function isWpSessionAliveForUser(
+  cookieHeader: string,
+  userId: number,
+): Promise<boolean> {
+  const liveId = await getLiveWpUserIdFromCookie(cookieHeader);
+  return liveId === userId;
+}

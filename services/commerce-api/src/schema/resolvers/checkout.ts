@@ -23,7 +23,7 @@ import {
 } from "../../clients/woocommerce-store.js";
 import { createPaypalOrder } from "../../clients/paypal.js";
 import { getPaypalPublicSettings } from "../../repositories/paypal.js";
-import { isWpSessionMatchingUser } from "../../auth/wp-session.js";
+import { isWpSessionAliveForUser } from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
@@ -74,20 +74,26 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     throw new Error("Authentication required");
   }
 
-  const wpCookie = ctx.wpAuthCookie?.trim() || "";
-  if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
-    return wpCookie;
-  }
-
   const origin =
     ctx.req.headers.get("origin") || ctx.req.headers.get("Origin") || null;
-  const refreshed = await refreshWpSessionFromCookie({
-    requestScopeId: ctx.requestScopeId,
-    req: ctx.req,
-    origin,
-    wpRefreshToken: ctx.wpRefreshToken,
-  });
-  if (refreshed) return refreshed;
+  const refreshWpSession = () =>
+    refreshWpSessionFromCookie({
+      requestScopeId: ctx.requestScopeId,
+      req: ctx.req,
+      origin,
+      wpRefreshToken: ctx.wpRefreshToken,
+    });
+
+  // JWT can outlive wordpress_logged_in_* — refresh first when we have a token.
+  const refreshed = await refreshWpSession();
+  if (refreshed && (await isWpSessionAliveForUser(refreshed, userId))) {
+    return refreshed;
+  }
+
+  const wpCookie = ctx.wpAuthCookie?.trim() || "";
+  if (wpCookie && (await isWpSessionAliveForUser(wpCookie, userId))) {
+    return wpCookie;
+  }
 
   scheduleForceLogout(ctx.requestScopeId, ctx.req);
   throw new GraphQLError(FORCE_LOGOUT_MESSAGE, {
