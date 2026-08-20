@@ -1,6 +1,7 @@
 import { loadConfig } from "../config.js";
 import { wpGraphqlViewerDatabaseId } from "../clients/wordpress-graphql.js";
 import { findUserByLoginOrEmail } from "./index.js";
+import type { WpCookiePolicy } from "./cookie-policy.js";
 
 /**
  * WP auth cookies: HttpOnly `mc-wp-session` on the client (never Redis).
@@ -22,9 +23,18 @@ const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
 const DEFAULT_REFRESH_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 export type WpAuthSetCookieOptions = {
-  /** When true (HTTPS / prod / cross-site), emit SameSite=None; Secure; Partitioned. */
-  crossSite?: boolean;
+  /** Cookie policy from {@link resolveWpCookiePolicy}. */
+  policy: WpCookiePolicy;
 };
+
+function appendCookiePolicy(parts: string[], policy: WpCookiePolicy): void {
+  if (policy.domain?.trim()) {
+    parts.push(`Domain=${policy.domain.trim()}`);
+  }
+  parts.push(`SameSite=${policy.sameSite === "none" ? "None" : "Lax"}`);
+  if (policy.secure) parts.push("Secure");
+  if (policy.partitioned) parts.push("Partitioned");
+}
 
 /**
  * Build a Set-Cookie header that stores the WP Cookie request header value.
@@ -32,8 +42,8 @@ export type WpAuthSetCookieOptions = {
  */
 export function buildWpAuthSetCookie(
   cookieHeader: string,
-  ttlSeconds?: number,
-  opts?: WpAuthSetCookieOptions,
+  ttlSeconds: number | undefined,
+  opts: WpAuthSetCookieOptions,
 ): string {
   // Never emit a wrapper shorter than 14 days — WP often returns ~2d Max-Age
   // without remember-me; JWT refresh renews the inner cookies while this lasts.
@@ -41,21 +51,14 @@ export function buildWpAuthSetCookie(
     Number.isFinite(ttlSeconds) && (ttlSeconds as number) > 0
       ? Math.max(DEFAULT_TTL_SECONDS, Math.floor(ttlSeconds as number))
       : DEFAULT_TTL_SECONDS;
-  const cfg = loadConfig();
-  const crossSite = Boolean(opts?.crossSite || cfg.isProd);
-  // Cross-origin storefront → commerce needs SameSite=None; Secure. Local same-site
-  // HTTP keeps Lax (browsers reject SameSite=None without Secure on plain HTTP).
+  void loadConfig;
   const parts = [
     `${WP_AUTH_COOKIE_NAME}=${encodeURIComponent(cookieHeader.trim())}`,
     "Path=/",
     "HttpOnly",
     `Max-Age=${ttl}`,
   ];
-  if (crossSite) {
-    parts.push("SameSite=None", "Secure", "Partitioned");
-  } else {
-    parts.push("SameSite=Lax");
-  }
+  appendCookiePolicy(parts, opts.policy);
   return parts.join("; ");
 }
 
@@ -73,44 +76,34 @@ function buildNamedSetCookie(
   name: string,
   value: string,
   ttlSeconds: number,
-  opts?: WpAuthSetCookieOptions,
+  opts: WpAuthSetCookieOptions,
 ): string {
-  const cfg = loadConfig();
-  const crossSite = Boolean(opts?.crossSite || cfg.isProd);
+  void loadConfig;
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     "Path=/",
     "HttpOnly",
     `Max-Age=${ttlSeconds}`,
   ];
-  if (crossSite) {
-    parts.push("SameSite=None", "Secure", "Partitioned");
-  } else {
-    parts.push("SameSite=Lax");
-  }
+  appendCookiePolicy(parts, opts.policy);
   return parts.join("; ");
 }
 
 function buildNamedClearCookie(
   name: string,
-  opts?: WpAuthSetCookieOptions,
+  opts: WpAuthSetCookieOptions,
 ): string {
-  const cfg = loadConfig();
-  const crossSite = Boolean(opts?.crossSite || cfg.isProd);
+  void loadConfig;
   const parts = [`${name}=`, "Path=/", "HttpOnly", "Max-Age=0"];
-  if (crossSite) {
-    parts.push("SameSite=None", "Secure", "Partitioned");
-  } else {
-    parts.push("SameSite=Lax");
-  }
+  appendCookiePolicy(parts, opts.policy);
   return parts.join("; ");
 }
 
 /** Set HttpOnly `mc-wp-refresh` (WP Headless Login refresh token). */
 export function buildWpRefreshSetCookie(
   refreshToken: string,
-  expirationIso?: string | null,
-  opts?: WpAuthSetCookieOptions,
+  expirationIso: string | null | undefined,
+  opts: WpAuthSetCookieOptions,
 ): string {
   const ttl = ttlFromExpiration(DEFAULT_REFRESH_TTL_SECONDS, expirationIso);
   return buildNamedSetCookie(
@@ -123,14 +116,14 @@ export function buildWpRefreshSetCookie(
 
 /** Expire the HttpOnly `mc-wp-refresh` cookie. */
 export function buildWpRefreshClearCookie(
-  opts?: WpAuthSetCookieOptions,
+  opts: WpAuthSetCookieOptions,
 ): string {
   return buildNamedClearCookie(WP_REFRESH_COOKIE_NAME, opts);
 }
 
 /** Expire the HttpOnly `mc-wp-session` cookie (force logout). */
 export function buildWpAuthClearCookie(
-  opts?: WpAuthSetCookieOptions,
+  opts: WpAuthSetCookieOptions,
 ): string {
   return buildNamedClearCookie(WP_AUTH_COOKIE_NAME, opts);
 }

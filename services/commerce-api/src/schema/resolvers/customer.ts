@@ -1,11 +1,10 @@
 import type { AppContext } from "../../context.js";
 import {
-  isCrossSiteRequest,
-  isSecureRequest,
   requireUser,
   scheduleWpRefreshSetCookie,
   setPendingWpAuthSetCookie,
 } from "../../context.js";
+import { resolveWpCookiePolicy } from "../../auth/cookie-policy.js";
 import {
   createUser,
   findUserById,
@@ -395,13 +394,12 @@ export const customerResolvers = {
           "WordPress login did not return an auth cookie — enable “Set authentication cookie” on the Headless Login provider",
         );
       }
-      // Cross-site + HTTPS → SameSite=None; Secure. Local same-site HTTP → Lax.
-      const crossSite =
-        isSecureRequest(ctx.req) && isCrossSiteRequest(ctx.req);
+      // Sibling subdomains (www → shop): SameSite=Lax + Domain=.example.com.
+      const policy = resolveWpCookiePolicy(ctx.req);
       const setCookie = buildWpAuthSetCookie(
         wp.cookieHeader,
         wp.cookieTtlSeconds,
-        { crossSite },
+        { policy },
       );
       const headerValue = wpAuthHeaderValue(wp.cookieHeader);
       ctx.pendingWpAuthSetCookie = setCookie;

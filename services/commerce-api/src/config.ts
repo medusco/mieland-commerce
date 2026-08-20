@@ -93,6 +93,11 @@ const envSchema = z.object({
     emptyToUndefined,
     z.string().default("http://localhost:3000,http://localhost:3001"),
   ),
+  /**
+   * Optional shared cookie domain for mc-wp-session / mc-wp-refresh (e.g. `.mielandmanuka.com`).
+   * When unset, sibling subdomains (www → shop) auto-use `.<registrable-domain>`.
+   */
+  AUTH_COOKIE_DOMAIN: z.preprocess(emptyToUndefined, z.string().optional()),
   JWT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
   /**
    * Commerce access JWT lifetime (default 14 days). Storefront stays signed in
@@ -141,6 +146,7 @@ export type AppConfig = z.infer<typeof envSchema> & {
   isProd: boolean;
   corsOrigins: string[];
   tablePrefix: string;
+  authCookieDomain?: string;
 };
 
 let cached: AppConfig | null = null;
@@ -201,6 +207,7 @@ export function loadConfig(): AppConfig {
       .map((s) => s.trim())
       .filter(Boolean),
     tablePrefix: parsed.MYSQL_TABLE_PREFIX,
+    authCookieDomain: parsed.AUTH_COOKIE_DOMAIN?.trim() || undefined,
   };
   return cached;
 }

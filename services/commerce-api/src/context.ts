@@ -22,6 +22,13 @@ import {
 } from "./auth/wp-session.js";
 import { getProductNodes } from "./repositories/products.js";
 import { loadConfig } from "./config.js";
+import { resolveWpCookiePolicy } from "./auth/cookie-policy.js";
+
+export {
+  isCrossOriginRequest,
+  isCrossOriginRequest as isCrossSiteRequest,
+  isSecureRequest,
+} from "./auth/cookie-policy.js";
 
 /** GraphQL extension code + response header when auth cookies are cleared server-side. */
 export const FORCE_LOGOUT_CODE = "FORCE_LOGOUT";
@@ -83,11 +90,11 @@ function appendPendingSetCookie(scopeId: string, setCookie: string): void {
 /** Clear mc-wp-session + mc-wp-refresh and tell the client to drop JWT. */
 export function scheduleForceLogout(scopeId: string, req: Request): void {
   if (!scopeId.trim()) return;
-  const crossSite = isSecureRequest(req) && isCrossSiteRequest(req);
+  const policy = resolveWpCookiePolicy(req);
   const pending = ensurePending(scopeId);
   pending.setCookies = [
-    buildWpAuthClearCookie({ crossSite }),
-    buildWpRefreshClearCookie({ crossSite }),
+    buildWpAuthClearCookie({ policy }),
+    buildWpRefreshClearCookie({ policy }),
   ];
   pending.sessionHeaderValue = "";
   pending.refreshHeaderValue = "";
@@ -113,10 +120,10 @@ export function scheduleWpAuthSetCookie(
   ttlSeconds?: number,
 ): void {
   if (!scopeId.trim() || !cookieHeader.trim()) return;
-  const crossSite = isSecureRequest(req) && isCrossSiteRequest(req);
+  const policy = resolveWpCookiePolicy(req);
   appendPendingSetCookie(
     scopeId,
-    buildWpAuthSetCookie(cookieHeader, ttlSeconds, { crossSite }),
+    buildWpAuthSetCookie(cookieHeader, ttlSeconds, { policy }),
   );
   ensurePending(scopeId).sessionHeaderValue = wpAuthHeaderValue(cookieHeader);
 }
@@ -129,10 +136,10 @@ export function scheduleWpRefreshSetCookie(
   expirationIso?: string | null,
 ): void {
   if (!scopeId.trim() || !refreshToken.trim()) return;
-  const crossSite = isSecureRequest(req) && isCrossSiteRequest(req);
+  const policy = resolveWpCookiePolicy(req);
   appendPendingSetCookie(
     scopeId,
-    buildWpRefreshSetCookie(refreshToken, expirationIso, { crossSite }),
+    buildWpRefreshSetCookie(refreshToken, expirationIso, { policy }),
   );
   ensurePending(scopeId).refreshHeaderValue =
     wpRefreshHeaderValue(refreshToken);
@@ -205,31 +212,4 @@ export function requireUser(ctx: AppContext): number {
     throw new Error("Authentication required");
   }
   return ctx.userId;
-}
-
-/** True when Origin is cross-site relative to the request Host (needs SameSite=None). */
-export function isCrossSiteRequest(req: Request): boolean {
-  const origin = req.headers.get("origin") || req.headers.get("Origin");
-  if (!origin) return false;
-  try {
-    const originHost = new URL(origin).host;
-    const reqUrl = new URL(req.url);
-    return Boolean(originHost) && originHost !== reqUrl.host;
-  } catch {
-    return false;
-  }
-}
-
-/** True when the client hit commerce over HTTPS (incl. Railway / proxies). */
-export function isSecureRequest(req: Request): boolean {
-  if (req.url.startsWith("https://")) return true;
-  const proto = (
-    req.headers.get("x-forwarded-proto") ||
-    req.headers.get("X-Forwarded-Proto") ||
-    ""
-  )
-    .split(",")[0]
-    ?.trim()
-    .toLowerCase();
-  return proto === "https";
 }
