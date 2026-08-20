@@ -3,20 +3,14 @@ import {
   scheduleWpAuthSetCookie,
   scheduleWpRefreshSetCookie,
 } from "../context.js";
-import {
-  loadWpRefreshToken,
-  storeWpRefreshToken,
-} from "./wp-refresh-store.js";
 import { wpAuthHeaderValue, wpRefreshHeaderValue } from "./wp-session.js";
 
 export type RefreshWpSessionOpts = {
   requestScopeId: string;
   req: Request;
   origin?: string | null;
-  /** WP Headless Login refresh token from `mc-wp-refresh` cookie/header. */
+  /** WP Headless Login refresh token from `mc-wp-refresh` cookie or `x-mc-wp-refresh` header. */
   wpRefreshToken?: string | null;
-  /** Fallback when the client cannot send cross-origin refresh headers. */
-  userId?: number | null;
 };
 
 export type WpSessionRenewal = {
@@ -32,10 +26,7 @@ export type WpSessionRenewal = {
 export async function refreshWpSessionFromCookie(
   opts: RefreshWpSessionOpts,
 ): Promise<WpSessionRenewal | null> {
-  let wpRefresh = opts.wpRefreshToken?.trim() || "";
-  if (!wpRefresh && opts.userId != null) {
-    wpRefresh = (await loadWpRefreshToken(opts.userId)) ?? "";
-  }
+  const wpRefresh = opts.wpRefreshToken?.trim() || "";
   if (!wpRefresh) return null;
 
   const wp = await wpGraphqlRefreshToken(wpRefresh, { origin: opts.origin });
@@ -57,13 +48,6 @@ export async function refreshWpSessionFromCookie(
       wp.refreshTokenExpiration,
     );
     refreshHeaderValue = wpRefreshHeaderValue(wp.refreshToken);
-    if (opts.userId != null) {
-      await storeWpRefreshToken(
-        opts.userId,
-        wp.refreshToken,
-        wp.refreshTokenExpiration,
-      );
-    }
   }
 
   return {

@@ -82,7 +82,6 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     req: ctx.req,
     origin,
     wpRefreshToken: ctx.wpRefreshToken,
-    userId,
   };
   const refreshWpSession = () => refreshWpSessionFromCookie(refreshOpts);
 

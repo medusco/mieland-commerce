@@ -20,7 +20,6 @@ import {
   wpRefreshHeaderValue,
 } from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
-import { storeWpRefreshToken } from "../../auth/wp-refresh-store.js";
 import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
@@ -413,11 +412,6 @@ export const customerResolvers = {
             wp.refreshToken,
             wp.refreshTokenExpiration,
           );
-          await storeWpRefreshToken(
-            userId,
-            wp.refreshToken,
-            wp.refreshTokenExpiration,
-          );
         }
       }
 
@@ -466,7 +460,7 @@ export const customerResolvers = {
       { input }: { input?: { clientMutationId?: string } },
       ctx: AppContext,
     ) => {
-      const userId = requireUser(ctx);
+      requireUser(ctx);
       const origin =
         ctx.req.headers.get("origin") ||
         ctx.req.headers.get("Origin") ||
@@ -476,7 +470,6 @@ export const customerResolvers = {
         req: ctx.req,
         origin,
         wpRefreshToken: ctx.wpRefreshToken,
-        userId,
       });
       if (!renewed) {
         return {
@@ -520,7 +513,6 @@ export const customerResolvers = {
         req: ctx.req,
         origin,
         wpRefreshToken: ctx.wpRefreshToken,
-        userId: refreshed.userId,
       });
       const { userId: _userId, ...tokens } = refreshed;
       return {
