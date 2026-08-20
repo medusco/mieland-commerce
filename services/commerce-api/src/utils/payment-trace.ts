@@ -1,5 +1,6 @@
 import type { AppContext } from "../context.js";
 import {
+  inspectWpCookieEncoding,
   parseWpAuthCookieHeader,
   parseWpLoggedInUserLogin,
   parseWpRefreshCookieHeader,
@@ -64,6 +65,10 @@ export function paymentAuthSnapshot(ctx: AppContext): Record<string, unknown> {
     origin: headers.get("origin") ?? headers.get("Origin"),
     referer: headers.get("referer") ?? headers.get("Referer"),
     requestCookieHeader,
+    ...wpSessionEncodingSnapshot(
+      "headerMcWpSession",
+      headers.get(WP_AUTH_HEADER_NAME),
+    ),
   };
 }
 
@@ -130,5 +135,24 @@ export function expressPaymentAuthSnapshot(
     ),
     origin: req.header("origin"),
     referer: req.header("referer"),
+    ...wpSessionEncodingSnapshot("headerMcWpSession", mcWpFromHeader),
+  };
+}
+
+/** Encoding metadata to prove double-encoded WP session fixes in Railway logs. */
+export function wpSessionEncodingSnapshot(
+  label: string,
+  raw: string | null | undefined,
+): Record<string, unknown> {
+  const info = inspectWpCookieEncoding(raw);
+  return {
+    [`${label}Encoding`]: {
+      decodePasses: info.decodePasses,
+      wasChanged: info.wasChanged,
+      hadDoubleEncodedPipe: info.hadDoubleEncodedPipe,
+      hasSingleEncodedPipe: info.hasSingleEncodedPipe,
+      rawLength: info.rawLength,
+      normalizedLength: info.normalizedLength,
+    },
   };
 }

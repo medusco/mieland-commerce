@@ -150,9 +150,10 @@ function parseRequestCookie(
     const raw = trimmed.slice(eq + 1).trim();
     if (!raw) return null;
     try {
-      return decodeURIComponent(raw).trim() || null;
+      const decoded = decodeURIComponent(raw);
+      return normalizeWpCookieHeader(decoded);
     } catch {
-      return raw.trim() || null;
+      return normalizeWpCookieHeader(raw);
     }
   }
   return null;
@@ -185,17 +186,72 @@ export function decodeWpRefreshCookieValue(
   }
 }
 
+/** Fully decode values that were URI-encoded more than once (localStorage / header mirrors). */
+export type WpCookieEncodingInfo = {
+  hadValue: boolean;
+  decodePasses: number;
+  wasChanged: boolean;
+  hadDoubleEncodedPipe: boolean;
+  hasSingleEncodedPipe: boolean;
+  rawLength: number;
+  normalizedLength: number;
+};
+
+export function inspectWpCookieEncoding(
+  raw: string | null | undefined,
+): WpCookieEncodingInfo & { normalized: string | null } {
+  const original = raw?.trim() || "";
+  if (!original) {
+    return {
+      hadValue: false,
+      decodePasses: 0,
+      wasChanged: false,
+      hadDoubleEncodedPipe: false,
+      hasSingleEncodedPipe: false,
+      rawLength: 0,
+      normalizedLength: 0,
+      normalized: null,
+    };
+  }
+
+  let value = original;
+  let decodePasses = 0;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const decoded = decodeURIComponent(value);
+      if (decoded === value) break;
+      value = decoded;
+      decodePasses++;
+    } catch {
+      break;
+    }
+  }
+
+  const normalized = value.trim() || null;
+  return {
+    hadValue: true,
+    decodePasses,
+    wasChanged: normalized !== original,
+    hadDoubleEncodedPipe:
+      original.includes("%257C") || original.includes("%25257C"),
+    hasSingleEncodedPipe: Boolean(normalized?.includes("%7C")),
+    rawLength: original.length,
+    normalizedLength: normalized?.length ?? 0,
+    normalized,
+  };
+}
+
+export function normalizeWpCookieHeader(
+  raw: string | null | undefined,
+): string | null {
+  return inspectWpCookieEncoding(raw).normalized;
+}
+
 /** Decode a raw `x-mc-wp-session` / cookie value (URI-encoded or plain). */
 export function decodeWpAuthCookieValue(
   raw: string | null | undefined,
 ): string | null {
-  const trimmed = raw?.trim() || "";
-  if (!trimmed) return null;
-  try {
-    return decodeURIComponent(trimmed).trim() || null;
-  } catch {
-    return trimmed;
-  }
+  return normalizeWpCookieHeader(raw);
 }
 
 /**
@@ -205,7 +261,7 @@ export function decodeWpAuthCookieValue(
 export function requireWpAuthCookie(
   cookie: string | null | undefined,
 ): string {
-  const trimmed = cookie?.trim() || "";
+  const trimmed = normalizeWpCookieHeader(cookie) || cookie?.trim() || "";
   if (!trimmed) {
     throw new Error(
       "WordPress session required — log in again (missing mc-wp-session cookie)",

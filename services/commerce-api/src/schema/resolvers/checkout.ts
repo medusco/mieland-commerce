@@ -24,7 +24,13 @@ import {
 } from "../../clients/woocommerce-store.js";
 import { createPaypalOrder } from "../../clients/paypal.js";
 import { getPaypalPublicSettings } from "../../repositories/paypal.js";
-import { isWpSessionAliveForUser, isWpSessionMatchingUser, parseWpLoggedInUserLogin } from "../../auth/wp-session.js";
+import {
+  inspectWpCookieEncoding,
+  isWpSessionAliveForUser,
+  isWpSessionMatchingUser,
+  normalizeWpCookieHeader,
+  parseWpLoggedInUserLogin,
+} from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
@@ -51,6 +57,7 @@ import {
   logPaymentTrace,
   paymentAuthSnapshot,
   summarizePaymentData,
+  wpSessionEncodingSnapshot,
 } from "../../utils/payment-trace.js";
 import {
   orderNeedsAreLean,
@@ -88,80 +95,94 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     origin,
     wpRefreshToken: ctx.wpRefreshToken,
   };
-  const refreshWpSession = () => refreshWpSessionFromCookie(refreshOpts);
+  const wpCookie =
+    normalizeWpCookieHeader(ctx.wpAuthCookie) || "";
 
   const acceptCookie = async (
     cookie: string,
     opts?: { trustAfterRefresh?: boolean },
   ): Promise<boolean> => {
-    if (!(await isWpSessionMatchingUser(cookie, userId))) return false;
+    const normalized = normalizeWpCookieHeader(cookie) || "";
+    if (!normalized) return false;
+    if (!(await isWpSessionMatchingUser(normalized, userId))) return false;
     if (opts?.trustAfterRefresh) return true;
-    return isWpSessionAliveForUser(cookie, userId, origin);
+    return isWpSessionAliveForUser(normalized, userId, origin);
   };
 
-  // JWT can outlive wordpress_logged_in_* — refresh first when we have a token.
-  const refreshed = await refreshWpSession();
-  if (
-    refreshed &&
-    (await acceptCookie(refreshed.cookieHeader, { trustAfterRefresh: true }))
-  ) {
+  const logOk = (
+    source: string,
+    cookieHeader: string,
+    rawHeader?: string | null,
+  ) => {
     logPaymentTrace("info", {
       msg: "wp_session_sync_ok",
       requestId: ctx.requestId,
       jwtUserId: userId,
-      source: "refresh",
-      wpLoggedInLogin: parseWpLoggedInUserLogin(refreshed.cookieHeader),
-      wpCookieHeader: refreshed.cookieHeader,
+      source,
+      wpLoggedInLogin: parseWpLoggedInUserLogin(cookieHeader),
+      wpCookieHeader: cookieHeader,
+      ...inspectWpCookieEncoding(cookieHeader),
+      ...wpSessionEncodingSnapshot("incomingHeaderMcWpSession", rawHeader),
       ...paymentAuthSnapshot(ctx),
     });
-    return refreshed.cookieHeader;
+  };
+
+  // Fast path: use the browser mirror before a slow/failing WP refresh round-trip.
+  if (wpCookie && (await acceptCookie(wpCookie))) {
+    logOk(
+      "context_cookie",
+      wpCookie,
+      ctx.req.headers.get("x-mc-wp-session"),
+    );
+    return wpCookie;
   }
 
-  const wpCookie = ctx.wpAuthCookie?.trim() || "";
-  if (wpCookie && (await acceptCookie(wpCookie))) {
-    logPaymentTrace("info", {
-      msg: "wp_session_sync_ok",
+  const refreshed = await refreshWpSessionFromCookie(refreshOpts);
+  if (
+    refreshed?.cookieHeader &&
+    (await acceptCookie(refreshed.cookieHeader, { trustAfterRefresh: true }))
+  ) {
+    const cookieHeader =
+      normalizeWpCookieHeader(refreshed.cookieHeader) ||
+      refreshed.cookieHeader;
+    logOk("refresh", cookieHeader, ctx.req.headers.get("x-mc-wp-session"));
+    return cookieHeader;
+  }
+
+  // Refresh GraphQL often errors while wordpress_logged_in_* is still valid.
+  if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
+    logPaymentTrace("warn", {
+      msg: "wp_session_sync_soft_accept",
       requestId: ctx.requestId,
       jwtUserId: userId,
-      source: "context_cookie",
       wpLoggedInLogin: parseWpLoggedInUserLogin(wpCookie),
       wpCookieHeader: wpCookie,
+      refreshAttempted: Boolean(refreshed),
+      ...inspectWpCookieEncoding(wpCookie),
+      ...wpSessionEncodingSnapshot(
+        "incomingHeaderMcWpSession",
+        ctx.req.headers.get("x-mc-wp-session"),
+      ),
       ...paymentAuthSnapshot(ctx),
     });
     return wpCookie;
   }
 
-  if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
-    const retry = refreshed ? null : await refreshWpSession();
-    if (
-      retry &&
-      (await acceptCookie(retry.cookieHeader, { trustAfterRefresh: true }))
-    ) {
-      logPaymentTrace("info", {
-        msg: "wp_session_sync_ok",
-        requestId: ctx.requestId,
-        jwtUserId: userId,
-        source: "refresh_retry",
-        wpLoggedInLogin: parseWpLoggedInUserLogin(retry.cookieHeader),
-        wpCookieHeader: retry.cookieHeader,
-        ...paymentAuthSnapshot(ctx),
-      });
-      return retry.cookieHeader;
+  if (refreshed?.cookieHeader) {
+    const cookieHeader =
+      normalizeWpCookieHeader(refreshed.cookieHeader) ||
+      refreshed.cookieHeader;
+    if (await isWpSessionMatchingUser(cookieHeader, userId)) {
+      logOk(
+        "refresh_soft",
+        cookieHeader,
+        ctx.req.headers.get("x-mc-wp-session"),
+      );
+      return cookieHeader;
     }
-    logPaymentTrace("warn", {
-      msg: "wp_session_sync_expired",
-      requestId: ctx.requestId,
-      jwtUserId: userId,
-      wpLoggedInLogin: parseWpLoggedInUserLogin(wpCookie),
-      wpCookieHeader: wpCookie,
-      ...paymentAuthSnapshot(ctx),
-    });
-    throw new Error(
-      "Your session expired. Please sign in again to complete checkout.",
-    );
   }
 
-  if (!wpCookie && !refreshed) {
+  if (!wpCookie && !refreshed?.cookieHeader) {
     logPaymentTrace("error", {
       msg: "wp_session_sync_missing",
       requestId: ctx.requestId,
@@ -178,7 +199,7 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     requestId: ctx.requestId,
     jwtUserId: userId,
     wpCookieHeader: wpCookie || null,
-    hadRefresh: Boolean(refreshed),
+    hadRefresh: Boolean(refreshed?.cookieHeader),
     ...paymentAuthSnapshot(ctx),
   });
   scheduleForceLogout(ctx.requestScopeId, ctx.req);
@@ -492,6 +513,77 @@ function isPaymentFailureStatus(status: string | null | undefined): boolean {
   if (!status) return false;
   const normalized = status.toLowerCase();
   return normalized === "failure" || normalized === "error" || normalized === "failed";
+}
+
+function isPaymentSuccessStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  return normalized === "success" || normalized === "succeeded";
+}
+
+function transactionIdFromStorePayment(
+  storeRes: StoreCheckoutOrderResponse,
+): string | null {
+  const details = storeRes.payment_result?.payment_details ?? [];
+  for (const detail of details) {
+    const key = detail.key?.trim().toLowerCase() ?? "";
+    if (
+      key === "stripe_intent_id" ||
+      key === "_stripe_intent_id" ||
+      key === "transaction_id" ||
+      key === "charge_id"
+    ) {
+      const value = String(detail.value ?? "").trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+/**
+ * Store API + Stripe should mark the order paid. When payment_status is success
+ * but HPOS still shows pending/failed, sync via WC REST (headless gap / 3DS race).
+ */
+async function ensureOrderMarkedPaidAfterStoreSuccess(
+  orderId: number,
+  requestId: string | undefined,
+  storeRes: StoreCheckoutOrderResponse,
+): Promise<void> {
+  const paymentStatus = storeRes.payment_result?.payment_status ?? null;
+  if (!isPaymentSuccessStatus(paymentStatus)) return;
+
+  const ctxOrder = await getOrderPaymentContext(orderId);
+  if (!ctxOrder?.needsPayment) return;
+
+  const transactionId = transactionIdFromStorePayment(storeRes);
+  const payload: { status: string; set_paid: boolean; transaction_id?: string } =
+    {
+      status: "processing",
+      set_paid: true,
+    };
+  if (transactionId) payload.transaction_id = transactionId;
+
+  try {
+    await updateWcOrder(orderId, payload);
+    logPaymentTrace("warn", {
+      msg: "process_order_payment_sync_paid",
+      requestId,
+      orderId,
+      storePaymentStatus: paymentStatus,
+      storeOrderStatus: storeRes.status ?? null,
+      previousOrderStatus: ctxOrder.status,
+      transactionId,
+    });
+  } catch (err) {
+    logPaymentTrace("error", {
+      msg: "process_order_payment_sync_paid_error",
+      requestId,
+      orderId,
+      storePaymentStatus: paymentStatus,
+      previousOrderStatus: ctxOrder.status,
+      err: String(err),
+    });
+  }
 }
 
 async function markOrderPaymentFailed(
@@ -1051,6 +1143,12 @@ export const checkoutResolvers = {
       const paymentStatus = paymentResult?.payment_status ?? null;
       if (isPaymentFailureStatus(paymentStatus)) {
         await markOrderPaymentFailed(orderId, ctx.requestId);
+      } else if (isPaymentSuccessStatus(paymentStatus)) {
+        await ensureOrderMarkedPaidAfterStoreSuccess(
+          orderId,
+          ctx.requestId,
+          storeRes,
+        );
       }
 
       const needs = orderNeedsFromInfo(info, ["order"]);

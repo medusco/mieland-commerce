@@ -13,6 +13,8 @@ import {
   buildWpRefreshSetCookie,
   decodeWpAuthCookieValue,
   decodeWpRefreshCookieValue,
+  inspectWpCookieEncoding,
+  normalizeWpCookieHeader,
   parseWpAuthCookieHeader,
   parseWpRefreshCookieHeader,
   wpAuthHeaderValue,
@@ -23,6 +25,7 @@ import {
 import { getProductNodes } from "./repositories/products.js";
 import { loadConfig } from "./config.js";
 import { resolveWpCookiePolicy } from "./auth/cookie-policy.js";
+import { logPaymentTrace } from "./utils/payment-trace.js";
 
 export {
   isCrossOriginRequest,
@@ -180,12 +183,34 @@ export async function buildContext(
     if (verified) userId = verified.userId;
   }
 
+  const rawWpHeader = headers.get(WP_AUTH_HEADER_NAME);
+  const headerEncoding = inspectWpCookieEncoding(rawWpHeader);
   const wpAuthCookie =
     parseWpAuthCookieHeader(headers.get("cookie")) ||
-    decodeWpAuthCookieValue(headers.get(WP_AUTH_HEADER_NAME));
+    headerEncoding.normalized;
   const wpRefreshToken =
     parseWpRefreshCookieHeader(headers.get("cookie")) ||
     decodeWpRefreshCookieValue(headers.get(WP_REFRESH_HEADER_NAME));
+
+  if (
+    headerEncoding.hadValue &&
+    (headerEncoding.wasChanged || headerEncoding.hadDoubleEncodedPipe)
+  ) {
+    logPaymentTrace("info", {
+      msg: "wp_session_encoding_normalized",
+      requestId: rid,
+      jwtUserId: userId,
+      source: "x-mc-wp-session",
+      decodePasses: headerEncoding.decodePasses,
+      wasChanged: headerEncoding.wasChanged,
+      hadDoubleEncodedPipe: headerEncoding.hadDoubleEncodedPipe,
+      hasSingleEncodedPipe: headerEncoding.hasSingleEncodedPipe,
+      rawLength: headerEncoding.rawLength,
+      normalizedLength: headerEncoding.normalizedLength,
+      headerMcWpSessionRaw: rawWpHeader,
+      normalizedWpSession: headerEncoding.normalized,
+    });
+  }
 
   const productLoader = new DataLoader(async (ids: readonly number[]) => {
     return getProductNodes(ids);
