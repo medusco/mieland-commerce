@@ -2,6 +2,7 @@ import {
   annotateGraphqlOperationFromBody,
   captureSentryException,
   initSentry,
+  resolveGraphqlOperationName,
   setupSentryExpress,
 } from "./sentry.js";
 import express from "express";
@@ -44,6 +45,11 @@ import {
   randomToken,
 } from "./utils/index.js";
 import { WP_AUTH_HEADER_NAME, WP_REFRESH_HEADER_NAME } from "./auth/wp-session.js";
+import {
+  expressPaymentAuthSnapshot,
+  isPaymentGraphqlOperation,
+  logPaymentTrace,
+} from "./utils/payment-trace.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
 import { registerContactRoutes } from "./routes/contact.js";
@@ -232,7 +238,8 @@ app.use(
   authSensitiveBodyGuard,
   async (req, res) => {
     const started = Date.now();
-    const operationName = annotateGraphqlOperationFromBody(req.body);
+    const operationName = resolveGraphqlOperationName(req);
+    annotateGraphqlOperationFromBody(req.body);
     const existing =
       parseSessionHeader(req.header("woocommerce-session")) ||
       parseSessionHeader(req.header("Woocommerce-Session"));
@@ -295,8 +302,24 @@ app.use(
         ms: Date.now() - started,
         status: response.status,
         method: req.method,
-        hasWpAuthSetCookie: (pendingWp?.setCookies.length ?? 0) > 0,
+        wpAuthSetCookieCount: pendingWp?.setCookies.length ?? 0,
+        wpSessionResponseHeader: pendingWp?.sessionHeaderValue || null,
+        wpRefreshResponseHeader: pendingWp?.refreshHeaderValue || null,
       });
+      if (isPaymentGraphqlOperation(operationName)) {
+        logPaymentTrace("info", {
+          msg: "graphql_payment_request",
+          requestId: req.header("x-request-id"),
+          operationName,
+          method: req.method,
+          status: response.status,
+          ms: Date.now() - started,
+          wpAuthSetCookieCount: pendingWp?.setCookies.length ?? 0,
+          wpSessionResponseHeader: pendingWp?.sessionHeaderValue || null,
+          wpRefreshResponseHeader: pendingWp?.refreshHeaderValue || null,
+          ...expressPaymentAuthSnapshot(req),
+        });
+      }
       res.send(buf);
     } catch (err) {
       takePendingWpAuthSetCookie(scopeId);

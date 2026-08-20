@@ -1,5 +1,6 @@
 import { loadConfig } from "../config.js";
 import { logJson } from "../utils/index.js";
+import { logPaymentTrace } from "../utils/payment-trace.js";
 
 export type StoreAddress = {
   first_name: string;
@@ -85,12 +86,12 @@ export async function getStoreCartToken(
     signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
   });
   const token = headerValue(res.headers, "Cart-Token", "cart-token");
-  logJson("info", {
+  logPaymentTrace("info", {
     msg: "wc_store_cart_token",
     status: res.status,
     ms: Date.now() - started,
-    hasToken: Boolean(token),
-    hasCookie: Boolean(cookie),
+    cartToken: token,
+    wpCookieHeader: cookie,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -191,12 +192,32 @@ export async function processStoreCheckoutOrder(
   } catch {
     body = { message: text };
   }
-  logJson("info", {
+  logPaymentTrace("info", {
     msg: "wc_store_checkout_order",
     status: res.status,
     ms: Date.now() - started,
     orderId,
-    hasCookie: Boolean(cookie),
+    cartToken: token,
+    wpCookieHeader: cookie,
+    paymentMethod: payload.payment_method,
+    billingEmail: payload.billing_email ?? null,
+    paymentDataKeys: (payload.payment_data ?? []).map((p) => p.key),
+    responseOrderStatus:
+      typeof body.status === "string" ? body.status : null,
+    responsePaymentStatus:
+      typeof (body.payment_result as StorePaymentResult | undefined)
+        ?.payment_status === "string"
+        ? (body.payment_result as StorePaymentResult).payment_status
+        : null,
+    responseRedirectUrl:
+      typeof (body.payment_result as StorePaymentResult | undefined)
+        ?.redirect_url === "string"
+        ? (body.payment_result as StorePaymentResult).redirect_url
+        : null,
+    responsePaymentDetails:
+      (body.payment_result as StorePaymentResult | undefined)
+        ?.payment_details ?? [],
+    responseBodyPreview: !res.ok ? text.slice(0, 500) : undefined,
   });
   if (!res.ok) {
     throw new Error(storeErrorMessage(body, `WC Store checkout ${res.status}`));

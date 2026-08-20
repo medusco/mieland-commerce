@@ -5,7 +5,7 @@ import {
   graphqlIntegration,
   setupExpressErrorHandler,
 } from "@sentry/node";
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import type { AppConfig } from "./config.js";
 
 function parseSampleRate(value: string | undefined): number | null {
@@ -33,19 +33,34 @@ function getTracePropagationTargets(cfg: AppConfig): (string | RegExp)[] {
 
 let enabled = false;
 
-/** Tag the active Sentry scope from POST /graphql JSON `operationName`. */
-export function annotateGraphqlOperationFromBody(body?: unknown): string | undefined {
-  if (!enabled) return undefined;
+function operationNameFromBody(body?: unknown): string | undefined {
   const raw =
     body && typeof body === "object" && body !== null
       ? (body as { operationName?: unknown }).operationName
       : undefined;
-  const operationName =
-    typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+/** Tag the active Sentry scope from POST /graphql JSON `operationName`. */
+export function annotateGraphqlOperationFromBody(body?: unknown): string | undefined {
+  const operationName = operationNameFromBody(body);
+  if (!enabled) return operationName;
   const label = operationName ?? "anonymous";
   Sentry.setTag("graphql.operation", label);
   Sentry.getActiveSpan()?.setAttribute("graphql.operation.name", label);
   return operationName;
+}
+
+/** Resolve GraphQL operation name from POST body or GET query string (APQ). */
+export function resolveGraphqlOperationName(req: Request): string | undefined {
+  const fromBody = operationNameFromBody(req.body);
+  if (fromBody) return fromBody;
+  const fromQuery = req.query?.operationName;
+  if (typeof fromQuery === "string" && fromQuery.trim()) return fromQuery.trim();
+  if (Array.isArray(fromQuery) && typeof fromQuery[0] === "string") {
+    return fromQuery[0].trim() || undefined;
+  }
+  return undefined;
 }
 
 export function initSentry(cfg: AppConfig): boolean {
