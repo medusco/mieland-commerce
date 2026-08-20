@@ -203,6 +203,28 @@ function taxAddressComplete(addr: CartAddress): boolean {
   return TAX_ADDRESS_FIELDS.every((f) => Boolean(addr[f]?.trim()));
 }
 
+/** Refuse checkout when TaxCloud preview did not succeed for the cart address. */
+export function assertCheckoutTaxCalculated(
+  cart: CartState,
+  calculated: CalculatedCart,
+): void {
+  const address = resolveTaxAddress(cart, null);
+  if (!taxAddressComplete(address)) {
+    throw new Error(
+      "Complete delivery address is required before checkout",
+    );
+  }
+  if (!calculated.chosenShippingMethods.length) {
+    throw new Error("Shipping method is required before checkout");
+  }
+  if (!calculated.taxBreakdown?.success) {
+    const msg = calculated.taxBreakdown?.message?.trim();
+    throw new Error(
+      msg || "Sales tax must be calculated successfully before checkout",
+    );
+  }
+}
+
 export async function calculateCart(
   cart: CartState,
   mode: CartTotalsMode = "full",

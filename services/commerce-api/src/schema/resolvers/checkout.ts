@@ -6,6 +6,7 @@ import { FORCE_LOGOUT_CODE, requireUser, scheduleForceLogout } from "../../conte
 import { clearCart, loadCart, mutateCart, saveCart } from "../../engine/cart-store.js";
 import {
   assertInStock,
+  assertCheckoutTaxCalculated,
   calculateCart,
   emptyTaxBreakdown,
 } from "../../engine/totals.js";
@@ -532,6 +533,7 @@ export const checkoutResolvers = {
         userId: ctx.userId,
       });
       await saveCart(ctx.sessionToken, calculated.cart);
+      assertCheckoutTaxCalculated(cart, calculated);
 
       const paypal = await createPaypalOrder({
         amount: calculated.total,
@@ -642,6 +644,7 @@ export const checkoutResolvers = {
       // calculateCart is still needed for shipping_lines / free-shipping thresholds.
       const calculated = await calculateCart(cart, "full", { userId });
       await saveCart(ctx.sessionToken, calculated.cart);
+      assertCheckoutTaxCalculated(cart, calculated);
 
       const meta = (input.metaData ?? [])
         .filter((m) => m.key)
