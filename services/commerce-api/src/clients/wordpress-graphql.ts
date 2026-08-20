@@ -401,3 +401,33 @@ export async function wpGraphqlRefreshToken(
     cookieTtlSeconds: ttlSeconds,
   };
 }
+
+const VIEWER_QUERY = `
+query WpViewer {
+  viewer {
+    databaseId
+  }
+}
+`;
+
+/** Resolve authenticated user id via WPGraphQL (works for Headless Login customers). */
+export async function wpGraphqlViewerDatabaseId(
+  cookieHeader: string,
+  origin?: string | null,
+): Promise<number | null> {
+  const trimmed = cookieHeader?.trim() || "";
+  if (!trimmed) return null;
+
+  try {
+    const { body } = await postGraphql<{
+      viewer?: { databaseId?: number | null } | null;
+    }>(VIEWER_QUERY, {}, "wp_graphql_viewer", {
+      origin,
+      headers: { Cookie: trimmed },
+    });
+    const id = Number(body.data?.viewer?.databaseId ?? 0);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}

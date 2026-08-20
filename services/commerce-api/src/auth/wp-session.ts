@@ -1,4 +1,5 @@
 import { loadConfig } from "../config.js";
+import { wpGraphqlViewerDatabaseId } from "../clients/wordpress-graphql.js";
 import { findUserByLoginOrEmail } from "./index.js";
 
 /**
@@ -277,15 +278,18 @@ export async function isWpSessionMatchingUser(
 }
 
 /**
- * Resolve the live WP user id for a Cookie header via REST.
- * Stale wordpress_logged_in_* values still parse a login name but WP returns 0
- * from get_current_user_id(), which breaks Store API pay-for-order ownership.
+ * Resolve the live WP user id for a Cookie header.
+ * Prefers WPGraphQL viewer (Headless Login customers); falls back to REST /users/me.
  */
 export async function getLiveWpUserIdFromCookie(
   cookieHeader: string,
+  origin?: string | null,
 ): Promise<number | null> {
   const trimmed = cookieHeader?.trim() || "";
   if (!trimmed) return null;
+
+  const fromGraphql = await wpGraphqlViewerDatabaseId(trimmed, origin);
+  if (fromGraphql != null) return fromGraphql;
 
   const cfg = loadConfig();
   const url = `${cfg.WORDPRESS_URL.replace(/\/$/, "")}/wp-json/wp/v2/users/me`;
@@ -311,7 +315,8 @@ export async function getLiveWpUserIdFromCookie(
 export async function isWpSessionAliveForUser(
   cookieHeader: string,
   userId: number,
+  origin?: string | null,
 ): Promise<boolean> {
-  const liveId = await getLiveWpUserIdFromCookie(cookieHeader);
+  const liveId = await getLiveWpUserIdFromCookie(cookieHeader, origin);
   return liveId === userId;
 }

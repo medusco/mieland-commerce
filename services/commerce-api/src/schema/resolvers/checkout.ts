@@ -24,7 +24,7 @@ import {
 } from "../../clients/woocommerce-store.js";
 import { createPaypalOrder } from "../../clients/paypal.js";
 import { getPaypalPublicSettings } from "../../repositories/paypal.js";
-import { isWpSessionAliveForUser } from "../../auth/wp-session.js";
+import { isWpSessionAliveForUser, isWpSessionMatchingUser } from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
@@ -77,23 +77,48 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
 
   const origin =
     ctx.req.headers.get("origin") || ctx.req.headers.get("Origin") || null;
-  const refreshWpSession = () =>
-    refreshWpSessionFromCookie({
-      requestScopeId: ctx.requestScopeId,
-      req: ctx.req,
-      origin,
-      wpRefreshToken: ctx.wpRefreshToken,
-    });
+  const refreshOpts = {
+    requestScopeId: ctx.requestScopeId,
+    req: ctx.req,
+    origin,
+    wpRefreshToken: ctx.wpRefreshToken,
+  };
+  const refreshWpSession = () => refreshWpSessionFromCookie(refreshOpts);
+
+  const acceptCookie = async (
+    cookie: string,
+    opts?: { trustAfterRefresh?: boolean },
+  ): Promise<boolean> => {
+    if (!(await isWpSessionMatchingUser(cookie, userId))) return false;
+    if (opts?.trustAfterRefresh) return true;
+    return isWpSessionAliveForUser(cookie, userId, origin);
+  };
 
   // JWT can outlive wordpress_logged_in_* — refresh first when we have a token.
   const refreshed = await refreshWpSession();
-  if (refreshed && (await isWpSessionAliveForUser(refreshed, userId))) {
+  if (refreshed && (await acceptCookie(refreshed, { trustAfterRefresh: true }))) {
     return refreshed;
   }
 
   const wpCookie = ctx.wpAuthCookie?.trim() || "";
-  if (wpCookie && (await isWpSessionAliveForUser(wpCookie, userId))) {
+  if (wpCookie && (await acceptCookie(wpCookie))) {
     return wpCookie;
+  }
+
+  if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
+    const retry = refreshed ? null : await refreshWpSession();
+    if (retry && (await acceptCookie(retry, { trustAfterRefresh: true }))) {
+      return retry;
+    }
+    throw new Error(
+      "Your session expired. Please sign in again to complete checkout.",
+    );
+  }
+
+  if (!wpCookie && !refreshed) {
+    throw new Error(
+      "WordPress session required — log in again (missing mc-wp-session cookie)",
+    );
   }
 
   scheduleForceLogout(ctx.requestScopeId, ctx.req);
