@@ -11,7 +11,6 @@ import {
   buildWpAuthSetCookie,
   buildWpRefreshClearCookie,
   buildWpRefreshSetCookie,
-  decodeWpAuthCookieValue,
   decodeWpRefreshCookieValue,
   inspectWpCookieEncoding,
   parseWpAuthCookieHeader,
