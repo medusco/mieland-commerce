@@ -18,8 +18,10 @@ import {
 import {
   buildWpAuthSetCookie,
   wpAuthHeaderValue,
+  wpRefreshHeaderValue,
 } from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
+import { storeWpRefreshToken } from "../../auth/wp-refresh-store.js";
 import { wpGraphqlLogin } from "../../clients/wordpress-graphql.js";
 import {
   getCustomer,
@@ -413,6 +415,11 @@ export const customerResolvers = {
             wp.refreshToken,
             wp.refreshTokenExpiration,
           );
+          await storeWpRefreshToken(
+            userId,
+            wp.refreshToken,
+            wp.refreshTokenExpiration,
+          );
         }
       }
 
@@ -449,6 +456,43 @@ export const customerResolvers = {
         sessionToken: ctx.sessionToken,
         customer,
         user: toGraphqlUser(user),
+        wpSession: headerValue,
+        wpRefresh: wp.refreshToken
+          ? wpRefreshHeaderValue(wp.refreshToken)
+          : null,
+      };
+    },
+
+    syncWordPressSession: async (
+      _: unknown,
+      { input }: { input?: { clientMutationId?: string } },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const origin =
+        ctx.req.headers.get("origin") ||
+        ctx.req.headers.get("Origin") ||
+        null;
+      const renewed = await refreshWpSessionFromCookie({
+        requestScopeId: ctx.requestScopeId,
+        req: ctx.req,
+        origin,
+        wpRefreshToken: ctx.wpRefreshToken,
+        userId,
+      });
+      if (!renewed) {
+        return {
+          clientMutationId: input?.clientMutationId ?? null,
+          success: false,
+          wpSession: null,
+          wpRefresh: null,
+        };
+      }
+      return {
+        clientMutationId: input?.clientMutationId ?? null,
+        success: true,
+        wpSession: renewed.sessionHeaderValue,
+        wpRefresh: renewed.refreshHeaderValue,
       };
     },
 
@@ -473,17 +517,20 @@ export const customerResolvers = {
         ctx.req.headers.get("origin") ||
         ctx.req.headers.get("Origin") ||
         null;
-      await refreshWpSessionFromCookie({
+      const renewed = await refreshWpSessionFromCookie({
         requestScopeId: ctx.requestScopeId,
         req: ctx.req,
         origin,
         wpRefreshToken: ctx.wpRefreshToken,
+        userId: refreshed.userId,
       });
       const { userId: _userId, ...tokens } = refreshed;
       return {
         clientMutationId: input.clientMutationId,
         success: true,
         ...tokens,
+        wpSession: renewed?.sessionHeaderValue ?? null,
+        wpRefresh: renewed?.refreshHeaderValue ?? null,
       };
     },
   },

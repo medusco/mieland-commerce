@@ -82,6 +82,7 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     req: ctx.req,
     origin,
     wpRefreshToken: ctx.wpRefreshToken,
+    userId,
   };
   const refreshWpSession = () => refreshWpSessionFromCookie(refreshOpts);
 
@@ -96,8 +97,11 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
 
   // JWT can outlive wordpress_logged_in_* — refresh first when we have a token.
   const refreshed = await refreshWpSession();
-  if (refreshed && (await acceptCookie(refreshed, { trustAfterRefresh: true }))) {
-    return refreshed;
+  if (
+    refreshed &&
+    (await acceptCookie(refreshed.cookieHeader, { trustAfterRefresh: true }))
+  ) {
+    return refreshed.cookieHeader;
   }
 
   const wpCookie = ctx.wpAuthCookie?.trim() || "";
@@ -107,8 +111,11 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
 
   if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
     const retry = refreshed ? null : await refreshWpSession();
-    if (retry && (await acceptCookie(retry, { trustAfterRefresh: true }))) {
-      return retry;
+    if (
+      retry &&
+      (await acceptCookie(retry.cookieHeader, { trustAfterRefresh: true }))
+    ) {
+      return retry.cookieHeader;
     }
     throw new Error(
       "Your session expired. Please sign in again to complete checkout.",

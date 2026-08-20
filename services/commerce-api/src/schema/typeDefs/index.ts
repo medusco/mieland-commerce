@@ -1077,6 +1077,10 @@ export const typeDefs = /* GraphQL */ `
     clientMutationId: String
     customer: Customer
     user: User
+    """URI-encoded WP auth cookie value for cross-origin clients."""
+    wpSession: String
+    """URI-encoded WP Headless Login refresh token for cross-origin clients."""
+    wpRefresh: String
   }
 
   type RefreshTokenPayload {
@@ -1086,6 +1090,19 @@ export const typeDefs = /* GraphQL */ `
     refreshTokenExpiration: String
     clientMutationId: String
     success: Boolean
+    wpSession: String
+    wpRefresh: String
+  }
+
+  input SyncWordPressSessionInput {
+    clientMutationId: String
+  }
+
+  type SyncWordPressSessionPayload {
+    clientMutationId: String
+    success: Boolean
+    wpSession: String
+    wpRefresh: String
   }
 
   type UpdateMielandSubscriptionPayload {
@@ -1176,6 +1193,8 @@ export const typeDefs = /* GraphQL */ `
     requestPersonalCoupon(input: RequestPersonalCouponInput!): RequestPersonalCouponPayload
     login(input: LoginInput!): LoginPayload
     refreshToken(input: RefreshTokenInput!): RefreshTokenPayload
+    """Renew WP session cookies for cross-origin storefronts (requires JWT)."""
+    syncWordPressSession(input: SyncWordPressSessionInput): SyncWordPressSessionPayload
     updateMielandSubscription(input: UpdateMielandSubscriptionInput!): UpdateMielandSubscriptionPayload
     cancelMielandSubscription(input: CancelMielandSubscriptionInput!): CancelMielandSubscriptionPayload
     """
