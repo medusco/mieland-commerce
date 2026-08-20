@@ -26,6 +26,10 @@ export function redactPii(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const key = k.toLowerCase();
+      if (typeof v === "boolean" || typeof v === "number") {
+        out[k] = v;
+        continue;
+      }
       if (
         key.includes("password") ||
         key.includes("secret") ||

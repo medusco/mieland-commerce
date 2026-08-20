@@ -24,7 +24,7 @@ import {
 } from "../../clients/woocommerce-store.js";
 import { createPaypalOrder } from "../../clients/paypal.js";
 import { getPaypalPublicSettings } from "../../repositories/paypal.js";
-import { isWpSessionAliveForUser, isWpSessionMatchingUser } from "../../auth/wp-session.js";
+import { isWpSessionAliveForUser, isWpSessionMatchingUser, parseWpLoggedInUserLogin } from "../../auth/wp-session.js";
 import { refreshWpSessionFromCookie } from "../../auth/wp-refresh.js";
 import { findUserById } from "../../auth/index.js";
 import { getCustomer } from "../../repositories/customers.js";
@@ -47,6 +47,11 @@ import {
 } from "../../repositories/orders.js";
 import { getRedis } from "../../redis/client.js";
 import { logJson, parseDatabaseId } from "../../utils/index.js";
+import {
+  logPaymentTrace,
+  paymentAuthSnapshot,
+  summarizePaymentData,
+} from "../../utils/payment-trace.js";
 import {
   orderNeedsAreLean,
   orderNeedsFromInfo,
@@ -100,11 +105,29 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     refreshed &&
     (await acceptCookie(refreshed.cookieHeader, { trustAfterRefresh: true }))
   ) {
+    logPaymentTrace("info", {
+      msg: "wp_session_sync_ok",
+      requestId: ctx.requestId,
+      jwtUserId: userId,
+      source: "refresh",
+      wpLoggedInLogin: parseWpLoggedInUserLogin(refreshed.cookieHeader),
+      wpCookieHeader: refreshed.cookieHeader,
+      ...paymentAuthSnapshot(ctx),
+    });
     return refreshed.cookieHeader;
   }
 
   const wpCookie = ctx.wpAuthCookie?.trim() || "";
   if (wpCookie && (await acceptCookie(wpCookie))) {
+    logPaymentTrace("info", {
+      msg: "wp_session_sync_ok",
+      requestId: ctx.requestId,
+      jwtUserId: userId,
+      source: "context_cookie",
+      wpLoggedInLogin: parseWpLoggedInUserLogin(wpCookie),
+      wpCookieHeader: wpCookie,
+      ...paymentAuthSnapshot(ctx),
+    });
     return wpCookie;
   }
 
@@ -114,19 +137,50 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
       retry &&
       (await acceptCookie(retry.cookieHeader, { trustAfterRefresh: true }))
     ) {
+      logPaymentTrace("info", {
+        msg: "wp_session_sync_ok",
+        requestId: ctx.requestId,
+        jwtUserId: userId,
+        source: "refresh_retry",
+        wpLoggedInLogin: parseWpLoggedInUserLogin(retry.cookieHeader),
+        wpCookieHeader: retry.cookieHeader,
+        ...paymentAuthSnapshot(ctx),
+      });
       return retry.cookieHeader;
     }
+    logPaymentTrace("warn", {
+      msg: "wp_session_sync_expired",
+      requestId: ctx.requestId,
+      jwtUserId: userId,
+      wpLoggedInLogin: parseWpLoggedInUserLogin(wpCookie),
+      wpCookieHeader: wpCookie,
+      ...paymentAuthSnapshot(ctx),
+    });
     throw new Error(
       "Your session expired. Please sign in again to complete checkout.",
     );
   }
 
   if (!wpCookie && !refreshed) {
+    logPaymentTrace("error", {
+      msg: "wp_session_sync_missing",
+      requestId: ctx.requestId,
+      jwtUserId: userId,
+      ...paymentAuthSnapshot(ctx),
+    });
     throw new Error(
       "WordPress session required — log in again (missing mc-wp-session cookie)",
     );
   }
 
+  logPaymentTrace("error", {
+    msg: "wp_session_sync_force_logout",
+    requestId: ctx.requestId,
+    jwtUserId: userId,
+    wpCookieHeader: wpCookie || null,
+    hadRefresh: Boolean(refreshed),
+    ...paymentAuthSnapshot(ctx),
+  });
   scheduleForceLogout(ctx.requestScopeId, ctx.req);
   throw new GraphQLError(FORCE_LOGOUT_MESSAGE, {
     extensions: { code: FORCE_LOGOUT_CODE },
@@ -653,6 +707,14 @@ export const checkoutResolvers = {
       info: GraphQLResolveInfo,
     ) => {
       const userId = ctx.userId; // guest checkout allowed but Stripe meta usually needs account
+      logPaymentTrace("info", {
+        msg: "checkout_start",
+        requestId: ctx.requestId,
+        jwtUserId: userId,
+        guestCheckout: userId == null,
+        paymentMethod: input.paymentMethod || "stripe",
+        ...paymentAuthSnapshot(ctx),
+      });
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
         const resolved = resolveCheckoutAddresses({
           billing: input.billing,
@@ -706,20 +768,28 @@ export const checkoutResolvers = {
         const started = Date.now();
         try {
           const order = await createWcOrder(wcPayload);
-          logJson("info", {
+          logPaymentTrace("info", {
             msg: "checkout_ok",
             requestId: ctx.requestId,
             ms: Date.now() - started,
             orderId: order.id,
-            customerId: userId ?? null,
+            jwtUserId: userId ?? null,
+            guestCheckout: userId == null,
+            paymentMethod: input.paymentMethod || "stripe",
+            cartTotal: calculated.total,
+            ...paymentAuthSnapshot(ctx),
           });
           return order;
         } catch (err) {
-          logJson("error", {
+          logPaymentTrace("error", {
             msg: "checkout_fail",
             requestId: ctx.requestId,
             ms: Date.now() - started,
+            jwtUserId: userId ?? null,
+            guestCheckout: userId == null,
+            paymentMethod: input.paymentMethod || "stripe",
             err: String(err),
+            ...paymentAuthSnapshot(ctx),
           });
           throw err;
         }
@@ -790,8 +860,38 @@ export const checkoutResolvers = {
         throw new Error("Invalid orderId");
       }
 
+      logPaymentTrace("info", {
+        msg: "process_order_payment_start",
+        requestId: ctx.requestId,
+        orderId,
+        jwtUserId: ctx.userId,
+        guestPayment: ctx.userId == null,
+        paymentMethod: input.paymentMethod || null,
+        orderKeyProvided: Boolean(input.orderKey?.trim()),
+        billingEmailProvided: Boolean(input.billingEmail?.trim()),
+        ...summarizePaymentData(
+          (input.paymentData ?? []).map((p) => ({
+            key: p.key,
+            value: p.value ?? null,
+          })),
+        ),
+        ...paymentAuthSnapshot(ctx),
+      });
+
       const ctxOrder = await getOrderPaymentContext(orderId);
       if (!ctxOrder) throw new Error("Order not found");
+
+      logPaymentTrace("info", {
+        msg: "process_order_payment_order_context",
+        requestId: ctx.requestId,
+        orderId,
+        orderCustomerId: ctxOrder.customerId,
+        orderStatus: ctxOrder.status,
+        orderNeedsPayment: ctxOrder.needsPayment,
+        orderPaymentMethod: ctxOrder.paymentMethod,
+        orderBillingEmail: ctxOrder.billing?.email ?? null,
+        jwtUserId: ctx.userId,
+      });
 
       if (ctx.userId != null) {
         if (ctxOrder.customerId > 0 && ctxOrder.customerId !== ctx.userId) {
@@ -911,21 +1011,33 @@ export const checkoutResolvers = {
             wpCookie ? { cookie: wpCookie } : undefined,
           ),
         );
-        logJson("info", {
+        logPaymentTrace("info", {
           msg: "process_order_payment_ok",
           requestId: ctx.requestId,
           ms: Date.now() - started,
           orderId,
+          jwtUserId: ctx.userId,
+          guestPayment: ctx.userId == null,
           paymentStatus: storeRes.payment_result?.payment_status,
-          hasCookie: Boolean(wpCookie),
+          redirectUrl: storeRes.payment_result?.redirect_url ?? null,
+          storeOrderStatus: storeRes.status ?? null,
+          wpCookieHeader: wpCookie,
+          wpLoggedInLogin: wpCookie
+            ? parseWpLoggedInUserLogin(wpCookie)
+            : null,
+          paymentDetails: storeRes.payment_result?.payment_details ?? [],
+          ...paymentAuthSnapshot(ctx),
         });
       } catch (err) {
-        logJson("error", {
+        logPaymentTrace("error", {
           msg: "process_order_payment_fail",
           requestId: ctx.requestId,
           ms: Date.now() - started,
           orderId,
+          jwtUserId: ctx.userId,
+          guestPayment: ctx.userId == null,
           err: String(err),
+          ...paymentAuthSnapshot(ctx),
         });
         const message = err instanceof Error ? err.message : String(err);
         // Concurrent pay — do not flip the order to failed while the other request finishes.
