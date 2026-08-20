@@ -1,5 +1,4 @@
 import { loadConfig } from "../config.js";
-import { logJson } from "../utils/index.js";
 import { logPaymentTrace } from "../utils/payment-trace.js";
 
 export type StoreAddress = {
