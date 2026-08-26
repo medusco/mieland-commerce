@@ -189,6 +189,13 @@ export async function shapeAcfField(
   }
 
   if (hasGroupChildren(meta, field) && !/^\d+$/.test(String(raw ?? ""))) {
+    // ACF link fields serialize title/url/target in `field`; sibling keys like
+    // `field_badge` must not be treated as nested group children of `field`.
+    if (raw && looksSerialized(raw)) {
+      const parsed = unserializeAcf(raw);
+      const link = asLink(parsed);
+      if (link) return link;
+    }
     const childNames = collectIndexedChildNames(meta, field);
     const obj: Record<string, unknown> = {};
     for (const child of childNames) {
