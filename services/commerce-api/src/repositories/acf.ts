@@ -76,6 +76,12 @@ function asIdList(value: unknown): number[] {
   return [];
 }
 
+/** WooCommerce `_upsell_ids` / `_crosssell_ids` postmeta (PHP-serialized ID lists). */
+export function parseLinkedProductIds(raw: string | undefined): number[] {
+  if (!raw?.trim()) return [];
+  return [...new Set(asIdList(unserializeAcf(raw.trim())).filter((id) => id > 0))];
+}
+
 export function relationshipConnection(value: unknown): {
   nodes: Array<{ databaseId: number }>;
 } {

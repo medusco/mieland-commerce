@@ -13,6 +13,7 @@ import {
   shapeProductThumbnailFields,
 } from "./product-acf.js";
 import { memoryGet, memorySet } from "../utils/memory-cache.js";
+import { parseLinkedProductIds } from "./acf.js";
 
 const MEMORY_NULL = "__null__";
 
@@ -862,4 +863,29 @@ export async function getProductNodes(
 export async function getProductNode(productId: number) {
   const [node] = await getProductNodes([productId]);
   return node ?? null;
+}
+
+const LINKED_PRODUCT_META_KEYS = {
+  upsell: "_upsell_ids",
+  crossSell: "_crosssell_ids",
+} as const;
+
+type LinkedProductMetaKey =
+  (typeof LINKED_PRODUCT_META_KEYS)[keyof typeof LINKED_PRODUCT_META_KEYS];
+
+/** Hydrate WooCommerce upsell / cross-sell products for a catalog product. */
+export async function getLinkedProductNodes(
+  productId: number,
+  metaKey: LinkedProductMetaKey,
+  first?: number,
+): Promise<unknown[]> {
+  if (!Number.isFinite(productId) || productId <= 0) return [];
+
+  const meta = await getPostMetaKeysMany([productId], [metaKey]);
+  let ids = parseLinkedProductIds(meta.get(productId)?.[metaKey]);
+  if (first != null && first > 0) ids = ids.slice(0, first);
+  if (!ids.length) return [];
+
+  const nodes = await getProductNodes(ids);
+  return nodes.filter((node): node is NonNullable<typeof node> => Boolean(node));
 }

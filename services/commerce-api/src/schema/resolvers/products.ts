@@ -1,6 +1,20 @@
 import type { GraphQLResolveInfo } from "graphql";
 import { productListNeedsFromInfo } from "../../utils/selection.js";
 
+function linkedProductsResolver(metaKey: "_upsell_ids" | "_crosssell_ids") {
+  return async (
+    parent: { databaseId?: number | null },
+    args: { first?: number },
+  ) => {
+    const productId = parent.databaseId;
+    if (!productId) return { nodes: [] };
+
+    const { getLinkedProductNodes } = await import("../../repositories/products.js");
+    const nodes = await getLinkedProductNodes(productId, metaKey, args.first);
+    return { nodes };
+  };
+}
+
 export const productResolvers = {
   Query: {
     products: async (
@@ -32,12 +46,16 @@ export const productResolvers = {
     regularPrice: (p: { regularPrice?: string }) => p.regularPrice ?? null,
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
+    upsell: linkedProductsResolver("_upsell_ids"),
+    crossSell: linkedProductsResolver("_crosssell_ids"),
   },
   VariableProduct: {
     price: (p: { price?: string }) => p.price ?? null,
     regularPrice: (p: { regularPrice?: string }) => p.regularPrice ?? null,
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
+    upsell: linkedProductsResolver("_upsell_ids"),
+    crossSell: linkedProductsResolver("_crosssell_ids"),
     variations: (
       parent: {
         variations?: {

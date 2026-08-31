@@ -200,6 +200,10 @@ export const typeDefs = /* GraphQL */ `
     nodes: [ProductVariation]
   }
 
+  type ProductToProductConnection {
+    nodes: [Product]
+  }
+
   type SimpleProduct implements Product & ProductWithAttributes {
     databaseId: Int
     name: String
@@ -224,6 +228,8 @@ export const typeDefs = /* GraphQL */ `
     price(format: PricingFieldFormatEnum): String
     regularPrice(format: PricingFieldFormatEnum): String
     salePrice(format: PricingFieldFormatEnum): String
+    upsell(first: Int): ProductToProductConnection
+    crossSell(first: Int): ProductToProductConnection
   }
 
   type VariableProduct implements Product & ProductWithAttributes {
@@ -251,6 +257,8 @@ export const typeDefs = /* GraphQL */ `
     regularPrice(format: PricingFieldFormatEnum): String
     salePrice(format: PricingFieldFormatEnum): String
     variations(first: Int, where: ProductVariationQueryInput): ProductVariationConnection
+    upsell(first: Int): ProductToProductConnection
+    crossSell(first: Int): ProductToProductConnection
   }
 
   type RootQueryToProductConnection {
