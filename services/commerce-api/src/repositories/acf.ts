@@ -33,21 +33,36 @@ function looksSerialized(raw: string): boolean {
 
 export function unserializeAcf(raw: string): unknown {
   if (!raw) return raw;
-  if (raw.startsWith("{") || raw.startsWith("[")) {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return raw;
+
+  let value: unknown = raw;
+  for (let depth = 0; depth < 5; depth++) {
+    if (typeof value !== "string") break;
+    const current = value;
+    if (current.startsWith("{") || current.startsWith("[")) {
+      try {
+        value = JSON.parse(current);
+        continue;
+      } catch {
+        break;
+      }
     }
-  }
-  if (raw.startsWith("a:") || raw.startsWith("O:") || raw.startsWith("s:")) {
-    try {
-      return phpUnserialize(raw);
-    } catch {
-      return raw;
+    if (
+      current.startsWith("a:") ||
+      current.startsWith("O:") ||
+      current.startsWith("s:")
+    ) {
+      try {
+        const next = phpUnserialize(current);
+        if (next === current) break;
+        value = next;
+        continue;
+      } catch {
+        break;
+      }
     }
+    break;
   }
-  return raw;
+  return value;
 }
 
 function asLink(value: unknown): { title: string; url: string; target: string } | null {

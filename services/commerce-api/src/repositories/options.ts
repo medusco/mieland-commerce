@@ -7,6 +7,32 @@ export type WpOptionMap = Record<string, unknown>;
 
 const OPTION_NULL = "__null__";
 
+function utf8ByteLength(codePoint: number): number {
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
+/** PHP `s:N:"..."` uses UTF-8 byte length, not JS string length. */
+function readPhpUtf8String(
+  s: string,
+  start: number,
+  byteLen: number,
+): { value: string; end: number } {
+  let end = start;
+  let bytes = 0;
+  while (end < s.length) {
+    const codePoint = s.codePointAt(end)!;
+    const charBytes = utf8ByteLength(codePoint);
+    if (bytes + charBytes > byteLen) break;
+    bytes += charBytes;
+    end += codePoint > 0xffff ? 2 : 1;
+  }
+  if (bytes !== byteLen) throw new Error("bad string close");
+  return { value: s.slice(start, end), end };
+}
+
 export function maybeUnserializePhp(raw: string): unknown {
   // WordSQL options are often PHP-serialized. Handle common shapes without a full unserializer.
   if (!raw) return raw;
@@ -64,8 +90,8 @@ export function phpUnserialize(input: string): unknown {
       if (s[i++] !== ":") throw new Error("bad string len");
       const len = Number(readUntil(":"));
       if (s[i++] !== '"') throw new Error("bad string open");
-      const val = s.slice(i, i + len);
-      i += len;
+      const { value: val, end } = readPhpUtf8String(s, i, len);
+      i = end;
       if (s[i++] !== '"') throw new Error("bad string close");
       if (s[i++] !== ";") throw new Error("bad string end");
       return val;

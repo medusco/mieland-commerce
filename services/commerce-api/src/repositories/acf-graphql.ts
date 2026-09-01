@@ -385,7 +385,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v7";
+const ACF_GROUPS_CACHE_VERSION = "v9";
 
 let memoryGroups: {
   key: string;
