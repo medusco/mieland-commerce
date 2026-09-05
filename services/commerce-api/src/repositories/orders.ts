@@ -39,6 +39,116 @@ type McfFields = {
   amazonMcfTraNumber: string | null;
 };
 
+type OrderSubscriptionFlags = {
+  hasSubscriptions: boolean;
+  isSubscriptionOrder: boolean;
+};
+
+const SUBSCRIPTION_FREQUENCIES = new Set([
+  "weekly",
+  "fortnightly",
+  "monthly",
+  "every_2_months",
+  "every_3_months",
+]);
+
+function isValidSubscriptionFrequency(value: string): boolean {
+  return SUBSCRIPTION_FREQUENCIES.has(value);
+}
+
+function subscriptionFlagsFromOrderMeta(
+  meta: Record<string, string>,
+): Pick<OrderSubscriptionFlags, "isSubscriptionOrder"> {
+  return {
+    isSubscriptionOrder: meta._mieland_subscription_renewal === "yes",
+  };
+}
+
+async function orderSubscriptionFlagsMany(
+  orderIds: number[],
+  metaMap: Map<number, Record<string, string>>,
+): Promise<Map<number, OrderSubscriptionFlags>> {
+  const out = new Map<number, OrderSubscriptionFlags>();
+  for (const id of orderIds) {
+    const meta = metaMap.get(id) ?? {};
+    out.set(id, {
+      hasSubscriptions: false,
+      ...subscriptionFlagsFromOrderMeta(meta),
+    });
+  }
+  if (!orderIds.length) return out;
+
+  const placeholders = orderIds.map(() => "?").join(",");
+  const rows = await query<
+    { order_id: number; meta_key: string; meta_value: string }[]
+  >(
+    `SELECT oi.order_id, oim.meta_key, oim.meta_value
+     FROM ${t("woocommerce_order_items")} oi
+     INNER JOIN ${t("woocommerce_order_itemmeta")} oim
+       ON oim.order_item_id = oi.order_item_id
+     WHERE oi.order_id IN (${placeholders})
+       AND oi.order_item_type = 'line_item'
+       AND oim.meta_key IN ('_subscription_frequency', 'subscription_frequency')
+       AND oim.meta_value <> ''`,
+    orderIds,
+  );
+
+  for (const row of rows) {
+    const id = Number(row.order_id);
+    const current = out.get(id);
+    if (!current || current.hasSubscriptions) continue;
+    if (isValidSubscriptionFrequency(row.meta_value ?? "")) {
+      current.hasSubscriptions = true;
+    }
+  }
+
+  for (const flags of out.values()) {
+    if (flags.isSubscriptionOrder) {
+      flags.hasSubscriptions = true;
+    }
+  }
+
+  return out;
+}
+
+function subscriptionFlagsFromWc(
+  wc: Record<string, unknown>,
+): OrderSubscriptionFlags {
+  const metaRows = Array.isArray(wc.meta_data)
+    ? (wc.meta_data as { key?: string; value?: unknown }[])
+    : [];
+  const meta = Object.fromEntries(
+    metaRows.map((row) => [String(row.key ?? ""), String(row.value ?? "")]),
+  );
+  const flags = {
+    hasSubscriptions: false,
+    isSubscriptionOrder: meta._mieland_subscription_renewal === "yes",
+  };
+
+  const lineItems = Array.isArray(wc.line_items) ? wc.line_items : [];
+  for (const line of lineItems) {
+    const item = line as { meta_data?: { key?: string; value?: unknown }[] };
+    const itemMeta = Array.isArray(item.meta_data) ? item.meta_data : [];
+    for (const row of itemMeta) {
+      const key = String(row.key ?? "");
+      if (
+        (key === "_subscription_frequency" || key === "subscription_frequency") &&
+        isValidSubscriptionFrequency(String(row.value ?? ""))
+      ) {
+        flags.hasSubscriptions = true;
+        break;
+      }
+    }
+    if (flags.hasSubscriptions) break;
+  }
+
+  if (flags.isSubscriptionOrder) {
+    flags.hasSubscriptions = true;
+  }
+
+  return flags;
+}
+
 function money(v: unknown): string {
   const n = Number(v ?? 0);
   return n.toFixed(2);
@@ -495,6 +605,8 @@ function leanOrderNode(row: {
     shippingLines: { nodes: [] as unknown[] },
     taxLines: { nodes: [] as unknown[] },
     couponLines: { nodes: [] as unknown[] },
+    hasSubscriptions: false,
+    isSubscriptionOrder: false,
   };
 }
 
@@ -509,6 +621,7 @@ export async function listCustomerOrders(
     taxLines: false,
     couponLines: false,
     meta: false,
+    subscriptionFlags: false,
     refreshMcf: false,
   },
 ) {
@@ -550,7 +663,8 @@ export async function listCustomerOrders(
     needs.shippingLines ||
     needs.taxLines ||
     needs.couponLines ||
-    needs.meta;
+    needs.meta ||
+    needs.subscriptionFlags;
 
   if (!heavy) return { nodes };
 
@@ -573,10 +687,15 @@ export async function listCustomerOrders(
     needs.couponLines
       ? orderItemLinesMany(ids, "coupon")
       : Promise.resolve(new Map<number, unknown[]>()),
-    needs.meta
+    needs.meta || needs.subscriptionFlags
       ? orderMetaMany(ids)
       : Promise.resolve(new Map<number, Record<string, string>>()),
   ]);
+
+  const subscriptionFlags =
+    needs.subscriptionFlags || needs.meta
+      ? await orderSubscriptionFlagsMany(ids, metaMap)
+      : new Map<number, OrderSubscriptionFlags>();
 
   for (const node of nodes) {
     if (needs.addresses) {
@@ -608,6 +727,13 @@ export async function listCustomerOrders(
         node.orderKey = meta._order_key || "";
       }
     }
+    if (needs.subscriptionFlags || needs.meta) {
+      const flags = subscriptionFlags.get(node.databaseId);
+      if (flags) {
+        node.hasSubscriptions = flags.hasSubscriptions;
+        node.isSubscriptionOrder = flags.isSubscriptionOrder;
+      }
+    }
   }
 
   return { nodes };
@@ -624,6 +750,7 @@ export async function shapeOrder(
     taxLines: true,
     couponLines: true,
     meta: true,
+    subscriptionFlags: true,
     refreshMcf: true,
   },
 ) {
@@ -684,6 +811,19 @@ export async function shapeOrder(
         : Promise.resolve({ nodes: [] as unknown[] }),
     ]);
 
+  const subscriptionFlags =
+    needs.subscriptionFlags || needs.meta
+      ? (
+          await orderSubscriptionFlagsMany(
+            [order.id],
+            new Map([[order.id, meta]]),
+          )
+        ).get(order.id) ?? {
+          hasSubscriptions: false,
+          isSubscriptionOrder: false,
+        }
+      : { hasSubscriptions: false, isSubscriptionOrder: false };
+
   return {
     id: toGlobalId("order", order.id),
     databaseId: order.id,
@@ -710,6 +850,8 @@ export async function shapeOrder(
     shippingLines: shippingLineNodes,
     taxLines: taxLineNodes,
     couponLines: couponLineNodes,
+    hasSubscriptions: subscriptionFlags.hasSubscriptions,
+    isSubscriptionOrder: subscriptionFlags.isSubscriptionOrder,
   };
 }
 
@@ -731,6 +873,7 @@ export function shapeOrderFromWc(wc: Record<string, unknown>) {
         };
       })
     : [];
+  const subscriptionFlags = subscriptionFlagsFromWc(wc);
   return {
     id: toGlobalId("order", id),
     databaseId: id,
@@ -759,6 +902,8 @@ export function shapeOrderFromWc(wc: Record<string, unknown>) {
     shippingLines: { nodes: [] as unknown[] },
     taxLines: { nodes: [] as unknown[] },
     couponLines: { nodes: couponLineNodes },
+    hasSubscriptions: subscriptionFlags.hasSubscriptions,
+    isSubscriptionOrder: subscriptionFlags.isSubscriptionOrder,
   };
 }
 

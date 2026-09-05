@@ -511,6 +511,10 @@ export const typeDefs = /* GraphQL */ `
     shippingLines: ShippingLineConnection
     taxLines: TaxLineConnection
     couponLines: CouponLineConnection
+    """True when any line item includes a subscription frequency."""
+    hasSubscriptions: Boolean
+    """True when the order was created by subscription renewal (not initial checkout)."""
+    isSubscriptionOrder: Boolean
   }
 
   type OrderConnection {

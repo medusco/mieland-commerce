@@ -267,6 +267,7 @@ export type OrderListNeeds = {
   taxLines: boolean;
   couponLines: boolean;
   meta: boolean;
+  subscriptionFlags: boolean;
   /** Call WP mcf-tra bridge to refresh Amazon TRA when cache is empty (detail views). */
   refreshMcf: boolean;
 };
@@ -295,6 +296,11 @@ export function orderNeedsFromInfo(
     "amazonMcfTraUpdates",
   ]);
 
+  const wantsSubscriptionFlags = hasAny(nodeFields, [
+    "hasSubscriptions",
+    "isSubscriptionOrder",
+  ]);
+
   return {
     addresses: hasAny(nodeFields, ["billing", "shipping"]),
     lineItems: nodeFields.some((f) => f.name.value === "lineItems"),
@@ -304,7 +310,11 @@ export function orderNeedsFromInfo(
     shippingLines: nodeFields.some((f) => f.name.value === "shippingLines"),
     taxLines: nodeFields.some((f) => f.name.value === "taxLines"),
     couponLines: nodeFields.some((f) => f.name.value === "couponLines"),
-    meta: wantsMcf || hasAny(nodeFields, ["transactionId"]),
+    meta:
+      wantsMcf ||
+      hasAny(nodeFields, ["transactionId"]) ||
+      wantsSubscriptionFlags,
+    subscriptionFlags: wantsSubscriptionFlags,
     // Live Amazon refresh only for single-order selections (not list `nodes`).
     refreshMcf: wantsMcf && path[path.length - 1] !== "nodes",
   };
