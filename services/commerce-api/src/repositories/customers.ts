@@ -6,6 +6,7 @@ import {
   findUserById,
   updateUserPassword,
 } from "../auth/index.js";
+import { getRedis } from "../redis/client.js";
 import { toGlobalId } from "../utils/index.js";
 import {
   addressFromCustomerMeta,
@@ -269,6 +270,40 @@ export async function requestWpEmailVerification(
   }
 
   return { success: true };
+}
+
+function emailVerificationResendKey(userId: number): string {
+  return `email-verification-resend:${userId}`;
+}
+
+/**
+ * Re-send verification email with a per-user cooldown (see
+ * EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS).
+ */
+export async function requestWpEmailVerificationResend(
+  userId: number,
+): Promise<{ success: boolean }> {
+  const { loadConfig } = await import("../config.js");
+  const cfg = loadConfig();
+  const cooldownSec = cfg.EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS;
+  const redis = getRedis();
+  const key = emailVerificationResendKey(userId);
+
+  const acquired = await redis.set(key, "1", "EX", cooldownSec, "NX");
+  if (acquired !== "OK") {
+    const ttl = await redis.ttl(key);
+    const wait = ttl > 0 ? ttl : cooldownSec;
+    throw new Error(
+      `Please wait ${wait} seconds before requesting another verification email.`,
+    );
+  }
+
+  try {
+    return await requestWpEmailVerification(userId);
+  } catch (err) {
+    await redis.del(key);
+    throw err;
+  }
 }
 
 /**

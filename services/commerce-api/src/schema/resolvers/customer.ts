@@ -26,6 +26,7 @@ import {
   requestWpPasswordReset,
   confirmWpPasswordReset,
   requestWpEmailVerification,
+  requestWpEmailVerificationResend,
   confirmWpEmailVerification,
   updateCustomerProfile,
 } from "../../repositories/customers.js";
@@ -380,7 +381,7 @@ export const customerResolvers = {
           success: true,
         };
       }
-      await requestWpEmailVerification(userId);
+      await requestWpEmailVerificationResend(userId);
       return {
         clientMutationId: input?.clientMutationId ?? null,
         success: true,
