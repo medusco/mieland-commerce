@@ -555,7 +555,8 @@ async function getVariationsMany(
      FROM ${t("posts")}
      WHERE post_parent IN (${placeholders})
        AND post_type = 'product_variation'
-       AND post_status IN ('publish','private')
+       -- Woo "Enabled" unchecked => post_status private; only publish is purchasable.
+       AND post_status = 'publish'
      ORDER BY menu_order ASC, ID ASC`,
     parentIds,
   );

@@ -25,8 +25,11 @@ import {
   getCustomer,
   requestWpPasswordReset,
   confirmWpPasswordReset,
+  requestWpEmailVerification,
+  confirmWpEmailVerification,
   updateCustomerProfile,
 } from "../../repositories/customers.js";
+import { isEmailVerified } from "../../auth/index.js";
 import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
 import { listCustomerOrders, getOrderById, getOrderMcfTraUpdates } from "../../repositories/orders.js";
 import { bindCartToCustomer, loadCart, mutateCart } from "../../engine/cart-store.js";
@@ -104,14 +107,22 @@ export const customerResolvers = {
   },
   Customer: {
     orders: async (
-      parent: { databaseId: number },
+      parent: { databaseId: number; email?: string | null; emailConfirmed?: boolean },
       _: unknown,
       ctx: AppContext,
       info: GraphQLResolveInfo,
     ) => {
       const userId = requireUser(ctx);
       if (parent.databaseId !== userId) throw new Error("Not authorized");
-      return listCustomerOrders(userId, orderListNeedsFromInfo(info));
+      const emailConfirmed =
+        parent.emailConfirmed ?? (await isEmailVerified(userId));
+      const customer = parent.email
+        ? parent
+        : await getCustomer(userId, ctx.sessionToken);
+      return listCustomerOrders(userId, orderListNeedsFromInfo(info), {
+        includeGuestOrders: emailConfirmed,
+        email: customer?.email ?? parent.email ?? null,
+      });
     },
   },
   Order: {
@@ -174,6 +185,10 @@ export const customerResolvers = {
           : input.shipping;
 
       if (userId != null) {
+        const emailChanged =
+          input.email &&
+          (await getCustomer(userId, ctx.sessionToken))?.email?.toLowerCase() !==
+            input.email.toLowerCase();
         await updateCustomerProfile(userId, {
           firstName: input.firstName,
           lastName: input.lastName,
@@ -183,6 +198,13 @@ export const customerResolvers = {
           shipping,
           shippingSameAsBilling: input.shippingSameAsBilling,
         });
+        if (emailChanged) {
+          try {
+            await requestWpEmailVerification(userId);
+          } catch {
+            // Profile saved; verification email is best-effort.
+          }
+        }
         await mutateCart(ctx.sessionToken, async (cart) => {
           if (billing) {
             cart.billing = { ...cart.billing, ...mapAddress(billing) };
@@ -264,6 +286,12 @@ export const customerResolvers = {
       }
       await bindCartToCustomer(ctx.sessionToken, user.id);
 
+      try {
+        await requestWpEmailVerification(user.id);
+      } catch {
+        // Account created; verification email is best-effort.
+      }
+
       let wpSession: string | null = null;
       let wpRefresh: string | null = null;
       if (input.authenticate !== false) {
@@ -336,6 +364,59 @@ export const customerResolvers = {
         token: result.token,
         login: result.login,
         user: result.user,
+      };
+    },
+
+    sendEmailVerification: async (
+      _: unknown,
+      { input }: { input?: { clientMutationId?: string } },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const verified = await isEmailVerified(userId);
+      if (verified) {
+        return {
+          clientMutationId: input?.clientMutationId ?? null,
+          success: true,
+        };
+      }
+      await requestWpEmailVerification(userId);
+      return {
+        clientMutationId: input?.clientMutationId ?? null,
+        success: true,
+      };
+    },
+
+    confirmCustomerEmail: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input: {
+          key: string;
+          login?: string | null;
+          email?: string | null;
+          id?: string | number | null;
+          clientMutationId?: string;
+        };
+      },
+    ) => {
+      const login = input.login?.trim() || null;
+      const email = input.email?.trim() || null;
+      const id = input.id ?? null;
+      if (!login && !email && (id === null || id === undefined || id === "")) {
+        throw new Error("Provide login, email, or id with the verification key.");
+      }
+      const result = await confirmWpEmailVerification({
+        key: input.key,
+        login,
+        email,
+        id,
+      });
+      return {
+        clientMutationId: input.clientMutationId,
+        success: result.success,
+        login: result.login,
       };
     },
 

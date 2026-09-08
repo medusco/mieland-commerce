@@ -1,4 +1,5 @@
 import { query, queryOne, t } from "../db/mysql.js";
+import { findUserById, isEmailVerified } from "../auth/index.js";
 import { getProductNodes, getAttachmentUrl, getPostMeta } from "./products.js";
 import { toGlobalId } from "../utils/index.js";
 import type { OrderListNeeds } from "../utils/selection.js";
@@ -624,6 +625,7 @@ export async function listCustomerOrders(
     subscriptionFlags: false,
     refreshMcf: false,
   },
+  options?: { includeGuestOrders?: boolean; email?: string | null },
 ) {
   const rows = await query<
     {
@@ -653,7 +655,56 @@ export async function listCustomerOrders(
     [customerId],
   );
 
-  const nodes = rows.map((row) => leanOrderNode(row));
+  let merged = rows;
+  if (options?.includeGuestOrders && options.email) {
+    const normalized = options.email.trim().toLowerCase();
+    if (normalized) {
+      const guestRows = await query<
+        {
+          id: number;
+          status: string;
+          currency: string;
+          total_amount: string;
+          tax_amount: string;
+          payment_method: string;
+          payment_method_title: string;
+          transaction_id: string;
+          date_created_gmt: Date | string;
+          shipping_total_amount: string | null;
+          date_paid_gmt: Date | string | null;
+          order_key: string | null;
+        }[]
+      >(
+        `SELECT o.id, o.status, o.currency, o.total_amount, o.tax_amount,
+                o.payment_method, o.payment_method_title, o.transaction_id,
+                o.date_created_gmt,
+                ops.shipping_total_amount, ops.date_paid_gmt, ops.order_key
+         FROM ${t("wc_orders")} o
+         LEFT JOIN ${t("wc_order_operational_data")} ops ON ops.order_id = o.id
+         INNER JOIN ${t("wc_order_addresses")} a
+           ON a.order_id = o.id AND a.address_type = 'billing'
+         WHERE o.customer_id = 0
+           AND o.type = 'shop_order'
+           AND LOWER(a.email) = ?
+         ORDER BY o.date_created_gmt DESC
+         LIMIT 50`,
+        [normalized],
+      );
+      const seen = new Set(rows.map((row) => row.id));
+      merged = [
+        ...rows,
+        ...guestRows.filter((row) => !seen.has(row.id)),
+      ]
+        .sort(
+          (a, b) =>
+            new Date(b.date_created_gmt).getTime() -
+            new Date(a.date_created_gmt).getTime(),
+        )
+        .slice(0, 50);
+    }
+  }
+
+  const nodes = merged.map((row) => leanOrderNode(row));
   if (!nodes.length) return { nodes };
 
   const ids = nodes.map((n) => n.databaseId);
@@ -919,7 +970,22 @@ export async function getOrderById(
       `SELECT customer_id FROM ${t("wc_orders")} WHERE id = ?`,
       [id],
     );
-    if (row && Number(row.customer_id) !== customerId) return null;
+    if (row && Number(row.customer_id) !== customerId) {
+      if (Number(row.customer_id) === 0) {
+        const user = await findUserById(customerId);
+        const verified = user ? await isEmailVerified(customerId) : false;
+        if (!user || !verified) return null;
+        const billing = await orderAddress(id, "billing");
+        if (
+          !billing?.email ||
+          billing.email.toLowerCase() !== user.email.toLowerCase()
+        ) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
   }
   return order;
 }

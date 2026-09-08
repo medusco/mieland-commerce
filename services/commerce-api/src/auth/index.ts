@@ -424,10 +424,31 @@ export async function createUser(input: {
     'a:1:{s:8:"customer";b:1;}',
   );
   await setUserMeta(insertId, `${loadConfig().tablePrefix}user_level`, "0");
+  await setUserMeta(insertId, "mieland_email_verified", "0");
 
   const created = await findUserById(insertId);
   if (!created) throw new Error("Failed to create user");
   return created;
+}
+
+export const EMAIL_VERIFIED_META = "mieland_email_verified";
+
+export async function getUserMeta(
+  userId: number,
+  key: string,
+): Promise<string | null> {
+  const row = await queryOne<{ meta_value: string }>(
+    `SELECT meta_value FROM ${t("usermeta")} WHERE user_id = ? AND meta_key = ? LIMIT 1`,
+    [userId, key],
+  );
+  return row?.meta_value ?? null;
+}
+
+/** Accounts without the meta key predate verification and are treated as confirmed. */
+export async function isEmailVerified(userId: number): Promise<boolean> {
+  const value = await getUserMeta(userId, EMAIL_VERIFIED_META);
+  if (value === null || value === "") return true;
+  return value === "1" || value === "true";
 }
 
 export async function setUserMeta(

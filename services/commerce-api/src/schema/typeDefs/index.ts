@@ -529,6 +529,10 @@ export const typeDefs = /* GraphQL */ `
     lastName: String
     username: String
     sessionToken: String
+    """True when the account email has been confirmed."""
+    emailConfirmed: Boolean
+    """True when guest checkout orders exist for this email (may merge after confirmation)."""
+    hasGuestOrders: Boolean
     billing: CustomerAddress
     shipping: CustomerAddress
     orders: OrderConnection
@@ -948,6 +952,22 @@ export const typeDefs = /* GraphQL */ `
     username: String!
   }
 
+  input SendEmailVerificationInput {
+    clientMutationId: String
+  }
+
+  input ConfirmCustomerEmailInput {
+    clientMutationId: String
+    """Verification key from the confirmation email."""
+    key: String!
+    """WordPress user_login (preferred)."""
+    login: String
+    """Alternate identity when login is absent."""
+    email: String
+    """WooCommerce-style numeric user id when login is absent."""
+    id: ID
+  }
+
   input ResetUserPasswordInput {
     clientMutationId: String
     """Reset key from the lost-password email."""
@@ -1084,6 +1104,17 @@ export const typeDefs = /* GraphQL */ `
     clientMutationId: String
   }
 
+  type SendEmailVerificationPayload {
+    success: Boolean
+    clientMutationId: String
+  }
+
+  type ConfirmCustomerEmailPayload {
+    success: Boolean
+    login: String
+    clientMutationId: String
+  }
+
   type LoginPayload {
     authToken: String
     authTokenExpiration: String
@@ -1197,6 +1228,15 @@ export const typeDefs = /* GraphQL */ `
     updateCustomer(input: UpdateCustomerInput!): UpdateCustomerPayload
     registerCustomer(input: RegisterCustomerInput!): RegisterCustomerPayload
     sendPasswordResetEmail(input: SendPasswordResetEmailInput!): SendPasswordResetEmailPayload
+    """
+    Re-send the account email-confirmation link for the authenticated customer.
+    """
+    sendEmailVerification(input: SendEmailVerificationInput): SendEmailVerificationPayload
+    """
+    Confirm the account email using the key from the verification email.
+    Provide login, or email, or numeric user id.
+    """
+    confirmCustomerEmail(input: ConfirmCustomerEmailInput!): ConfirmCustomerEmailPayload
     """
     Set a new password using the key from the lost-password email.
     Provide login, or email, or numeric user id.
