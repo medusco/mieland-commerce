@@ -1067,6 +1067,10 @@ export const typeDefs = /* GraphQL */ `
     refreshToken: String
     customer: Customer
     clientMutationId: String
+    """URI-encoded WP auth cookie value for cross-origin clients."""
+    wpSession: String
+    """URI-encoded WP Headless Login refresh token for cross-origin clients."""
+    wpRefresh: String
   }
 
   type SendPasswordResetEmailPayload {

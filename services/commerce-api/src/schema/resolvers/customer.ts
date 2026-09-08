@@ -263,6 +263,56 @@ export const customerResolvers = {
         });
       }
       await bindCartToCustomer(ctx.sessionToken, user.id);
+
+      let wpSession: string | null = null;
+      let wpRefresh: string | null = null;
+      if (input.authenticate !== false) {
+        const origin =
+          ctx.req.headers.get("origin") ||
+          ctx.req.headers.get("Origin") ||
+          null;
+        const wp = await wpGraphqlLogin({
+          provider: "password",
+          credentials: {
+            username: input.email,
+            password: input.password,
+          },
+          origin,
+        });
+        if (!wp.cookieHeader) {
+          throw new Error(
+            "WordPress login did not return an auth cookie — enable “Set authentication cookie” on the Headless Login provider",
+          );
+        }
+        const policy = resolveWpCookiePolicy(ctx.req);
+        const setCookie = buildWpAuthSetCookie(
+          wp.cookieHeader,
+          wp.cookieTtlSeconds,
+          { policy },
+        );
+        const headerValue = wpAuthHeaderValue(wp.cookieHeader);
+        ctx.pendingWpAuthSetCookie = setCookie;
+        if (ctx.requestScopeId) {
+          setPendingWpAuthSetCookie(
+            ctx.requestScopeId,
+            setCookie,
+            headerValue,
+          );
+          if (wp.refreshToken) {
+            scheduleWpRefreshSetCookie(
+              ctx.requestScopeId,
+              ctx.req,
+              wp.refreshToken,
+              wp.refreshTokenExpiration,
+            );
+          }
+        }
+        wpSession = headerValue;
+        wpRefresh = wp.refreshToken
+          ? wpRefreshHeaderValue(wp.refreshToken)
+          : null;
+      }
+
       const tokens =
         input.authenticate !== false ? await issueTokens(user) : null;
       return {
@@ -270,6 +320,8 @@ export const customerResolvers = {
         authToken: tokens?.authToken ?? null,
         refreshToken: tokens?.refreshToken ?? null,
         customer: await getCustomer(user.id, ctx.sessionToken),
+        wpSession,
+        wpRefresh,
       };
     },
 
