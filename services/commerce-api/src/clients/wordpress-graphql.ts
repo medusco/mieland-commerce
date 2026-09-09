@@ -43,13 +43,14 @@ export type WpGraphqlRefreshResult = {
   cookieTtlSeconds: number;
 };
 
-type GraphqlError = { message?: string };
+type GraphqlError = { message?: string; path?: (string | number)[] };
 
 type GraphqlEnvelope<T> = {
   data?: T;
   errors?: GraphqlError[];
 };
 
+// Commerce loads customer from MySQL — omit WP `customer` (often breaks after WC/plugin changes).
 const LOGIN_MUTATION = `
 mutation Login($input: LoginInput!) {
   login(input: $input) {
@@ -58,15 +59,6 @@ mutation Login($input: LoginInput!) {
     refreshToken
     refreshTokenExpiration
     sessionToken
-    customer {
-      email
-      firstName
-      databaseId
-      id
-      lastName
-      username
-      sessionToken
-    }
     user {
       id
       databaseId
@@ -212,6 +204,18 @@ function firstGraphqlError(errors: GraphqlError[] | undefined): string {
   return msg || "WordPress login failed";
 }
 
+function summarizeGraphqlErrors(errors: GraphqlError[] | undefined): string {
+  if (!errors?.length) return "";
+  return errors
+    .slice(0, 3)
+    .map((e) => {
+      const path =
+        e.path?.length ? e.path.map(String).join(".") : "unknown";
+      return `${path}: ${e.message ?? "error"}`;
+    })
+    .join("; ");
+}
+
 async function postGraphql<T>(
   query: string,
   variables: Record<string, unknown>,
@@ -260,6 +264,7 @@ async function postGraphql<T>(
     ms: Date.now() - started,
     hasSetCookie: setCookies.length > 0,
     hasErrors: Boolean(body.errors?.length),
+    errorSummary: summarizeGraphqlErrors(body.errors),
     hasOrigin: Boolean(origin),
   });
   if (!res.ok && !body.data) {
@@ -314,48 +319,68 @@ export async function wpGraphqlLogin(input: {
       refreshTokenExpiration?: string | null;
       sessionToken?: string | null;
       user?: WpGraphqlLoginUser | null;
-      customer?: WpGraphqlLoginResult["customer"];
     } | null;
   }>(LOGIN_MUTATION, { input: loginInput }, "wp_graphql_login", {
     origin: input.origin,
   });
 
-  if (body.errors?.length && !body.data?.login?.authToken) {
-    const msg = firstGraphqlError(body.errors);
-    if (/invalid|incorrect|password|credentials|unauthorized/i.test(msg)) {
-      throw new Error("Invalid username or password");
-    }
-    throw new Error(msg);
-  }
-
-  const login = body.data?.login;
-  if (!login?.authToken) {
-    throw new Error(firstGraphqlError(body.errors));
-  }
-
-  const user = login.user;
-  const customer = login.customer ?? null;
-  const databaseId = requireUserId(user ?? undefined, customer);
+  const login = body.data?.login ?? null;
   const { cookieHeader, ttlSeconds } = parseAuthCookiesFromSetCookie(setCookies);
+  const user = login?.user ?? null;
 
-  return {
-    authToken: login.authToken,
-    authTokenExpiration: login.authTokenExpiration ?? null,
-    refreshToken: login.refreshToken ?? null,
-    refreshTokenExpiration: login.refreshTokenExpiration ?? null,
-    sessionToken: login.sessionToken ?? null,
+  const buildResult = (
+    databaseId: number,
+    authToken: string,
+  ): WpGraphqlLoginResult => ({
+    authToken,
+    authTokenExpiration: login?.authTokenExpiration ?? null,
+    refreshToken: login?.refreshToken ?? null,
+    refreshTokenExpiration: login?.refreshTokenExpiration ?? null,
+    sessionToken: login?.sessionToken ?? null,
     user: {
       databaseId,
       id: user?.id ?? null,
-      email: user?.email ?? customer?.email ?? null,
-      firstName: user?.firstName ?? customer?.firstName ?? null,
-      lastName: user?.lastName ?? customer?.lastName ?? null,
-      username: user?.username ?? customer?.username ?? null,
+      email: user?.email ?? null,
+      firstName: user?.firstName ?? null,
+      lastName: user?.lastName ?? null,
+      username: user?.username ?? null,
     },
-    customer,
+    customer: null,
     cookieHeader,
     cookieTtlSeconds: ttlSeconds,
-  };
+  });
+
+  if (login?.authToken) {
+    const databaseId = requireUserId(user ?? undefined, undefined);
+    return buildResult(databaseId, login.authToken);
+  }
+
+  // WP often sets auth cookies even when the login payload errors (e.g. broken
+  // customer field). Commerce mints its own JWTs — recover via viewer + cookies.
+  if (cookieHeader) {
+    const viewerId = await wpGraphqlViewerDatabaseId(
+      cookieHeader,
+      input.origin,
+    );
+    if (viewerId) {
+      logJson("warn", {
+        msg: "wp_graphql_login_cookie_fallback",
+        viewerId,
+        errorSummary: summarizeGraphqlErrors(body.errors),
+      });
+      return buildResult(viewerId, "");
+    }
+  }
+
+  const msg = firstGraphqlError(body.errors);
+  if (/invalid|incorrect|password|credentials|unauthorized/i.test(msg)) {
+    throw new Error("Invalid username or password");
+  }
+  throw new Error(
+    cookieHeader
+      ? "WordPress login set a session cookie but did not return a user — check WPGraphQL Headless Login"
+      : msg,
+  );
 }
 
 export async function wpGraphqlRefreshToken(

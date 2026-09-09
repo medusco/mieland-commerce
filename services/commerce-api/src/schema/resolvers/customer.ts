@@ -51,7 +51,7 @@ function rethrowLoginError(err: unknown): never {
   if (err instanceof GraphQLError) throw err;
   const message = err instanceof Error ? err.message : String(err);
   if (
-    /invalid username|credentials required|provider .* disabled|not supported|auth cookie|jwt secret|wordpress login/i.test(
+    /invalid username|credentials required|provider .* disabled|not supported|auth cookie|jwt secret|wordpress login|headless login/i.test(
       message,
     )
   ) {
