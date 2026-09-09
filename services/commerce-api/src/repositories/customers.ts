@@ -7,7 +7,7 @@ import {
   updateUserPassword,
 } from "../auth/index.js";
 import { getRedis } from "../redis/client.js";
-import { toGlobalId } from "../utils/index.js";
+import { logJson, toGlobalId } from "../utils/index.js";
 import {
   addressFromCustomerMeta,
   getUserAddressMeta,
@@ -17,18 +17,24 @@ import type { CartAddress } from "../engine/types.js";
 export async function hasGuestOrdersForEmail(email: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase();
   if (!normalized) return false;
-  const row = await queryOne<{ found: number }>(
-    `SELECT 1 AS found
-     FROM ${t("wc_orders")} o
-     INNER JOIN ${t("wc_order_addresses")} a
-       ON a.order_id = o.id AND a.address_type = 'billing'
-     WHERE o.customer_id = 0
-       AND o.type = 'shop_order'
-       AND LOWER(a.email) = ?
-     LIMIT 1`,
-    [normalized],
-  );
-  return Boolean(row?.found);
+  try {
+    const row = await queryOne<{ found: number }>(
+      `SELECT 1 AS found
+       FROM ${t("wc_orders")} o
+       WHERE o.customer_id = 0
+         AND o.type = 'shop_order'
+         AND LOWER(o.billing_email) = ?
+       LIMIT 1`,
+      [normalized],
+    );
+    return Boolean(row?.found);
+  } catch (err) {
+    logJson("warn", {
+      msg: "has_guest_orders_lookup_failed",
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 export async function getCustomer(userId: number, sessionToken?: string) {

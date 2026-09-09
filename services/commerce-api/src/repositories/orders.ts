@@ -681,11 +681,9 @@ export async function listCustomerOrders(
                 ops.shipping_total_amount, ops.date_paid_gmt, ops.order_key
          FROM ${t("wc_orders")} o
          LEFT JOIN ${t("wc_order_operational_data")} ops ON ops.order_id = o.id
-         INNER JOIN ${t("wc_order_addresses")} a
-           ON a.order_id = o.id AND a.address_type = 'billing'
          WHERE o.customer_id = 0
            AND o.type = 'shop_order'
-           AND LOWER(a.email) = ?
+           AND LOWER(o.billing_email) = ?
          ORDER BY o.date_created_gmt DESC
          LIMIT 50`,
         [normalized],

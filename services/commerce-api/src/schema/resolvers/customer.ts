@@ -34,16 +34,31 @@ import { isEmailVerified } from "../../auth/index.js";
 import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
 import { listCustomerOrders, getOrderById, getOrderMcfTraUpdates } from "../../repositories/orders.js";
 import { bindCartToCustomer, loadCart, mutateCart } from "../../engine/cart-store.js";
-import { parseDatabaseId } from "../../utils/index.js";
+import { logJson, parseDatabaseId } from "../../utils/index.js";
 import {
   orderListNeedsFromInfo,
   orderNeedsFromInfo,
 } from "../../utils/selection.js";
 import type { CartAddress } from "../../engine/types.js";
-import type { GraphQLResolveInfo } from "graphql";
+import { GraphQLError, type GraphQLResolveInfo } from "graphql";
 
 function truthy(v: unknown): boolean {
   return v === true || v === 1 || v === "1" || v === "true" || v === "yes";
+}
+
+/** Re-throw safe auth/config errors so production masking does not hide them. */
+function rethrowLoginError(err: unknown): never {
+  if (err instanceof GraphQLError) throw err;
+  const message = err instanceof Error ? err.message : String(err);
+  if (
+    /invalid username|credentials required|provider .* disabled|not supported|auth cookie|jwt secret|wordpress login/i.test(
+      message,
+    )
+  ) {
+    throw new GraphQLError(message);
+  }
+  logJson("error", { msg: "login_failed", err: message });
+  throw err;
 }
 
 function mapAddress(
@@ -489,6 +504,7 @@ export const customerResolvers = {
       },
       ctx: AppContext,
     ) => {
+      try {
       const provider = String(input.provider).toLowerCase();
       const settings = await loadProvider(provider);
       if (provider !== "password" && provider !== "google") {
@@ -587,6 +603,9 @@ export const customerResolvers = {
           ? wpRefreshHeaderValue(wp.refreshToken)
           : null,
       };
+      } catch (err) {
+        rethrowLoginError(err);
+      }
     },
 
     syncWordPressSession: async (
