@@ -467,6 +467,7 @@ async function shapeProductsLean(
           __typename: isVariable ? "VariableProduct" : "SimpleProduct",
           id: toGlobalId("product", row.ID),
           databaseId: row.ID,
+          _acfMeta: meta,
           name: row.post_title,
           slug: row.post_name,
           uri: `/product/${row.post_name}/`,
@@ -576,6 +577,7 @@ async function getVariationsMany(
     const list = out.get(r.post_parent) ?? [];
     list.push({
       databaseId: r.ID,
+      _acfMeta: meta,
       name: r.post_title,
       menuOrder: r.menu_order,
       price: meta._price ?? "",
@@ -694,6 +696,7 @@ async function shapeProducts(
       __typename: isVariable ? "VariableProduct" : "SimpleProduct",
       id: toGlobalId("product", row.ID),
       databaseId: row.ID,
+      _acfMeta: meta,
       name: row.post_title,
       slug: row.post_name,
       uri: `/product/${row.post_name}/`,
@@ -825,6 +828,7 @@ export async function getProductNodes(
       const imageId = Number(meta._thumbnail_id || 0);
       shapedById.set(row.ID, {
         databaseId: row.ID,
+        _acfMeta: meta,
         name: row.post_title,
         image:
           hydrateNeeds.images && imageId

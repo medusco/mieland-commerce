@@ -343,7 +343,11 @@ export function logAcfSchemaBuild(summary: AcfSchemaBuildSummary): void {
 }
 
 function productAcfFieldResolver(group: AcfGraphqlGroup) {
-  return async (product: { databaseId?: number; [key: string]: unknown }) => {
+  return async (product: {
+    databaseId?: number;
+    _acfMeta?: Record<string, string>;
+    [key: string]: unknown;
+  }) => {
     const id = product.databaseId;
     if (!id) return null;
 
@@ -351,7 +355,9 @@ function productAcfFieldResolver(group: AcfGraphqlGroup) {
       return product[group.graphqlFieldName];
     }
 
-    const meta = await getPostMeta(id);
+    const meta =
+      product._acfMeta ??
+      (await getPostMeta(id));
     return shapeAcfGroupFields(meta, group);
   };
 }

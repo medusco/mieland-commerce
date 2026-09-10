@@ -297,6 +297,10 @@ async function shapePostRow(row: PostRow, batch: PostBatchContext) {
     };
   }
 
+  if (Object.keys(meta).length) {
+    node._acfMeta = meta;
+  }
+
   return node;
 }
 
@@ -418,13 +422,15 @@ export async function listProductCategories(first = 100) {
   return { nodes: rows };
 }
 
-async function pageRowToRecord(row: {
-  ID: number;
-  post_title: string;
-  post_name: string;
-  post_content: string;
-}): Promise<PageRecord> {
-  const meta = await getPostMeta(row.ID);
+function pageRowToRecord(
+  row: {
+    ID: number;
+    post_title: string;
+    post_name: string;
+    post_content: string;
+  },
+  meta: Record<string, string>,
+): PageRecord {
   const templateFile = meta._wp_page_template || "default";
   return {
     databaseId: row.ID,
@@ -482,8 +488,11 @@ export async function listPages(
      ORDER BY post_title ASC LIMIT ?`,
     [first],
   );
+  const metaByPageId = await getPostMetaMany(rows.map((r) => r.ID));
   const nodes: PageRecord[] = [];
-  for (const r of rows) nodes.push(await pageRowToRecord(r));
+  for (const r of rows) {
+    nodes.push(pageRowToRecord(r, metaByPageId.get(r.ID) ?? {}));
+  }
   const templateFilter = where?.templateName?.trim().toLowerCase();
   const filtered = templateFilter
     ? nodes.filter((page) => page.templateName.trim().toLowerCase() === templateFilter)
@@ -503,7 +512,9 @@ export async function getPageByUri(uri: string) {
      WHERE post_type = 'page' AND post_name = ? AND post_status = 'publish' LIMIT 1`,
     [slug],
   );
-  return row ? pageRowToRecord(row) : null;
+  if (!row) return null;
+  const meta = await getPostMeta(row.ID);
+  return pageRowToRecord(row, meta);
 }
 
 export async function shapePageTemplate(page: PageRecord) {
@@ -731,9 +742,10 @@ export async function searchLabResults(lotNumber: string) {
      LIMIT 20`,
     [trimmed, `%${trimmed}%`, trimmed],
   );
+  const metaByPostId = await getPostMetaMany(rows.map((r) => r.ID));
   const nodes = [];
   for (const r of rows) {
-    const meta = await getPostMeta(r.ID);
+    const meta = metaByPostId.get(r.ID) ?? {};
     const productId = resolveAttachedProductId(meta);
     const product = productId ? await getProductNode(productId) : null;
     const reports = await shapeLabReports(meta);
