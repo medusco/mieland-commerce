@@ -139,6 +139,14 @@ const envSchema = z.object({
     z.coerce.number().default(60),
   ),
   DISABLE_INTROSPECTION: boolFromEnv,
+  /**
+   * Cart sales-tax preview: `taxcloud` calls WP mieland/v1/cart-tax (TaxCloud/SST);
+   * `woocommerce` uses hy_woocommerce_tax_rates tables in MySQL.
+   */
+  CART_TAX_PROVIDER: z.preprocess(
+    emptyToUndefined,
+    z.enum(["taxcloud", "woocommerce"]).default("woocommerce"),
+  ),
   SENTRY_DSN: z.preprocess(emptyToUndefined, z.string().optional()),
   SENTRY_ENVIRONMENT: z.preprocess(emptyToUndefined, z.string().optional()),
   SENTRY_TRACES_SAMPLE_RATE: z.preprocess(

@@ -31,7 +31,7 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 ### Mutations
 \`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`calculateCartTax\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`createPayPalOrder\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`, \`writeReview\`
 
-\`Cart.totalTax\` / \`calculateCartTax\` preview US sales tax via the WordPress TaxCloud bridge when a complete delivery address is on the cart (WC still recalculates on place order).
+\`Cart.totalTax\` / \`calculateCartTax\` preview US sales tax when a complete delivery address is on the cart (\`CART_TAX_PROVIDER=taxcloud\` uses the WordPress TaxCloud bridge; \`woocommerce\` uses WooCommerce tax rate tables in MySQL). WC still recalculates on place order.
 
 Query helpers: \`paypalSettings\` (public PayPal client id for Smart Buttons).
 

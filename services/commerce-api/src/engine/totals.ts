@@ -26,8 +26,11 @@ import {
 } from "../repositories/products.js";
 import {
   fetchCartTax,
+  type CartTaxRequest,
   type CartTaxResponse,
 } from "../clients/mieland-wp-bridge.js";
+import { loadConfig } from "../config.js";
+import { calculateWooCommerceCartTax } from "./wc-tax.js";
 import { moneyStr, roundMoney } from "../utils/index.js";
 
 export type CartTotalsMode = "lightweight" | "full";
@@ -93,8 +96,8 @@ export type CalculateCartOptions = {
   /** Logged-in user id — passed through for callers; email checks run at checkout. */
   userId?: number | null;
   /**
-   * Call WP cart-tax bridge (TaxCloud). Defaults to true in full mode when
-   * destination address is complete. Set false to skip (e.g. shipping-only).
+   * Sales-tax preview (TaxCloud bridge or WooCommerce rates — see CART_TAX_PROVIDER).
+   * Defaults to true in full mode when destination address is complete.
    */
   calculateTax?: boolean;
   /** Override destination for tax preview (does not mutate cart). */
@@ -203,7 +206,16 @@ function taxAddressComplete(addr: CartAddress): boolean {
   return TAX_ADDRESS_FIELDS.every((f) => Boolean(addr[f]?.trim()));
 }
 
-/** Refuse checkout when TaxCloud preview did not succeed for the cart address. */
+async function previewCartTax(
+  body: CartTaxRequest,
+): Promise<CartTaxResponse | null> {
+  if (loadConfig().CART_TAX_PROVIDER === "woocommerce") {
+    return calculateWooCommerceCartTax(body);
+  }
+  return fetchCartTax(body);
+}
+
+/** Refuse checkout when the tax preview did not succeed for the cart address. */
 export function assertCheckoutTaxCalculated(
   cart: CartState,
   calculated: CalculatedCart,
@@ -440,7 +452,7 @@ export async function calculateCart(
           ? options.taxShippingCost
           : shippingTotal;
 
-      const bridge = await fetchCartTax({
+      const bridge = await previewCartTax({
         items: displayLines.map((line) => ({
           productId: line.productId,
           variationId: line.variationId ?? 0,
