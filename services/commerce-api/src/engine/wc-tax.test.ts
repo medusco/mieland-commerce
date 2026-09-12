@@ -71,6 +71,18 @@ describe("findMatchedTaxRates", () => {
       tax_rate_order: 0,
       tax_rate_class: "",
     },
+    {
+      tax_rate_id: 4,
+      tax_rate_country: "US",
+      tax_rate_state: "CA",
+      tax_rate: "2.5",
+      tax_rate_name: "CA No-Ship Tax",
+      tax_rate_priority: 3,
+      tax_rate_compound: 0,
+      tax_rate_shipping: 0,
+      tax_rate_order: 0,
+      tax_rate_class: "",
+    },
   ];
 
   const locationsByRateId = new Map<number, WooTaxRateLocationRow[]>();
@@ -86,10 +98,10 @@ describe("findMatchedTaxRates", () => {
         taxClass: "",
       },
     );
-    assert.equal(matched.length, 2);
+    assert.equal(matched.length, 3);
     assert.deepEqual(
       matched.map((r) => r.rateId),
-      [1, 2],
+      [1, 2, 4],
     );
   });
 
@@ -105,6 +117,25 @@ describe("findMatchedTaxRates", () => {
       },
     );
     assert.equal(matched.length, 0);
+  });
+
+  it("filters shipping-enabled rates correctly", () => {
+    const matched = findMatchedTaxRates(
+      { rates, locationsByRateId },
+      {
+        country: "US",
+        state: "CA",
+        postcode: "90210",
+        city: "Beverly Hills",
+        taxClass: "",
+      },
+    );
+    const shippingRates = matched.filter((r) => r.shipping);
+    assert.equal(shippingRates.length, 2);
+    assert.deepEqual(
+      shippingRates.map((r) => r.rateId),
+      [1, 2],
+    );
   });
 });
 
@@ -173,5 +204,65 @@ describe("calcExclusiveTax", () => {
     ];
     assert.equal(calcExclusiveTax(0, rates).size, 0);
     assert.equal(calcExclusiveTax(-10, rates).size, 0);
+  });
+
+  it("applies only shipping-enabled rates to shipping cost", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 10,
+        label: "State (ships)",
+        shipping: true,
+        compound: false,
+      },
+      {
+        rateId: 2,
+        rate: 5,
+        label: "Local (no ship)",
+        shipping: false,
+        compound: false,
+      },
+    ];
+    const shippingRates = rates.filter((r) => r.shipping);
+    const taxes = calcExclusiveTax(20, shippingRates);
+    assert.equal(taxes.get(1), 2);
+    assert.equal(taxes.has(2), false);
+  });
+
+  it("calculates zero shipping tax when no rates have shipping enabled", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 10,
+        label: "No Ship",
+        shipping: false,
+        compound: false,
+      },
+    ];
+    const shippingRates = rates.filter((r) => r.shipping);
+    const taxes = calcExclusiveTax(20, shippingRates);
+    assert.equal(taxes.size, 0);
+  });
+
+  it("applies multiple shipping-enabled rates to shipping cost", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 7.25,
+        label: "State",
+        shipping: true,
+        compound: false,
+      },
+      {
+        rateId: 2,
+        rate: 1.0,
+        label: "County",
+        shipping: true,
+        compound: false,
+      },
+    ];
+    const taxes = calcExclusiveTax(100, rates);
+    assert.equal(taxes.get(1), 7.25);
+    assert.equal(taxes.get(2), 1);
   });
 });
