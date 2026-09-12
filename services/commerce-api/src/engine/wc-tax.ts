@@ -337,6 +337,8 @@ export async function calculateWooCommerceCartTax(
     });
   }
 
+  // Shipping tax is data-driven: only rates with tax_rate_shipping=1 apply to shipping cost.
+  // contentsTax is the sum of line taxes only; shippingTax is calculated separately.
   let shippingTax = 0;
   if (shippingCost > 0) {
     const shipClass = await shippingTaxClassSlug();
