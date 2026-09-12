@@ -336,6 +336,8 @@ export const typeDefs = /* GraphQL */ `
     lineTotal: String
     lineTax: String
     name: String
+    taxStatus: String
+    taxClass: String
   }
 
   type CartTaxRateTotal {
