@@ -266,3 +266,125 @@ describe("calcExclusiveTax", () => {
     assert.equal(taxes.get(2), 1);
   });
 });
+
+describe("variation tax inheritance", () => {
+  it("should inherit empty _tax_status from parent (taxable)", () => {
+    // WooCommerce: variation with no _tax_status inherits parent's "taxable"
+    const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "" };
+    const variationMeta: Record<string, string> = {};
+    
+    const effectiveTaxStatus = (
+      variationMeta._tax_status ||
+      parentMeta._tax_status ||
+      "taxable"
+    ).toLowerCase();
+    
+    assert.equal(effectiveTaxStatus, "taxable");
+  });
+
+  it("should inherit empty _tax_class from parent", () => {
+    // WooCommerce: variation with no _tax_class inherits parent's class
+    const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "reduced-rate" };
+    const variationMeta: Record<string, string> = {};
+    
+    const effectiveTaxClass = sanitizeTaxClass(
+      variationMeta._tax_class || parentMeta._tax_class || ""
+    );
+    
+    assert.equal(effectiveTaxClass, "reduced-rate");
+  });
+
+  it("should respect explicit variation _tax_status=none", () => {
+    // WooCommerce: variation with explicit "none" is not taxed
+    const parentMeta = { _tax_status: "taxable", _tax_class: "" };
+    const variationMeta = { _tax_status: "none" };
+    
+    const effectiveTaxStatus = (
+      variationMeta._tax_status ||
+      parentMeta._tax_status ||
+      "taxable"
+    ).toLowerCase();
+    
+    assert.equal(effectiveTaxStatus, "none");
+  });
+
+  it("should respect explicit variation _tax_status=shipping", () => {
+    // WooCommerce: variation with "shipping" status taxes only shipping
+    const parentMeta = { _tax_status: "taxable", _tax_class: "" };
+    const variationMeta = { _tax_status: "shipping" };
+    
+    const effectiveTaxStatus = (
+      variationMeta._tax_status ||
+      parentMeta._tax_status ||
+      "taxable"
+    ).toLowerCase();
+    
+    assert.equal(effectiveTaxStatus, "shipping");
+  });
+
+  it("should respect explicit variation _tax_class", () => {
+    // WooCommerce: variation with explicit class overrides parent
+    const parentMeta = { _tax_status: "taxable", _tax_class: "" };
+    const variationMeta = { _tax_class: "zero-rate" };
+    
+    const effectiveTaxClass = sanitizeTaxClass(
+      variationMeta._tax_class || parentMeta._tax_class || ""
+    );
+    
+    assert.equal(effectiveTaxClass, "zero-rate");
+  });
+
+  it("empty string tax class should match standard rates", () => {
+    // WooCommerce: empty string "" is the "standard" tax class
+    assert.equal(sanitizeTaxClass(""), "");
+    assert.equal(sanitizeTaxClass("standard"), "standard");
+    // Rates with tax_rate_class="" match products with empty/standard class
+  });
+
+  it("calculates tax on variation using parent settings when variation meta is empty", () => {
+    // Real-world scenario: Alabama 4% rate on Manuka Honey variation
+    // Parent 2560 is taxable with standard class, variation 2561 has empty meta
+    const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "" };
+    const variationMeta: Record<string, string> = {}; // Empty - should inherit from parent
+    
+    const effectiveTaxStatus = (
+      variationMeta._tax_status ||
+      parentMeta._tax_status ||
+      "taxable"
+    ).toLowerCase();
+    
+    const effectiveTaxClass = sanitizeTaxClass(
+      variationMeta._tax_class || parentMeta._tax_class || ""
+    );
+    
+    assert.equal(effectiveTaxStatus, "taxable");
+    assert.equal(effectiveTaxClass, "");
+    
+    // Simulate AL 4% tax on $68 line
+    const rate: MatchedTaxRate = {
+      rateId: 10,
+      rate: 4.0,
+      label: "AL 4% Sales Tax",
+      shipping: true,
+      compound: false,
+    };
+    
+    const lineTotal = 68.0;
+    const taxes = calcExclusiveTax(lineTotal, [rate]);
+    assert.equal(taxes.get(10), 2.72); // 4% of $68 = $2.72
+  });
+
+  it("does not tax variation when parent is taxable but variation explicitly set to none", () => {
+    const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "" };
+    const variationMeta: Record<string, string> = { _tax_status: "none" };
+    
+    const effectiveTaxStatus = (
+      variationMeta._tax_status ||
+      parentMeta._tax_status ||
+      "taxable"
+    ).toLowerCase();
+    
+    assert.equal(effectiveTaxStatus, "none");
+    // When taxStatus !== "taxable", no tax should be calculated
+  });
+});

@@ -290,12 +290,15 @@ export async function calculateWooCommerceCartTax(
     city: body.address.city ?? "",
   };
 
-  const productIds = body.items.map(
-    (item) => item.variationId || item.productId,
-  );
+  // Load meta for both variations and parent products to support WooCommerce inheritance.
+  const allProductIds = new Set<number>();
+  for (const item of body.items) {
+    allProductIds.add(item.productId);
+    if (item.variationId) allProductIds.add(item.variationId);
+  }
   const [metaMap, titles] = await Promise.all([
-    getPostMetaKeysMany(productIds, [...TAX_META_KEYS]),
-    loadProductTitles(productIds),
+    getPostMetaKeysMany([...allProductIds], [...TAX_META_KEYS]),
+    loadProductTitles([...allProductIds]),
   ]);
 
   const taxByRateId = new Map<number, number>();
@@ -304,14 +307,26 @@ export async function calculateWooCommerceCartTax(
   const itemsOut: CartTaxResponse["items"] = [];
 
   for (const item of body.items) {
-    const productId = item.variationId || item.productId;
-    const meta = metaMap.get(productId) ?? {};
-    const taxStatus = (meta._tax_status || "taxable").toLowerCase();
+    const variationMeta = item.variationId
+      ? metaMap.get(item.variationId) ?? {}
+      : {};
+    const parentMeta = metaMap.get(item.productId) ?? {};
+    
+    // WooCommerce variations inherit tax settings from parent when empty.
+    const taxStatus = (
+      variationMeta._tax_status ||
+      parentMeta._tax_status ||
+      "taxable"
+    ).toLowerCase();
     const lineTotal = roundMoney((item.unitPrice ?? 0) * item.quantity);
     let lineTax = 0;
 
     if (taxStatus === "taxable" && lineTotal > 0) {
-      const taxClass = sanitizeTaxClass(meta._tax_class || "");
+      // WooCommerce variations inherit tax class from parent when empty.
+      // Empty string "" matches "standard" class rates.
+      const rawTaxClass =
+        variationMeta._tax_class || parentMeta._tax_class || "";
+      const taxClass = sanitizeTaxClass(rawTaxClass);
       const rates = findMatchedTaxRates(bundle, {
         ...locationArgs,
         taxClass,
@@ -327,13 +342,14 @@ export async function calculateWooCommerceCartTax(
     }
 
     contentsTax = roundMoney(contentsTax + lineTax);
+    const displayId = item.variationId || item.productId;
     itemsOut.push({
       productId: item.productId,
       variationId: item.variationId ?? 0,
       quantity: item.quantity,
       lineTotal: moneyStr(lineTotal),
       lineTax: moneyStr(lineTax),
-      name: titles.get(productId) ?? "",
+      name: titles.get(displayId) ?? "",
     });
   }
 
