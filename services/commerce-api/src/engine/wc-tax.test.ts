@@ -145,4 +145,33 @@ describe("calcExclusiveTax", () => {
     assert.equal(taxes.get(1), 10);
     assert.equal(taxes.get(2), 5.5);
   });
+
+  it("calculates tax on promo price, not regular price", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 10,
+        label: "Standard",
+        shipping: false,
+        compound: false,
+      },
+    ];
+    const promoPrice = 80;
+    const taxes = calcExclusiveTax(promoPrice, rates);
+    assert.equal(taxes.get(1), 8);
+  });
+
+  it("handles zero or negative amounts", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 10,
+        label: "Standard",
+        shipping: false,
+        compound: false,
+      },
+    ];
+    assert.equal(calcExclusiveTax(0, rates).size, 0);
+    assert.equal(calcExclusiveTax(-10, rates).size, 0);
+  });
 });

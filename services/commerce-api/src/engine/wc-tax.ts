@@ -337,24 +337,10 @@ export async function calculateWooCommerceCartTax(
     });
   }
 
-  let shippingTax = 0;
-  if (shippingCost > 0) {
-    const shipClass = await shippingTaxClassSlug();
-    const shipRates = findMatchedTaxRates(bundle, {
-      ...locationArgs,
-      taxClass: shipClass,
-    }).filter((r) => r.shipping);
-    for (const rate of shipRates) {
-      labelByRateId.set(rate.rateId, rate.label);
-    }
-    const shipTaxes = calcExclusiveTax(shippingCost, shipRates);
-    mergeTaxMaps(taxByRateId, shipTaxes);
-    for (const amount of shipTaxes.values()) {
-      shippingTax = roundMoney(shippingTax + amount);
-    }
-  }
-
-  const taxTotal = roundMoney(contentsTax + shippingTax);
+  // Cart tax preview excludes shipping from the tax base.
+  // shippingTax is always 0 for preview; contentsTax is the sum of line taxes only.
+  const shippingTax = 0;
+  const taxTotal = roundMoney(contentsTax);
   const taxTotals = [...taxByRateId.entries()]
     .filter(([, amount]) => amount > 0)
     .map(([rateId, amount]) => ({
