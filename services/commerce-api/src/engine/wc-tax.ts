@@ -23,11 +23,18 @@ export type MatchedTaxRate = {
 const TAX_META_KEYS = ["_tax_class", "_tax_status"] as const;
 
 export function sanitizeTaxClass(taxClass: string): string {
-  return taxClass
+  const normalized = taxClass
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-_]/g, "");
+  
+  // WooCommerce: "standard" and "standard-rate" are aliases for "" (empty/default class).
+  if (normalized === "standard" || normalized === "standard-rate") {
+    return "";
+  }
+  
+  return normalized;
 }
 
 export function normalizePostcode(postcode: string): string {
@@ -318,15 +325,18 @@ export async function calculateWooCommerceCartTax(
       parentMeta._tax_status ||
       "taxable"
     ).toLowerCase();
+    
+    // Resolve tax class (with inheritance) before using it.
+    // WooCommerce variations inherit tax class from parent when empty.
+    // "standard" and "standard-rate" are aliases for "" (default class).
+    const rawTaxClass =
+      variationMeta._tax_class || parentMeta._tax_class || "";
+    const taxClass = sanitizeTaxClass(rawTaxClass);
+    
     const lineTotal = roundMoney((item.unitPrice ?? 0) * item.quantity);
     let lineTax = 0;
 
     if (taxStatus === "taxable" && lineTotal > 0) {
-      // WooCommerce variations inherit tax class from parent when empty.
-      // Empty string "" matches "standard" class rates.
-      const rawTaxClass =
-        variationMeta._tax_class || parentMeta._tax_class || "";
-      const taxClass = sanitizeTaxClass(rawTaxClass);
       const rates = findMatchedTaxRates(bundle, {
         ...locationArgs,
         taxClass,
@@ -350,6 +360,8 @@ export async function calculateWooCommerceCartTax(
       lineTotal: moneyStr(lineTotal),
       lineTax: moneyStr(lineTax),
       name: titles.get(displayId) ?? "",
+      taxStatus,
+      taxClass,
     });
   }
 

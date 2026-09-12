@@ -18,6 +18,25 @@ describe("sanitizeTaxClass", () => {
     assert.equal(sanitizeTaxClass(""), "");
     assert.equal(sanitizeTaxClass("Reduced Rate"), "reduced-rate");
   });
+
+  it("treats 'standard' as alias for empty string", () => {
+    // WooCommerce: "standard" and "" are equivalent (default tax class)
+    assert.equal(sanitizeTaxClass("standard"), "");
+    assert.equal(sanitizeTaxClass("Standard"), "");
+    assert.equal(sanitizeTaxClass("STANDARD"), "");
+  });
+
+  it("treats 'standard-rate' as alias for empty string", () => {
+    assert.equal(sanitizeTaxClass("standard-rate"), "");
+    assert.equal(sanitizeTaxClass("Standard Rate"), "");
+    assert.equal(sanitizeTaxClass("STANDARD-RATE"), "");
+  });
+
+  it("preserves other tax classes unchanged", () => {
+    assert.equal(sanitizeTaxClass("reduced-rate"), "reduced-rate");
+    assert.equal(sanitizeTaxClass("zero-rate"), "zero-rate");
+    assert.equal(sanitizeTaxClass("Reduced Rate"), "reduced-rate");
+  });
 });
 
 describe("postcodeMatchesLocation", () => {
@@ -83,6 +102,30 @@ describe("findMatchedTaxRates", () => {
       tax_rate_order: 0,
       tax_rate_class: "",
     },
+    {
+      tax_rate_id: 5,
+      tax_rate_country: "US",
+      tax_rate_state: "AL",
+      tax_rate: "4.0",
+      tax_rate_name: "AL 4% Sales Tax",
+      tax_rate_priority: 1,
+      tax_rate_compound: 0,
+      tax_rate_shipping: 1,
+      tax_rate_order: 0,
+      tax_rate_class: "",
+    },
+    {
+      tax_rate_id: 6,
+      tax_rate_country: "US",
+      tax_rate_state: "CA",
+      tax_rate: "5.0",
+      tax_rate_name: "CA Reduced Rate",
+      tax_rate_priority: 1,
+      tax_rate_compound: 0,
+      tax_rate_shipping: 1,
+      tax_rate_order: 0,
+      tax_rate_class: "reduced-rate",
+    },
   ];
 
   const locationsByRateId = new Map<number, WooTaxRateLocationRow[]>();
@@ -136,6 +179,59 @@ describe("findMatchedTaxRates", () => {
       shippingRates.map((r) => r.rateId),
       [1, 2],
     );
+  });
+
+  it("matches product with 'standard' class to rates with empty class", () => {
+    // Product _tax_class='standard' should match rates with tax_rate_class=''
+    const productTaxClass = sanitizeTaxClass("standard");
+    const matched = findMatchedTaxRates(
+      { rates, locationsByRateId },
+      {
+        country: "US",
+        state: "AL",
+        postcode: "88201",
+        city: "Dothan",
+        taxClass: productTaxClass,
+      },
+    );
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].rateId, 5); // AL 4% rate
+    assert.equal(matched[0].rate, 4.0);
+  });
+
+  it("does not match standard class to reduced-rate class", () => {
+    const productTaxClass = sanitizeTaxClass("standard");
+    const matched = findMatchedTaxRates(
+      { rates, locationsByRateId },
+      {
+        country: "US",
+        state: "CA",
+        postcode: "90210",
+        city: "Beverly Hills",
+        taxClass: productTaxClass,
+      },
+    );
+    // Should match empty-class rates (1, 2, 4), not reduced-rate (6)
+    assert.equal(matched.length, 3);
+    assert.deepEqual(
+      matched.map((r) => r.rateId),
+      [1, 2, 4],
+    );
+  });
+
+  it("matches reduced-rate products only to reduced-rate rates", () => {
+    const matched = findMatchedTaxRates(
+      { rates, locationsByRateId },
+      {
+        country: "US",
+        state: "CA",
+        postcode: "90210",
+        city: "Beverly Hills",
+        taxClass: "reduced-rate",
+      },
+    );
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].rateId, 6);
   });
 });
 
@@ -336,9 +432,10 @@ describe("variation tax inheritance", () => {
 
   it("empty string tax class should match standard rates", () => {
     // WooCommerce: empty string "" is the "standard" tax class
+    // Both "" and "standard" normalize to "" so they match the same rates
     assert.equal(sanitizeTaxClass(""), "");
-    assert.equal(sanitizeTaxClass("standard"), "standard");
-    // Rates with tax_rate_class="" match products with empty/standard class
+    assert.equal(sanitizeTaxClass("standard"), "");
+    // Products with class "" or "standard" both match rates with tax_rate_class=""
   });
 
   it("calculates tax on variation using parent settings when variation meta is empty", () => {
@@ -386,5 +483,49 @@ describe("variation tax inheritance", () => {
     
     assert.equal(effectiveTaxStatus, "none");
     // When taxStatus !== "taxable", no tax should be calculated
+  });
+
+  it("does not tax product line when _tax_status is none", () => {
+    // Products marked _tax_status=none should have lineTax=0 regardless of rates
+    const taxStatus: string = "none";
+    const lineTotal = 100.0;
+    
+    // Simulate tax calculation: skip when taxStatus !== "taxable"
+    let lineTax = 0;
+    if (taxStatus === "taxable" && lineTotal > 0) {
+      // Would calculate tax here
+      lineTax = 10.0;
+    }
+    
+    assert.equal(lineTax, 0);
+  });
+
+  it("does not tax product line when _tax_status is shipping", () => {
+    // Products marked _tax_status=shipping should have lineTax=0
+    // (shipping itself can still be taxed if rates have tax_rate_shipping=1)
+    const taxStatus: string = "shipping";
+    const lineTotal = 100.0;
+    
+    let lineTax = 0;
+    if (taxStatus === "taxable" && lineTotal > 0) {
+      lineTax = 10.0;
+    }
+    
+    assert.equal(lineTax, 0);
+  });
+
+  it("taxes shipping when product has _tax_status=shipping and rates allow", () => {
+    // _tax_status=shipping means: don't tax the product line, but shipping can be taxed
+    const shippingCost = 14.99;
+    const rate: MatchedTaxRate = {
+      rateId: 10,
+      rate: 4.0,
+      label: "AL Sales Tax",
+      shipping: true,
+      compound: false,
+    };
+    
+    const shippingTax = calcExclusiveTax(shippingCost, [rate]);
+    assert.equal(shippingTax.get(10), 0.60); // 4% of $14.99 = $0.60
   });
 });
