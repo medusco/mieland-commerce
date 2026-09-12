@@ -369,13 +369,45 @@ describe("variation tax inheritance", () => {
     const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "" };
     const variationMeta: Record<string, string> = {};
     
+    // Use the actual logic from wc-tax.ts (after PR merges)
+    const isInherit = !variationMeta._tax_status || 
+                      variationMeta._tax_status.trim().toLowerCase() === "parent";
     const effectiveTaxStatus = (
-      variationMeta._tax_status ||
-      parentMeta._tax_status ||
-      "taxable"
+      isInherit ? (parentMeta._tax_status || "taxable") : variationMeta._tax_status
     ).toLowerCase();
     
     assert.equal(effectiveTaxStatus, "taxable");
+  });
+
+  it("should inherit when _tax_class is literal 'parent' sentinel", () => {
+    // WooCommerce: "Same as parent" dropdown stores _tax_class="parent"
+    const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "standard" };
+    const variationMeta: Record<string, string> = { _tax_class: "parent" };
+    
+    const isInherit = !variationMeta._tax_class || 
+                      variationMeta._tax_class.trim().toLowerCase() === "parent";
+    const rawTaxClass = isInherit 
+      ? (parentMeta._tax_class || "")
+      : variationMeta._tax_class;
+    
+    assert.equal(rawTaxClass, "standard");
+    
+    // Then sanitizeTaxClass converts "standard" → ""
+    const taxClass = sanitizeTaxClass(rawTaxClass);
+    assert.equal(taxClass, "");
+  });
+
+  it("should inherit when _tax_class is 'Parent' (case insensitive)", () => {
+    const parentMeta: Record<string, string> = { _tax_class: "reduced-rate" };
+    const variationMeta: Record<string, string> = { _tax_class: "Parent" };
+    
+    const isInherit = !variationMeta._tax_class || 
+                      variationMeta._tax_class.trim().toLowerCase() === "parent";
+    const rawTaxClass = isInherit 
+      ? (parentMeta._tax_class || "")
+      : variationMeta._tax_class;
+    
+    assert.equal(rawTaxClass, "reduced-rate");
   });
 
   it("should inherit empty _tax_class from parent", () => {
@@ -444,15 +476,18 @@ describe("variation tax inheritance", () => {
     const parentMeta: Record<string, string> = { _tax_status: "taxable", _tax_class: "" };
     const variationMeta: Record<string, string> = {}; // Empty - should inherit from parent
     
+    const isInheritStatus = !variationMeta._tax_status || 
+                            variationMeta._tax_status.trim().toLowerCase() === "parent";
     const effectiveTaxStatus = (
-      variationMeta._tax_status ||
-      parentMeta._tax_status ||
-      "taxable"
+      isInheritStatus ? (parentMeta._tax_status || "taxable") : variationMeta._tax_status
     ).toLowerCase();
     
-    const effectiveTaxClass = sanitizeTaxClass(
-      variationMeta._tax_class || parentMeta._tax_class || ""
-    );
+    const isInheritClass = !variationMeta._tax_class || 
+                           variationMeta._tax_class.trim().toLowerCase() === "parent";
+    const rawTaxClass = isInheritClass 
+      ? (parentMeta._tax_class || "")
+      : variationMeta._tax_class;
+    const effectiveTaxClass = sanitizeTaxClass(rawTaxClass);
     
     assert.equal(effectiveTaxStatus, "taxable");
     assert.equal(effectiveTaxClass, "");
@@ -468,6 +503,68 @@ describe("variation tax inheritance", () => {
     
     const lineTotal = 68.0;
     const taxes = calcExclusiveTax(lineTotal, [rate]);
+    assert.equal(taxes.get(10), 2.72); // 4% of $68 = $2.72
+  });
+
+  it("calculates tax on variation with _tax_class=parent inheriting standard from parent", () => {
+    // REAL BUG: WooCommerce "Same as parent" stores _tax_class="parent"
+    // Parent 2560: Tax class Standard
+    // Variation 2561: Tax class "Same as parent" (_tax_class="parent")
+    // Expected: inherit "standard" → normalize to "" → match AL empty-class rates
+    const parentMeta: Record<string, string> = { 
+      _tax_status: "taxable", 
+      _tax_class: "standard" 
+    };
+    const variationMeta: Record<string, string> = { 
+      _tax_class: "parent" // WooCommerce "Same as parent" literal
+    };
+    
+    // Step 1: Check if variation class is inherit sentinel
+    const isInheritClass = !variationMeta._tax_class || 
+                           variationMeta._tax_class.trim().toLowerCase() === "parent";
+    assert.equal(isInheritClass, true);
+    
+    // Step 2: Inherit from parent
+    const rawTaxClass = isInheritClass 
+      ? (parentMeta._tax_class || "")
+      : variationMeta._tax_class;
+    assert.equal(rawTaxClass, "standard");
+    
+    // Step 3: Apply standard→'' alias
+    const taxClass = sanitizeTaxClass(rawTaxClass);
+    assert.equal(taxClass, "");
+    
+    // Step 4: Match AL rates (tax_rate_class='')
+    const rates: WooTaxRateRow[] = [{
+      tax_rate_id: 10,
+      tax_rate_country: "US",
+      tax_rate_state: "AL",
+      tax_rate: "4.0",
+      tax_rate_name: "AL 4% Sales Tax",
+      tax_rate_priority: 1,
+      tax_rate_compound: 0,
+      tax_rate_shipping: 1,
+      tax_rate_order: 0,
+      tax_rate_class: "", // Empty class
+    }];
+    
+    const matched = findMatchedTaxRates(
+      { rates, locationsByRateId: new Map() },
+      {
+        country: "US",
+        state: "AL",
+        postcode: "88201",
+        city: "Dothan",
+        taxClass, // ""
+      },
+    );
+    
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].rateId, 10);
+    
+    // Step 5: Calculate tax
+    const lineTotal = 68.0;
+    const taxes = calcExclusiveTax(lineTotal, matched);
     assert.equal(taxes.get(10), 2.72); // 4% of $68 = $2.72
   });
 

@@ -22,6 +22,31 @@ export type MatchedTaxRate = {
 
 const TAX_META_KEYS = ["_tax_class", "_tax_status"] as const;
 
+/**
+ * Check if a meta value is the WooCommerce "inherit from parent" sentinel.
+ * WooCommerce uses "parent" as a literal string to indicate inheritance.
+ */
+function isInheritSentinel(value: string | undefined): boolean {
+  if (!value) return true; // empty/undefined = inherit
+  const normalized = value.trim().toLowerCase();
+  return normalized === "" || normalized === "parent";
+}
+
+/**
+ * Resolve variation tax meta with parent inheritance.
+ * WooCommerce variations use "_tax_class=parent" and empty to inherit from parent.
+ */
+function resolveInheritedMeta(
+  variationValue: string | undefined,
+  parentValue: string | undefined,
+  defaultValue: string,
+): string {
+  if (isInheritSentinel(variationValue)) {
+    return parentValue?.trim() || defaultValue;
+  }
+  return variationValue?.trim() || defaultValue;
+}
+
 export function sanitizeTaxClass(taxClass: string): string {
   const normalized = taxClass
     .trim()
@@ -319,18 +344,21 @@ export async function calculateWooCommerceCartTax(
       : {};
     const parentMeta = metaMap.get(item.productId) ?? {};
     
-    // WooCommerce variations inherit tax settings from parent when empty.
-    const taxStatus = (
-      variationMeta._tax_status ||
-      parentMeta._tax_status ||
-      "taxable"
+    // WooCommerce variations inherit tax settings from parent.
+    // Empty/"" and literal string "parent" both mean inherit.
+    const taxStatus = resolveInheritedMeta(
+      variationMeta._tax_status,
+      parentMeta._tax_status,
+      "taxable",
     ).toLowerCase();
     
-    // Resolve tax class (with inheritance) before using it.
-    // WooCommerce variations inherit tax class from parent when empty.
-    // "standard" and "standard-rate" are aliases for "" (default class).
-    const rawTaxClass =
-      variationMeta._tax_class || parentMeta._tax_class || "";
+    // Resolve tax class with inheritance, then apply standard→'' alias.
+    // WooCommerce: empty/"parent" = inherit; "standard"/"standard-rate" = "".
+    const rawTaxClass = resolveInheritedMeta(
+      variationMeta._tax_class,
+      parentMeta._tax_class,
+      "",
+    );
     const taxClass = sanitizeTaxClass(rawTaxClass);
     
     const lineTotal = roundMoney((item.unitPrice ?? 0) * item.quantity);
