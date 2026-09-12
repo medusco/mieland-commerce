@@ -265,4 +265,29 @@ describe("calcExclusiveTax", () => {
     assert.equal(taxes.get(1), 7.25);
     assert.equal(taxes.get(2), 1);
   });
+
+  it("doubling line quantity doubles line tax (same unit price)", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 10,
+        label: "Standard",
+        shipping: false,
+        compound: false,
+      },
+    ];
+    const unitPrice = 50;
+    const qty1 = 1;
+    const qty2 = 2;
+    
+    const lineTotal1 = unitPrice * qty1;
+    const lineTotal2 = unitPrice * qty2;
+    
+    const tax1 = calcExclusiveTax(lineTotal1, rates);
+    const tax2 = calcExclusiveTax(lineTotal2, rates);
+    
+    assert.equal(tax1.get(1), 5);
+    assert.equal(tax2.get(1), 10);
+    assert.equal(tax2.get(1), (tax1.get(1) ?? 0) * 2);
+  });
 });
