@@ -899,7 +899,6 @@ export const checkoutResolvers = {
 
             // Mark WC order paid via REST with charge ID and metadata
             await updateWcOrder(orderId, {
-              status: "processing",
               set_paid: true,
               transaction_id: transactionId,
               meta_data: metaData,
@@ -986,7 +985,6 @@ export const checkoutResolvers = {
 
             // Mark WC order paid via REST
             await updateWcOrder(orderId, {
-              status: "processing",
               set_paid: true,
               transaction_id: paypalResult.id,
             });

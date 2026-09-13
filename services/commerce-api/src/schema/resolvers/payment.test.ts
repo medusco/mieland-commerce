@@ -180,12 +180,10 @@ describe("Payment Processing", () => {
   describe("WooCommerce Order Update", () => {
     it("should mark order paid via WC REST after processor confirms", () => {
       const wcOrderUpdate = {
-        status: "processing",
         set_paid: true,
         transaction_id: "pi_abc123",
       };
 
-      assert.strictEqual(wcOrderUpdate.status, "processing");
       assert.strictEqual(wcOrderUpdate.set_paid, true);
       assert.ok(wcOrderUpdate.transaction_id);
     });
