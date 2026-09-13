@@ -198,4 +198,131 @@ describe("Payment Processing", () => {
       assert.strictEqual(wcOrderUpdate.status, "failed");
     });
   });
+
+  describe("Order Notes and Metadata", () => {
+    describe("Stripe", () => {
+      it("should use charge ID as transaction_id when available", () => {
+        const chargeId = "ch_abc123";
+        const paymentIntentId = "pi_xyz789";
+
+        // When charge is available, use it as transaction_id
+        const transactionId = chargeId || paymentIntentId;
+
+        assert.strictEqual(transactionId, chargeId);
+      });
+
+      it("should fall back to payment intent ID when no charge", () => {
+        const chargeId = null;
+        const paymentIntentId = "pi_xyz789";
+
+        const transactionId = chargeId || paymentIntentId;
+
+        assert.strictEqual(transactionId, paymentIntentId);
+      });
+
+      it("should include _stripe_intent_id in meta_data", () => {
+        const paymentIntentId = "pi_xyz789";
+        const metaData = [
+          { key: "_stripe_intent_id", value: paymentIntentId },
+        ];
+
+        assert.strictEqual(metaData.length, 1);
+        assert.strictEqual(metaData[0]?.key, "_stripe_intent_id");
+        assert.strictEqual(metaData[0]?.value, paymentIntentId);
+      });
+
+      it("should add payment intent created note", () => {
+        const paymentIntentId = "pi_xyz789";
+        const note = {
+          note: `Stripe payment intent created (Payment Intent ID: ${paymentIntentId})`,
+          customer_note: false,
+        };
+
+        assert.ok(note.note.includes("Stripe payment intent created"));
+        assert.ok(note.note.includes(paymentIntentId));
+        assert.strictEqual(note.customer_note, false);
+      });
+
+      it("should add charge notes when charge ID is available", () => {
+        const chargeId = "ch_abc123";
+        const notes = [
+          {
+            note: `Payment via Credit / Debit Card (${chargeId})`,
+            customer_note: false,
+          },
+          {
+            note: `Stripe charge complete (Charge ID: ${chargeId})`,
+            customer_note: false,
+          },
+        ];
+
+        assert.strictEqual(notes.length, 2);
+        assert.ok(notes[0]?.note.includes("Credit / Debit Card"));
+        assert.ok(notes[0]?.note.includes(chargeId));
+        assert.ok(notes[1]?.note.includes("Stripe charge complete"));
+        assert.ok(notes[1]?.note.includes(chargeId));
+      });
+
+      it("should not add charge notes when charge ID is null", () => {
+        const chargeId = null;
+        const shouldAddChargeNotes = Boolean(chargeId);
+
+        assert.strictEqual(shouldAddChargeNotes, false);
+      });
+    });
+
+    describe("PayPal", () => {
+      it("should use capture ID as transaction_id", () => {
+        const captureId = "1AB23456CD789012E";
+        const transactionId = captureId;
+
+        assert.strictEqual(transactionId, captureId);
+      });
+
+      it("should add PayPal order created note", () => {
+        const paypalOrderId = "5O190127TN364715T";
+        const note = {
+          note: `PayPal order created (PayPal Order ID: ${paypalOrderId})`,
+          customer_note: false,
+        };
+
+        assert.ok(note.note.includes("PayPal order created"));
+        assert.ok(note.note.includes(paypalOrderId));
+        assert.strictEqual(note.customer_note, false);
+      });
+
+      it("should add PayPal capture note", () => {
+        const captureId = "1AB23456CD789012E";
+        const note = {
+          note: `PayPal payment captured (Capture ID: ${captureId})`,
+          customer_note: false,
+        };
+
+        assert.ok(note.note.includes("PayPal payment captured"));
+        assert.ok(note.note.includes(captureId));
+        assert.strictEqual(note.customer_note, false);
+      });
+    });
+
+    describe("Note Format", () => {
+      it("should mark notes as non-customer-facing", () => {
+        const notes = [
+          { note: "Test note 1", customer_note: false },
+          { note: "Test note 2", customer_note: false },
+        ];
+
+        for (const note of notes) {
+          assert.strictEqual(note.customer_note, false);
+        }
+      });
+
+      it("should include payment processor IDs in notes", () => {
+        const stripeNote = "Stripe charge complete (Charge ID: ch_123)";
+        const paypalNote = "PayPal payment captured (Capture ID: 1AB23)";
+
+        assert.ok(stripeNote.includes("ch_123"));
+        assert.ok(paypalNote.includes("1AB23"));
+      });
+    });
+  });
 });

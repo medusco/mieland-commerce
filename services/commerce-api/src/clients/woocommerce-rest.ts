@@ -366,3 +366,25 @@ export async function updateWcCustomerPassword(
     "wc_rest_update_customer_password",
   );
 }
+
+export type WcOrderNotePayload = {
+  note: string;
+  customer_note?: boolean;
+  added_by_user?: boolean;
+};
+
+/**
+ * Add an order note via WooCommerce REST (`POST /wc/v3/orders/{id}/notes`).
+ * Used to record payment gateway events (Stripe charge complete, PayPal capture, etc).
+ */
+export async function addWcOrderNote(
+  orderId: number,
+  payload: WcOrderNotePayload,
+): Promise<void> {
+  await wcRestRequest(
+    "POST",
+    wcRestUrl(`/orders/${orderId}/notes`),
+    payload as unknown as Record<string, unknown>,
+    "wc_rest_add_order_note",
+  );
+}
