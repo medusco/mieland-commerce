@@ -80,6 +80,33 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 `updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
+## Payment Processing
+
+Commerce processes Stripe and PayPal payments directly, bypassing WooCommerce Store API.
+
+**Required Railway Environment Variables:**
+- `STRIPE_SECRET_KEY` — Stripe secret key (sk_test_... or sk_live_...)
+- `STRIPE_PUBLISHABLE_KEY` — Stripe publishable key (pk_test_... or pk_live_...)
+- PayPal credentials are read from WooCommerce PPCP plugin options (no new vars needed)
+
+**Stripe Flow:**
+1. Commerce creates PaymentIntent with order total from MySQL
+2. Returns `clientSecret` + `publishableKey` to browser
+3. Browser confirms with Stripe.js / Express Checkout
+4. Commerce retrieves PI, validates amount + metadata
+5. Only after PI succeeded, marks WC order paid via REST
+
+**PayPal Flow:**
+1. Browser creates PayPal order (`createPayPalOrder`)
+2. User approves in PayPal
+3. Commerce captures PayPal order, validates amount
+4. Only after COMPLETED, marks WC order paid via REST
+
+**Security:**
+- Amount comes from server-side order (MySQL), never client
+- Ownership: JWT matches `customer_id`, or guest with `customer_id=0` + orderKey + matching email
+- Order marked paid only after processor confirms
+
 ## Personal coupon
 
 `requestPersonalCoupon(input: { email })` get-or-creates a one-time WooCommerce coupon restricted to that email (`usage_limit: 1`, `individual_use: true`). Repeat requests for the same email return the same code while unused (looked up via `mieland_personal_coupon_email` postmeta). Errors if Woo `usage_count` shows a real redemption, or if an unpaid (pending/failed/on-hold) order still holds the code — commerce returns a clear “incomplete checkout” message instead of cancelling that order. `applyCoupon` / checkout use the same checks. Cart totals skip spent coupons (`usage_count` ≥ `usage_limit`). Configure amount/type/prefix with `PERSONAL_COUPON_AMOUNT`, `PERSONAL_COUPON_DISCOUNT_TYPE`, `PERSONAL_COUPON_CODE_PREFIX`. Requires WC REST credentials. Apply the returned code with `applyCoupon`.
