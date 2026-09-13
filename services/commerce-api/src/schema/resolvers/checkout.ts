@@ -868,7 +868,6 @@ export const checkoutResolvers = {
 
             // Mark WC order paid via REST
             await updateWcOrder(orderId, {
-              status: "processing",
               set_paid: true,
               transaction_id: stripeResult.id,
             });
@@ -943,7 +942,6 @@ export const checkoutResolvers = {
 
             // Mark WC order paid via REST
             await updateWcOrder(orderId, {
-              status: "processing",
               set_paid: true,
               transaction_id: paypalResult.id,
             });
