@@ -76,6 +76,10 @@ const envSchema = z.object({
     emptyToUndefined,
     z.coerce.number().default(60_000),
   ),
+  /** Stripe secret key for direct payment processing (replaces Store API for Stripe). */
+  STRIPE_SECRET_KEY: z.preprocess(emptyToUndefined, z.string().default("")),
+  /** Stripe publishable key exposed to browser for Stripe.js / Express Checkout. */
+  STRIPE_PUBLISHABLE_KEY: z.preprocess(emptyToUndefined, z.string().default("")),
   /** Personal one-time coupon issued via `requestPersonalCoupon`. */
   PERSONAL_COUPON_AMOUNT: z.preprocess(
     emptyToUndefined,

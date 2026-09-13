@@ -336,6 +336,8 @@ export const typeDefs = /* GraphQL */ `
     lineTotal: String
     lineTax: String
     name: String
+    taxStatus: String
+    taxClass: String
   }
 
   type CartTaxRateTotal {
@@ -1071,11 +1073,17 @@ export const typeDefs = /* GraphQL */ `
   type ProcessOrderPaymentPayload {
     clientMutationId: String
     order: Order
-    """Gateway result: success | failure | pending | error (from Store API)."""
+    """Gateway result: success | failure | pending | error."""
     result: String
     redirect: String
     paymentStatus: String
     paymentDetails: [MetaData]
+    """Stripe PaymentIntent client secret for browser confirmation (Stripe.js / Express Checkout)."""
+    clientSecret: String
+    """Stripe publishable key for browser (pk_test_... or pk_live_...)."""
+    publishableKey: String
+    """True when Stripe PaymentIntent requires additional action (3DS, etc)."""
+    requiresAction: Boolean
   }
 
   type UpdateCustomerPayload {

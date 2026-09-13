@@ -337,15 +337,13 @@ export async function calculateCart(
     (c) => c.discountType !== "percent",
   );
 
-  // Percent coupons from regular (not post-subscription); sale floors promo; subscription
-  // still wins when it beats coupon-from-regular.
+  // Apply percent coupons to the actual line price (subscription/sale).
+  // WooCommerce applies percent coupons to the cart line price, not the regular price.
   const displayLines = pricedLines.map((line) => {
-    const promoFromRegular = applyPercentCouponToUnitPrice(
-      line.regular,
+    const displayUnitPrice = applyPercentCouponToUnitPrice(
+      line.unitPrice,
       couponRows,
     );
-    const promoUnit = chooseBestUnitPrice(promoFromRegular, line.sale);
-    const displayUnitPrice = roundMoney(Math.min(line.unitPrice, promoUnit));
     return {
       key: line.key,
       productId: line.productId,
@@ -367,32 +365,17 @@ export async function calculateCart(
     );
   }
 
-  // Attribute percent coupon amounts from regular-price subtotal, then scale
-  // to the sale-floored savings actually taken on the cart.
-  let regularPathSubtotal = 0;
-  for (const line of pricedLines) {
-    regularPathSubtotal = roundMoney(
-      regularPathSubtotal + roundMoney(line.regular * line.quantity),
-    );
-  }
-  const { discountTotal: idealPercentTotal, applied: percentAppliedIdeal } =
+  // Attribute percent coupon amounts based on actual line prices.
+  const { discountTotal: _idealPercentTotal, applied: percentApplied } =
     applyCoupons(
-      regularPathSubtotal,
+      subtotalNum,
       percentCoupons,
       pricedLines.map((line) => ({
         quantity: line.quantity,
-        unitPrice: line.regular,
+        unitPrice: line.unitPrice,
       })),
     );
-  const percentScale =
-    idealPercentTotal > 0 ? percentDiscountTotal / idealPercentTotal : 0;
-  const percentApplied = percentAppliedIdeal.map((row) => ({
-    ...row,
-    discountAmount: roundMoney(Number(row.discountAmount) * percentScale).toFixed(
-      2,
-    ),
-  }));
-  // Keep attributed percent amounts summing to the sale-floored total.
+  // Verify attributed amounts sum to actual discount (handle rounding).
   if (percentApplied.length > 0) {
     let attributed = 0;
     for (let i = 0; i < percentApplied.length - 1; i++) {
@@ -416,6 +399,25 @@ export async function calculateCart(
   const discountTotal = roundMoney(percentDiscountTotal + fixedDiscountTotal);
   const applied = [...percentApplied, ...fixedApplied];
   const afterDiscount = roundMoney(Math.max(0, subtotalNum - discountTotal));
+
+  // Distribute fixed_cart/fixed_product discount proportionally across lines for tax calculation.
+  // Tax must see the post-coupon amounts: a 100% coupon → $0 merchandise tax.
+  const taxableLines = displayLines.map((line) => {
+    const lineSubtotal = roundMoney(line.displayUnitPrice * line.quantity);
+    let lineProportion = 0;
+    if (afterPercent > 0) {
+      lineProportion = lineSubtotal / afterPercent;
+    }
+    const lineFixedDiscount = roundMoney(fixedDiscountTotal * lineProportion);
+    const postCouponLineTotal = roundMoney(Math.max(0, lineSubtotal - lineFixedDiscount));
+    const postCouponUnitPrice = line.quantity > 0 
+      ? roundMoney(postCouponLineTotal / line.quantity)
+      : 0;
+    return {
+      ...line,
+      postCouponUnitPrice,
+    };
+  });
 
   let shippingTotal = 0;
   let packages: ShippingPackage[] = [];
@@ -453,11 +455,11 @@ export async function calculateCart(
           : shippingTotal;
 
       const bridge = await previewCartTax({
-        items: displayLines.map((line) => ({
+        items: taxableLines.map((line) => ({
           productId: line.productId,
           variationId: line.variationId ?? 0,
           quantity: line.quantity,
-          unitPrice: line.displayUnitPrice,
+          unitPrice: line.postCouponUnitPrice,
         })),
         address: {
           country: address.country,

@@ -22,12 +22,44 @@ export type MatchedTaxRate = {
 
 const TAX_META_KEYS = ["_tax_class", "_tax_status"] as const;
 
+/**
+ * Check if a meta value is the WooCommerce "inherit from parent" sentinel.
+ * WooCommerce uses "parent" as a literal string to indicate inheritance.
+ */
+function isInheritSentinel(value: string | undefined): boolean {
+  if (!value) return true; // empty/undefined = inherit
+  const normalized = value.trim().toLowerCase();
+  return normalized === "" || normalized === "parent";
+}
+
+/**
+ * Resolve variation tax meta with parent inheritance.
+ * WooCommerce variations use "_tax_class=parent" and empty to inherit from parent.
+ */
+function resolveInheritedMeta(
+  variationValue: string | undefined,
+  parentValue: string | undefined,
+  defaultValue: string,
+): string {
+  if (isInheritSentinel(variationValue)) {
+    return parentValue?.trim() || defaultValue;
+  }
+  return variationValue?.trim() || defaultValue;
+}
+
 export function sanitizeTaxClass(taxClass: string): string {
-  return taxClass
+  const normalized = taxClass
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-_]/g, "");
+  
+  // WooCommerce: "standard" and "standard-rate" are aliases for "" (empty/default class).
+  if (normalized === "standard" || normalized === "standard-rate") {
+    return "";
+  }
+  
+  return normalized;
 }
 
 export function normalizePostcode(postcode: string): string {
@@ -290,12 +322,15 @@ export async function calculateWooCommerceCartTax(
     city: body.address.city ?? "",
   };
 
-  const productIds = body.items.map(
-    (item) => item.variationId || item.productId,
-  );
+  // Load meta for both variations and parent products to support WooCommerce inheritance.
+  const allProductIds = new Set<number>();
+  for (const item of body.items) {
+    allProductIds.add(item.productId);
+    if (item.variationId) allProductIds.add(item.variationId);
+  }
   const [metaMap, titles] = await Promise.all([
-    getPostMetaKeysMany(productIds, [...TAX_META_KEYS]),
-    loadProductTitles(productIds),
+    getPostMetaKeysMany([...allProductIds], [...TAX_META_KEYS]),
+    loadProductTitles([...allProductIds]),
   ]);
 
   const taxByRateId = new Map<number, number>();
@@ -304,14 +339,32 @@ export async function calculateWooCommerceCartTax(
   const itemsOut: CartTaxResponse["items"] = [];
 
   for (const item of body.items) {
-    const productId = item.variationId || item.productId;
-    const meta = metaMap.get(productId) ?? {};
-    const taxStatus = (meta._tax_status || "taxable").toLowerCase();
+    const variationMeta = item.variationId
+      ? metaMap.get(item.variationId) ?? {}
+      : {};
+    const parentMeta = metaMap.get(item.productId) ?? {};
+    
+    // WooCommerce variations inherit tax settings from parent.
+    // Empty/"" and literal string "parent" both mean inherit.
+    const taxStatus = resolveInheritedMeta(
+      variationMeta._tax_status,
+      parentMeta._tax_status,
+      "taxable",
+    ).toLowerCase();
+    
+    // Resolve tax class with inheritance, then apply standard→'' alias.
+    // WooCommerce: empty/"parent" = inherit; "standard"/"standard-rate" = "".
+    const rawTaxClass = resolveInheritedMeta(
+      variationMeta._tax_class,
+      parentMeta._tax_class,
+      "",
+    );
+    const taxClass = sanitizeTaxClass(rawTaxClass);
+    
     const lineTotal = roundMoney((item.unitPrice ?? 0) * item.quantity);
     let lineTax = 0;
 
     if (taxStatus === "taxable" && lineTotal > 0) {
-      const taxClass = sanitizeTaxClass(meta._tax_class || "");
       const rates = findMatchedTaxRates(bundle, {
         ...locationArgs,
         taxClass,
@@ -327,16 +380,21 @@ export async function calculateWooCommerceCartTax(
     }
 
     contentsTax = roundMoney(contentsTax + lineTax);
+    const displayId = item.variationId || item.productId;
     itemsOut.push({
       productId: item.productId,
       variationId: item.variationId ?? 0,
       quantity: item.quantity,
       lineTotal: moneyStr(lineTotal),
       lineTax: moneyStr(lineTax),
-      name: titles.get(productId) ?? "",
+      name: titles.get(displayId) ?? "",
+      taxStatus,
+      taxClass,
     });
   }
 
+  // Shipping tax is data-driven: only rates with tax_rate_shipping=1 apply to shipping cost.
+  // contentsTax is the sum of line taxes only; shippingTax is calculated separately.
   let shippingTax = 0;
   if (shippingCost > 0) {
     const shipClass = await shippingTaxClassSlug();

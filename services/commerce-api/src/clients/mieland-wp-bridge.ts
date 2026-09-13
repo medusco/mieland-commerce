@@ -330,6 +330,8 @@ export type CartTaxLineResponse = {
   lineTotal: string;
   lineTax: string;
   name: string;
+  taxStatus?: string;
+  taxClass?: string;
 };
 
 export type CartTaxRateTotalResponse = {
