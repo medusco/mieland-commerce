@@ -654,8 +654,8 @@ describe("coupon tax calculation", () => {
       compound: false,
     };
     
-    const originalPrice = 100.0;
-    const postCouponAmount = 90.0; // After 10% coupon
+    // Original price $100, after 10% coupon: $90
+    const postCouponAmount = 90.0;
     const taxes = calcExclusiveTax(postCouponAmount, [rate]);
     
     assert.equal(taxes.get(1), 9.0); // 10% tax on $90 = $9
