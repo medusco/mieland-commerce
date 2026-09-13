@@ -134,11 +134,14 @@ export type ConfirmPaymentIntentResult = {
   amount: string;
   currency: string;
   orderId: number;
+  paymentIntentId: string;
+  chargeId: string | null;
 };
 
 /**
  * Retrieve and validate a Stripe PaymentIntent.
  * Verifies that the amount and order_id metadata match to prevent fraud.
+ * Expands latest_charge to include the charge ID for order notes.
  */
 export async function confirmPaymentIntent(
   args: ConfirmPaymentIntentArgs,
@@ -147,7 +150,9 @@ export async function confirmPaymentIntent(
   const started = Date.now();
 
   try {
-    const intent = await stripe.paymentIntents.retrieve(args.paymentIntentId);
+    const intent = await stripe.paymentIntents.retrieve(args.paymentIntentId, {
+      expand: ["latest_charge"],
+    });
 
     logJson("info", {
       msg: "stripe_retrieve_payment_intent",
@@ -155,6 +160,7 @@ export async function confirmPaymentIntent(
       intentId: intent.id,
       status: intent.status,
       orderId: args.orderId,
+      hasCharge: Boolean(intent.latest_charge),
     });
 
     const metadataOrderId = Number(intent.metadata.order_id);
@@ -172,12 +178,19 @@ export async function confirmPaymentIntent(
       );
     }
 
+    const chargeId =
+      typeof intent.latest_charge === "string"
+        ? intent.latest_charge
+        : intent.latest_charge?.id ?? null;
+
     return {
       status: intent.status,
       succeeded: intent.status === "succeeded",
       amount: intentAmountDollars,
       currency: intent.currency.toUpperCase(),
       orderId: args.orderId,
+      paymentIntentId: intent.id,
+      chargeId,
     };
   } catch (err) {
     logJson("error", {

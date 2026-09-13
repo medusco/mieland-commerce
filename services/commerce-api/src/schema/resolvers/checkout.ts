@@ -14,10 +14,12 @@ import {
   buildWcOrderFromCart,
   createWcOrder,
   updateWcOrder,
+  addWcOrderNote,
 } from "../../clients/woocommerce-rest.js";
 import { createPaypalOrder, capturePaypalOrder } from "../../clients/paypal.js";
 import {
   createPaymentIntent,
+  confirmPaymentIntent,
   getStripePublishableKey,
 } from "../../clients/stripe.js";
 import { getPaypalPublicSettings } from "../../repositories/paypal.js";
@@ -866,11 +868,41 @@ export const checkoutResolvers = {
               value: stripeResult.id,
             });
 
-            // Mark WC order paid via REST
+            // Retrieve full PaymentIntent details to get charge ID
+            const confirmed = await confirmPaymentIntent({
+              paymentIntentId: stripeResult.id,
+              orderId,
+              expectedAmount: ctxOrder.total,
+            });
+
+            const transactionId = confirmed.chargeId || confirmed.paymentIntentId;
+            const metaData = [
+              { key: "_stripe_intent_id", value: confirmed.paymentIntentId },
+            ];
+
+            // Add WooCommerce order notes matching Woo Stripe gateway format
+            await addWcOrderNote(orderId, {
+              note: `Stripe payment intent created (Payment Intent ID: ${confirmed.paymentIntentId})`,
+              customer_note: false,
+            });
+
+            if (confirmed.chargeId) {
+              await addWcOrderNote(orderId, {
+                note: `Payment via Credit / Debit Card (${confirmed.chargeId})`,
+                customer_note: false,
+              });
+              await addWcOrderNote(orderId, {
+                note: `Stripe charge complete (Charge ID: ${confirmed.chargeId})`,
+                customer_note: false,
+              });
+            }
+
+            // Mark WC order paid via REST with charge ID and metadata
             await updateWcOrder(orderId, {
               status: "processing",
               set_paid: true,
-              transaction_id: stripeResult.id,
+              transaction_id: transactionId,
+              meta_data: metaData,
             });
 
             logPaymentTrace("info", {
@@ -878,6 +910,7 @@ export const checkoutResolvers = {
               requestId: ctx.requestId,
               orderId,
               intentId: stripeResult.id,
+              chargeId: confirmed.chargeId,
               ms: Date.now() - started,
             });
           } else if (stripeResult.requiresAction) {
@@ -939,6 +972,16 @@ export const checkoutResolvers = {
             paymentDetails.push({
               key: "transaction_id",
               value: paypalResult.id,
+            });
+
+            // Add WooCommerce order notes for PayPal payment
+            await addWcOrderNote(orderId, {
+              note: `PayPal order created (PayPal Order ID: ${paypalOrderId})`,
+              customer_note: false,
+            });
+            await addWcOrderNote(orderId, {
+              note: `PayPal payment captured (Capture ID: ${paypalResult.id})`,
+              customer_note: false,
             });
 
             // Mark WC order paid via REST
