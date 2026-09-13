@@ -85,15 +85,22 @@ export async function getStoreCartToken(
     signal: AbortSignal.timeout(cfg.WC_REST_TIMEOUT_MS),
   });
   const token = headerValue(res.headers, "Cart-Token", "cart-token");
-  logPaymentTrace("info", {
+  const text = res.ok ? "" : await res.text();
+  logPaymentTrace(res.ok ? "info" : "error", {
     msg: "wc_store_cart_token",
     status: res.status,
     ms: Date.now() - started,
     cartToken: token,
     wpCookieHeader: cookie,
+    ...(res.ok ? {} : { responsePreview: text.slice(0, 300) }),
   });
   if (!res.ok) {
-    const text = await res.text();
+    // Store API returns 401/403 when the WP session is dead or mismatched
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "WordPress session rejected by Store API. Please log in again.",
+      );
+    }
     throw new Error(`WC Store cart failed (${res.status}): ${text.slice(0, 200)}`);
   }
   if (!token) {

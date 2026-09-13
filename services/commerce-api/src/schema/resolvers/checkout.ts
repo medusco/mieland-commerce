@@ -65,8 +65,6 @@ import {
 } from "../../utils/selection.js";
 import type { CartAddress } from "../../engine/types.js";
 
-const FORCE_LOGOUT_MESSAGE =
-  "You have been signed out. Please sign in again to continue.";
 
 const PPCP_GATEWAY = "ppcp-gateway";
 
@@ -80,7 +78,37 @@ function isStripePaymentMethod(method: string | null | undefined): boolean {
   return !m || m === "stripe" || m.startsWith("stripe");
 }
 
-/** Ensure mc-wp-session matches JWT; refresh via stored WP token when stale. */
+/** Cache for session validation to avoid duplicate slow checks (checkout + pay). */
+const sessionValidationCache = new Map<string, { valid: boolean; expires: number }>();
+const SESSION_CACHE_TTL_MS = 10_000; // 10 seconds
+
+function cacheSessionValidation(userId: number, wpCookie: string, valid: boolean): void {
+  const key = `${userId}:${createHash("sha256").update(wpCookie).digest("hex").slice(0, 16)}`;
+  sessionValidationCache.set(key, {
+    valid,
+    expires: Date.now() + SESSION_CACHE_TTL_MS,
+  });
+  // Cleanup old entries
+  if (sessionValidationCache.size > 1000) {
+    const now = Date.now();
+    for (const [k, v] of sessionValidationCache.entries()) {
+      if (v.expires < now) sessionValidationCache.delete(k);
+    }
+  }
+}
+
+function getCachedSessionValidation(userId: number, wpCookie: string): boolean | null {
+  const key = `${userId}:${createHash("sha256").update(wpCookie).digest("hex").slice(0, 16)}`;
+  const cached = sessionValidationCache.get(key);
+  if (!cached) return null;
+  if (cached.expires < Date.now()) {
+    sessionValidationCache.delete(key);
+    return null;
+  }
+  return cached.valid;
+}
+
+/** Ensure mc-wp-session matches JWT and is accepted by WordPress. */
 async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
   const userId = ctx.userId;
   if (userId == null) {
@@ -100,13 +128,20 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
 
   const acceptCookie = async (
     cookie: string,
-    opts?: { trustAfterRefresh?: boolean },
+    opts?: { skipAliveCheck?: boolean },
   ): Promise<boolean> => {
     const normalized = normalizeWpCookieHeader(cookie) || "";
     if (!normalized) return false;
     if (!(await isWpSessionMatchingUser(normalized, userId))) return false;
-    if (opts?.trustAfterRefresh) return true;
-    return isWpSessionAliveForUser(normalized, userId, origin);
+    if (opts?.skipAliveCheck) return true;
+    
+    // Check cache first to avoid duplicate slow checks
+    const cached = getCachedSessionValidation(userId, normalized);
+    if (cached !== null) return cached;
+    
+    const alive = await isWpSessionAliveForUser(normalized, userId, origin);
+    cacheSessionValidation(userId, normalized, alive);
+    return alive;
   };
 
   const logOk = (
@@ -127,7 +162,7 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     });
   };
 
-  // Fast path: use the browser mirror before a slow/failing WP refresh round-trip.
+  // Fast path: use the browser cookie if it's still valid
   if (wpCookie && (await acceptCookie(wpCookie))) {
     logOk(
       "context_cookie",
@@ -137,51 +172,22 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
     return wpCookie;
   }
 
+  // Attempt refresh via WP GraphQL Headless Login
   const refreshed = await refreshWpSessionFromCookie(refreshOpts);
   if (
     refreshed?.cookieHeader &&
-    (await acceptCookie(refreshed.cookieHeader, { trustAfterRefresh: true }))
+    (await acceptCookie(refreshed.cookieHeader, { skipAliveCheck: true }))
   ) {
     const cookieHeader =
       normalizeWpCookieHeader(refreshed.cookieHeader) ||
       refreshed.cookieHeader;
     logOk("refresh", cookieHeader, ctx.req.headers.get("x-mc-wp-session"));
+    // Cache the refreshed session as valid
+    cacheSessionValidation(userId, cookieHeader, true);
     return cookieHeader;
   }
 
-  // Refresh GraphQL often errors while wordpress_logged_in_* is still valid.
-  if (wpCookie && (await isWpSessionMatchingUser(wpCookie, userId))) {
-    logPaymentTrace("warn", {
-      msg: "wp_session_sync_soft_accept",
-      requestId: ctx.requestId,
-      jwtUserId: userId,
-      wpLoggedInLogin: parseWpLoggedInUserLogin(wpCookie),
-      wpCookieHeader: wpCookie,
-      refreshAttempted: Boolean(refreshed),
-      ...inspectWpCookieEncoding(wpCookie),
-      ...wpSessionEncodingSnapshot(
-        "incomingHeaderMcWpSession",
-        ctx.req.headers.get("x-mc-wp-session"),
-      ),
-      ...paymentAuthSnapshot(ctx),
-    });
-    return wpCookie;
-  }
-
-  if (refreshed?.cookieHeader) {
-    const cookieHeader =
-      normalizeWpCookieHeader(refreshed.cookieHeader) ||
-      refreshed.cookieHeader;
-    if (await isWpSessionMatchingUser(cookieHeader, userId)) {
-      logOk(
-        "refresh_soft",
-        cookieHeader,
-        ctx.req.headers.get("x-mc-wp-session"),
-      );
-      return cookieHeader;
-    }
-  }
-
+  // Session is dead - no soft-accept fallback. Fail fast with clear error.
   if (!wpCookie && !refreshed?.cookieHeader) {
     logPaymentTrace("error", {
       msg: "wp_session_sync_missing",
@@ -189,23 +195,26 @@ async function requireSyncedWpSession(ctx: AppContext): Promise<string> {
       jwtUserId: userId,
       ...paymentAuthSnapshot(ctx),
     });
-    throw new Error(
-      "WordPress session required — log in again (missing mc-wp-session cookie)",
+    throw new GraphQLError(
+      "Your session has expired. Please log in again to continue.",
+      { extensions: { code: "SESSION_EXPIRED" } },
     );
   }
 
   logPaymentTrace("error", {
-    msg: "wp_session_sync_force_logout",
+    msg: "wp_session_sync_dead",
     requestId: ctx.requestId,
     jwtUserId: userId,
     wpCookieHeader: wpCookie || null,
     hadRefresh: Boolean(refreshed?.cookieHeader),
+    refreshSuccess: Boolean(refreshed?.cookieHeader),
     ...paymentAuthSnapshot(ctx),
   });
   scheduleForceLogout(ctx.requestScopeId, ctx.req);
-  throw new GraphQLError(FORCE_LOGOUT_MESSAGE, {
-    extensions: { code: FORCE_LOGOUT_CODE },
-  });
+  throw new GraphQLError(
+    "Your WordPress session has expired. Please log in again to continue with checkout.",
+    { extensions: { code: FORCE_LOGOUT_CODE } },
+  );
 }
 
 function mapAddress(input?: CartAddress | null): CartAddress {
@@ -1121,6 +1130,13 @@ export const checkoutResolvers = {
           ...paymentAuthSnapshot(ctx),
         });
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const errorName = err instanceof Error ? err.name : "";
+        const isTimeout = 
+          errorName === "TimeoutError" ||
+          errorName === "AbortError" ||
+          /timeout|timed out|aborted/i.test(message);
+        
         logPaymentTrace("error", {
           msg: "process_order_payment_fail",
           requestId: ctx.requestId,
@@ -1129,13 +1145,36 @@ export const checkoutResolvers = {
           jwtUserId: ctx.userId,
           guestPayment: ctx.userId == null,
           err: String(err),
+          errorName,
+          isTimeout,
           ...paymentAuthSnapshot(ctx),
         });
-        const message = err instanceof Error ? err.message : String(err);
+        
         // Concurrent pay — do not flip the order to failed while the other request finishes.
         if (!/already being processed/i.test(message)) {
           await markOrderPaymentFailed(orderId, ctx.requestId);
         }
+        
+        // Convert timeout errors to user-friendly GraphQL errors
+        if (isTimeout) {
+          throw new GraphQLError(
+            "Payment processing timed out. Your payment may still be processing. Please check your order status before retrying.",
+            { 
+              extensions: { 
+                code: "PAYMENT_TIMEOUT",
+                orderId,
+              } 
+            },
+          );
+        }
+        
+        // Surface Store API errors clearly
+        if (/belongs to a different customer|not found|invalid/i.test(message)) {
+          throw new GraphQLError(message, {
+            extensions: { code: "PAYMENT_FAILED" },
+          });
+        }
+        
         throw err;
       }
 
