@@ -537,7 +537,7 @@ export const checkoutResolvers = {
         // Ensure browser sent mc-wp-session cookie for later Store API payment; do not
         // send it on WC REST — a customer Cookie demotes admin consumer keys.
         await requireSyncedWpSession(ctx);
-        const wcPayload = buildWcOrderFromCart({
+        const wcPayload = await buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: "stripe",
@@ -635,7 +635,7 @@ export const checkoutResolvers = {
         if (userId != null) {
           await requireSyncedWpSession(ctx);
         }
-        const wcPayload = buildWcOrderFromCart({
+        const wcPayload = await buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: input.paymentMethod || "stripe",
