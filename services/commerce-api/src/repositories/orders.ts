@@ -155,6 +155,11 @@ function money(v: unknown): string {
   return n.toFixed(2);
 }
 
+/** WooCommerce Product Bundles component lines store the parent order item id in `_bundled_by`. */
+function isBundledLineItemMeta(meta: Record<string, string>): boolean {
+  return Boolean(meta._bundled_by?.trim());
+}
+
 function statusGql(status: string): string {
   const s = status.replace(/^wc-/, "");
   return s.toUpperCase();
@@ -305,6 +310,7 @@ async function orderLines(orderId: number, withProducts: boolean) {
       quantity: Number(meta._qty || 1),
       subtotal: money(meta._line_subtotal),
       total: money(meta._line_total),
+      isBundledItem: isBundledLineItemMeta(meta),
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     };
@@ -364,6 +370,7 @@ async function orderLinesMany(orderIds: number[], withProducts: boolean) {
       quantity: Number(meta._qty || 1),
       subtotal: money(meta._line_subtotal),
       total: money(meta._line_total),
+      isBundledItem: isBundledLineItemMeta(meta),
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     });

@@ -406,6 +406,7 @@ export const typeDefs = /* GraphQL */ `
     quantity: Int
     subtotal: String
     total: String
+    isBundledItem: Boolean
     product: LineItemProductEdge
     variation: LineItemVariationEdge
   }
