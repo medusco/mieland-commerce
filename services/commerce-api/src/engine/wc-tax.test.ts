@@ -626,3 +626,123 @@ describe("variation tax inheritance", () => {
     assert.equal(shippingTax.get(10), 0.60); // 4% of $14.99 = $0.60
   });
 });
+
+describe("coupon tax calculation", () => {
+  it("calculates zero merchandise tax when 100% coupon is applied", () => {
+    // 100% / full-cart coupon should yield $0 merchandise tax
+    const rate: MatchedTaxRate = {
+      rateId: 1,
+      rate: 4.0,
+      label: "Standard",
+      shipping: false,
+      compound: false,
+    };
+    
+    // After 100% coupon: $0 merchandise
+    const postCouponAmount = 0;
+    const taxes = calcExclusiveTax(postCouponAmount, [rate]);
+    
+    assert.equal(taxes.size, 0); // No tax when amount is $0
+  });
+
+  it("calculates tax on 90% of price when 10% coupon is applied", () => {
+    const rate: MatchedTaxRate = {
+      rateId: 1,
+      rate: 10.0,
+      label: "Standard",
+      shipping: false,
+      compound: false,
+    };
+    
+    // Original price $100, after 10% coupon: $90
+    const postCouponAmount = 90.0;
+    const taxes = calcExclusiveTax(postCouponAmount, [rate]);
+    
+    assert.equal(taxes.get(1), 9.0); // 10% tax on $90 = $9
+  });
+
+  it("applies shipping tax even when merchandise is 100% off", () => {
+    const rate: MatchedTaxRate = {
+      rateId: 1,
+      rate: 4.0,
+      label: "Standard",
+      shipping: true,
+      compound: false,
+    };
+    
+    // Merchandise is $0 after coupon
+    const merchandiseTax = calcExclusiveTax(0, [rate]);
+    assert.equal(merchandiseTax.size, 0);
+    
+    // But shipping is still $10 and should be taxed
+    const shippingCost = 10.0;
+    const shippingTax = calcExclusiveTax(shippingCost, [rate]);
+    assert.equal(shippingTax.get(1), 0.40); // 4% of $10 = $0.40
+  });
+
+  it("proportionally reduces tax for partial coupon", () => {
+    const rate: MatchedTaxRate = {
+      rateId: 1,
+      rate: 8.0,
+      label: "Standard",
+      shipping: false,
+      compound: false,
+    };
+    
+    const originalPrice = 79.97;
+    const couponPercent = 50; // 50% off
+    const postCouponAmount = originalPrice * (1 - couponPercent / 100);
+    
+    const taxes = calcExclusiveTax(postCouponAmount, [rate]);
+    assert.equal(taxes.get(1), 3.20); // 8% of $39.985 ≈ $3.20
+  });
+
+  it("calculates zero contentsTax but nonzero shippingTax when full coupon + paid shipping", () => {
+    const rates: MatchedTaxRate[] = [
+      {
+        rateId: 1,
+        rate: 4.0,
+        label: "Standard",
+        shipping: true,
+        compound: false,
+      },
+    ];
+    
+    // Merchandise: $0 after 100% coupon
+    const contentsTax = calcExclusiveTax(0, rates);
+    let contentsTotal = 0;
+    for (const [, amount] of contentsTax) {
+      contentsTotal += amount;
+    }
+    assert.equal(contentsTotal, 0);
+    
+    // Shipping: still charged
+    const shippingCost = 5.0;
+    const shippingTax = calcExclusiveTax(shippingCost, rates.filter(r => r.shipping));
+    let shippingTotal = 0;
+    for (const [, amount] of shippingTax) {
+      shippingTotal += amount;
+    }
+    assert.equal(shippingTotal, 0.20); // 4% of $5 = $0.20
+    
+    // Total tax = contents + shipping
+    const totalTax = contentsTotal + shippingTotal;
+    assert.equal(totalTax, 0.20);
+  });
+
+  it("does not apply shipping tax when rate.shipping is false", () => {
+    const rate: MatchedTaxRate = {
+      rateId: 1,
+      rate: 10.0,
+      label: "No Ship Tax",
+      shipping: false,
+      compound: false,
+    };
+    
+    const shippingCost = 15.0;
+    const shippingRates = [rate].filter(r => r.shipping);
+    const shippingTax = calcExclusiveTax(shippingCost, shippingRates);
+    
+    assert.equal(shippingTax.size, 0); // No shipping tax
+  });
+});
