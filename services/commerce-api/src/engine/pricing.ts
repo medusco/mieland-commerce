@@ -74,16 +74,16 @@ export function percentCouponMultiplier(
 }
 
 /**
- * Apply percent coupons to catalog regular price (not sale, not post-subscription).
- * Then {@link chooseBestUnitPrice} against sale and compare with subscription price.
+ * Apply percent coupons to a unit price.
+ * Pass the actual cart line price (after subscription and sale comparison) to match WooCommerce.
  */
 export function applyPercentCouponToUnitPrice(
-  regularPrice: number,
+  unitPrice: number,
   coupons: Array<{ discountType: string; amount: number }>,
 ): number {
   const multiplier = percentCouponMultiplier(coupons);
-  if (multiplier >= 1) return roundMoney(regularPrice);
-  return roundMoney(regularPrice * multiplier);
+  if (multiplier >= 1) return roundMoney(unitPrice);
+  return roundMoney(unitPrice * multiplier);
 }
 
 type PricedProductNode = {
