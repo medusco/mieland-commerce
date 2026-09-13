@@ -15,14 +15,11 @@ import {
   createWcOrder,
   updateWcOrder,
 } from "../../clients/woocommerce-rest.js";
+import { createPaypalOrder, capturePaypalOrder } from "../../clients/paypal.js";
 import {
-  processStoreCheckoutOrder,
-  toStorePaymentData,
-  type StoreAddress,
-  type StoreCheckoutOrderResponse,
-  type StorePaymentDatum,
-} from "../../clients/woocommerce-store.js";
-import { createPaypalOrder } from "../../clients/paypal.js";
+  createPaymentIntent,
+  getStripePublishableKey,
+} from "../../clients/stripe.js";
 import { getPaypalPublicSettings } from "../../repositories/paypal.js";
 import {
   inspectWpCookieEncoding,
@@ -225,48 +222,6 @@ function mapAddress(input?: CartAddress | null): CartAddress {
   };
 }
 
-function toStoreAddress(
-  a: {
-    firstName?: string | null;
-    lastName?: string | null;
-    company?: string | null;
-    address1?: string | null;
-    address2?: string | null;
-    city?: string | null;
-    state?: string | null;
-    postcode?: string | null;
-    country?: string | null;
-    phone?: string | null;
-    email?: string | null;
-  } | null | undefined,
-  opts?: { includeEmail?: boolean; emailFallback?: string | null },
-): StoreAddress {
-  const country = (a?.country ?? "").trim().toUpperCase();
-  let state = (a?.state ?? "").trim();
-  // Store API expects ISO state codes for US (e.g. CA, not California).
-  if (country === "US" && state.length > 2) {
-    // keep as-is; WC format_state usually maps names — prefer uppercase codes when 2 letters
-    state = state;
-  } else if (country === "US") {
-    state = state.toUpperCase();
-  }
-  const base: StoreAddress = {
-    first_name: a?.firstName ?? "",
-    last_name: a?.lastName ?? "",
-    company: a?.company ?? "",
-    address_1: a?.address1 ?? "",
-    address_2: a?.address2 ?? "",
-    city: a?.city ?? "",
-    state,
-    postcode: a?.postcode ?? "",
-    country,
-    phone: a?.phone ?? "",
-  };
-  if (opts?.includeEmail !== false) {
-    base.email = (a?.email || opts?.emailFallback || "").trim();
-  }
-  return base;
-}
 
 function isStripeWalletPayment(
   metaData?: Array<{ key: string; value?: string | null }> | null,
@@ -402,104 +357,7 @@ async function withCheckoutIdempotency<T>(
   }
 }
 
-const PAYMENT_IDEMP_TTL_SEC = 60 * 60;
-/** Cover Store API timeout + Stripe processing; unlock early in finally. */
-const PAYMENT_LOCK_TTL_MS = 90_000;
 
-function paymentFingerprint(
-  paymentMethod: string,
-  paymentData: StorePaymentDatum[],
-): string {
-  const paypalOrderId = paymentData.find(
-    (p) =>
-      p.key === "paypal_order_id" &&
-      typeof p.value === "string" &&
-      p.value.length > 0,
-  )?.value;
-  const source =
-    paypalOrderId ??
-    paymentData.find(
-      (p) =>
-        (p.key === "wc-stripe-payment-method" ||
-          p.key === "stripe_source" ||
-          p.key === "_stripe_source_id") &&
-        typeof p.value === "string" &&
-        /^(pm_|src_|tok_|card_)/i.test(p.value),
-    )?.value ??
-    JSON.stringify(paymentData);
-  return createHash("sha256")
-    .update(`${paymentMethod}:${String(source)}`)
-    .digest("hex")
-    .slice(0, 32);
-}
-
-/**
- * Per-order lock + result cache for Store API payment.
- * Prevents concurrent processOrderPayment from double-hitting Stripe's order lock.
- * Failures are not cached so the shopper can retry (usually with a new pm_ id).
- */
-async function withPaymentIdempotency(
-  orderId: number,
-  fingerprint: string,
-  fn: () => Promise<StoreCheckoutOrderResponse>,
-): Promise<StoreCheckoutOrderResponse> {
-  const redis = getRedis();
-  const resultKey = `payment:idemp:${orderId}:${fingerprint}`;
-  const lockKey = `payment:lock:${orderId}`;
-
-  const cached = await redis.get(resultKey);
-  if (cached) {
-    return JSON.parse(cached) as StoreCheckoutOrderResponse;
-  }
-
-  const token = `${Date.now()}-${Math.random()}`;
-  let acquired = (await redis.set(lockKey, token, "PX", PAYMENT_LOCK_TTL_MS, "NX")) === "OK";
-
-  if (!acquired) {
-    // Wait for the in-flight payment to finish and publish a result.
-    for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      const again = await redis.get(resultKey);
-      if (again) {
-        return JSON.parse(again) as StoreCheckoutOrderResponse;
-      }
-      const lockHeld = await redis.get(lockKey);
-      if (!lockHeld) {
-        acquired =
-          (await redis.set(lockKey, token, "PX", PAYMENT_LOCK_TTL_MS, "NX")) ===
-          "OK";
-        if (acquired) break;
-      }
-    }
-  }
-
-  if (!acquired) {
-    const late = await redis.get(resultKey);
-    if (late) {
-      return JSON.parse(late) as StoreCheckoutOrderResponse;
-    }
-    throw new Error("Your payment is already being processed. Please wait.");
-  }
-
-  try {
-    const again = await redis.get(resultKey);
-    if (again) {
-      return JSON.parse(again) as StoreCheckoutOrderResponse;
-    }
-
-    const result = await fn();
-    const status = result.payment_result?.payment_status;
-    if (!isPaymentFailureStatus(status)) {
-      await redis.set(resultKey, JSON.stringify(result), "EX", PAYMENT_IDEMP_TTL_SEC);
-    }
-    return result;
-  } finally {
-    const current = await redis.get(lockKey);
-    if (current === token) {
-      await redis.del(lockKey);
-    }
-  }
-}
 
 async function assertCartInStock(
   items: Array<{ productId: number; variationId: number | null; quantity: number }>,
@@ -509,82 +367,8 @@ async function assertCartInStock(
   }
 }
 
-function isPaymentFailureStatus(status: string | null | undefined): boolean {
-  if (!status) return false;
-  const normalized = status.toLowerCase();
-  return normalized === "failure" || normalized === "error" || normalized === "failed";
-}
 
-function isPaymentSuccessStatus(status: string | null | undefined): boolean {
-  if (!status) return false;
-  const normalized = status.toLowerCase();
-  return normalized === "success" || normalized === "succeeded";
-}
 
-function transactionIdFromStorePayment(
-  storeRes: StoreCheckoutOrderResponse,
-): string | null {
-  const details = storeRes.payment_result?.payment_details ?? [];
-  for (const detail of details) {
-    const key = detail.key?.trim().toLowerCase() ?? "";
-    if (
-      key === "stripe_intent_id" ||
-      key === "_stripe_intent_id" ||
-      key === "transaction_id" ||
-      key === "charge_id"
-    ) {
-      const value = String(detail.value ?? "").trim();
-      if (value) return value;
-    }
-  }
-  return null;
-}
-
-/**
- * Store API + Stripe should mark the order paid. When payment_status is success
- * but HPOS still shows pending/failed, sync via WC REST (headless gap / 3DS race).
- */
-async function ensureOrderMarkedPaidAfterStoreSuccess(
-  orderId: number,
-  requestId: string | undefined,
-  storeRes: StoreCheckoutOrderResponse,
-): Promise<void> {
-  const paymentStatus = storeRes.payment_result?.payment_status ?? null;
-  if (!isPaymentSuccessStatus(paymentStatus)) return;
-
-  const ctxOrder = await getOrderPaymentContext(orderId);
-  if (!ctxOrder?.needsPayment) return;
-
-  const transactionId = transactionIdFromStorePayment(storeRes);
-  const payload: { status: string; set_paid: boolean; transaction_id?: string } =
-    {
-      status: "processing",
-      set_paid: true,
-    };
-  if (transactionId) payload.transaction_id = transactionId;
-
-  try {
-    await updateWcOrder(orderId, payload);
-    logPaymentTrace("warn", {
-      msg: "process_order_payment_sync_paid",
-      requestId,
-      orderId,
-      storePaymentStatus: paymentStatus,
-      storeOrderStatus: storeRes.status ?? null,
-      previousOrderStatus: ctxOrder.status,
-      transactionId,
-    });
-  } catch (err) {
-    logPaymentTrace("error", {
-      msg: "process_order_payment_sync_paid_error",
-      requestId,
-      orderId,
-      storePaymentStatus: paymentStatus,
-      previousOrderStatus: ctxOrder.status,
-      err: String(err),
-    });
-  }
-}
 
 async function markOrderPaymentFailed(
   orderId: number,
@@ -985,6 +769,7 @@ export const checkoutResolvers = {
         jwtUserId: ctx.userId,
       });
 
+      // Ownership checks
       if (ctx.userId != null) {
         if (ctxOrder.customerId > 0 && ctxOrder.customerId !== ctx.userId) {
           throw new Error("Order not found");
@@ -1006,120 +791,185 @@ export const checkoutResolvers = {
       }
 
       const billingEmail =
-        // Guest Store API auth requires this to match the order billing email.
-        // Prefer the order over the client (Google Pay wallet email often differs).
         (ctxOrder.billing?.email || input.billingEmail || "").trim() ||
         undefined;
       if (ctxOrder.customerId === 0 && !billingEmail) {
         throw new Error("billingEmail is required for guest orders");
       }
 
+      // Guest email must match order billing
+      if (ctxOrder.customerId === 0 && billingEmail) {
+        const orderEmail = (ctxOrder.billing?.email || "").trim().toLowerCase();
+        const providedEmail = billingEmail.toLowerCase();
+        if (orderEmail && orderEmail !== providedEmail) {
+          throw new Error("Billing email does not match order");
+        }
+      }
+
       const paymentMethod =
         input.paymentMethod || ctxOrder.paymentMethod || "stripe";
-      // Prefill gateway id so toStorePaymentData writes payment_method (snake_case)
-      // into Store API payment_data — UPE reads that from $_POST, which is only
-      // payment_data (top-level payment_method is not copied into $_POST).
-      const paymentData = toStorePaymentData([
-        ...(input.paymentData ?? []),
-        { key: "payment_method", value: paymentMethod },
-      ]);
+      const paymentDataEntries = input.paymentData ?? [];
 
-      // Stripe Store API usually expects billing fields inside payment_data too.
-      if (isStripePaymentMethod(paymentMethod)) {
-        const billing = ctxOrder.billing;
-        if (billingEmail && !paymentData.some((p) => p.key === "billing_email")) {
-          paymentData.push({ key: "billing_email", value: billingEmail });
-        }
-        if (
-          billing?.firstName &&
-          !paymentData.some((p) => p.key === "billing_first_name")
-        ) {
-          paymentData.push({
-            key: "billing_first_name",
-            value: billing.firstName,
-          });
-        }
-        if (
-          billing?.lastName &&
-          !paymentData.some((p) => p.key === "billing_last_name")
-        ) {
-          paymentData.push({
-            key: "billing_last_name",
-            value: billing.lastName,
-          });
-        }
-      }
+      // Extract payment method identifiers from payment data
+      const paymentMethodId = paymentDataEntries.find(
+        (p) =>
+          (p.key === "_stripe_source_id" ||
+            p.key === "stripe_source_id" ||
+            p.key === "wc-stripe-payment-method") &&
+          typeof p.value === "string" &&
+          /^(pm_|src_|tok_|card_)/i.test(p.value),
+      )?.value;
 
-      if (isPaypalPaymentMethod(paymentMethod)) {
-        const hasPaypalOrder = paymentData.some(
-          (p) =>
-            p.key === "paypal_order_id" &&
-            typeof p.value === "string" &&
-            p.value.length > 0,
-        );
-        if (!hasPaypalOrder) {
-          throw new Error("paypal_order_id is required for PayPal payment");
-        }
-      }
-
-      // Use addresses already written by checkout (MySQL). Store API requires both.
-      let billing_address = toStoreAddress(ctxOrder.billing, {
-        emailFallback: billingEmail,
-      });
-      let shipping_address = toStoreAddress(ctxOrder.shipping, {
-        includeEmail: false,
-      });
-      if (billingEmail) {
-        billing_address = { ...billing_address, email: billingEmail };
-      }
-      if (!billing_address.address_1 || !billing_address.country) {
-        throw new Error(
-          "Order is missing billing address; cannot process payment",
-        );
-      }
-      // Pay-for-order requires shipping_address; fall back to billing when empty.
-      if (!shipping_address.address_1 || !shipping_address.country) {
-        const { email: _omit, ...billingAsShipping } = billing_address;
-        shipping_address = billingAsShipping;
-      }
+      const paypalOrderId = paymentDataEntries.find(
+        (p) =>
+          (p.key === "paypal_order_id" || p.key === "paypalOrderId") &&
+          typeof p.value === "string" &&
+          p.value.length > 0,
+      )?.value;
 
       const started = Date.now();
-      let storeRes;
+      let result: string;
+      let redirect: string | null = null;
+      let clientSecret: string | null = null;
+      let publishableKey: string | null = null;
+      let requiresAction = false;
+      const paymentDetails: Array<{ key: string; value: string }> = [];
+
       try {
-        const wpCookie =
-          ctx.userId != null ? await requireSyncedWpSession(ctx) : null;
-        const fingerprint = paymentFingerprint(paymentMethod, paymentData);
-        storeRes = await withPaymentIdempotency(orderId, fingerprint, () =>
-          processStoreCheckoutOrder(
+        // Direct Stripe payment processing
+        if (isStripePaymentMethod(paymentMethod)) {
+          logPaymentTrace("info", {
+            msg: "process_order_payment_stripe_start",
+            requestId: ctx.requestId,
             orderId,
-            {
-              key: orderKey,
-              billing_email: billingEmail,
-              billing_address,
-              shipping_address,
-              payment_method: paymentMethod,
-              payment_data: paymentData,
-            },
-            wpCookie ? { cookie: wpCookie } : undefined,
-          ),
-        );
-        logPaymentTrace("info", {
-          msg: "process_order_payment_ok",
-          requestId: ctx.requestId,
-          ms: Date.now() - started,
-          orderId,
-          jwtUserId: ctx.userId,
-          guestPayment: ctx.userId == null,
-          paymentStatus: storeRes.payment_result?.payment_status,
-          redirectUrl: storeRes.payment_result?.redirect_url ?? null,
-          storeOrderStatus: storeRes.status ?? null,
-          wpCookieHeader: wpCookie,
-          wpLoggedInLogin: wpCookie
-            ? parseWpLoggedInUserLogin(wpCookie)
-            : null,
-          paymentDetails: storeRes.payment_result?.payment_details ?? [],
-          ...paymentAuthSnapshot(ctx),
-        });
+            hasPaymentMethodId: Boolean(paymentMethodId),
+          });
+
+          const stripeResult = await createPaymentIntent({
+            amount: ctxOrder.total,
+            currency: ctxOrder.currency,
+            orderId,
+            orderKey,
+            customerId: ctxOrder.customerId > 0 ? ctxOrder.customerId : null,
+            paymentMethodId: paymentMethodId || null,
+            customerEmail: billingEmail || null,
+          });
+
+          clientSecret = stripeResult.clientSecret;
+          publishableKey = getStripePublishableKey();
+          requiresAction = stripeResult.requiresAction;
+
+          if (stripeResult.status === "succeeded") {
+            result = "success";
+            paymentDetails.push({
+              key: "stripe_intent_id",
+              value: stripeResult.id,
+            });
+
+            // Mark WC order paid via REST
+            await updateWcOrder(orderId, {
+              status: "processing",
+              set_paid: true,
+              transaction_id: stripeResult.id,
+            });
+
+            logPaymentTrace("info", {
+              msg: "process_order_payment_stripe_success",
+              requestId: ctx.requestId,
+              orderId,
+              intentId: stripeResult.id,
+              ms: Date.now() - started,
+            });
+          } else if (stripeResult.requiresAction) {
+            result = "pending";
+            paymentDetails.push({
+              key: "stripe_intent_id",
+              value: stripeResult.id,
+            });
+            logPaymentTrace("info", {
+              msg: "process_order_payment_stripe_requires_action",
+              requestId: ctx.requestId,
+              orderId,
+              intentId: stripeResult.id,
+              ms: Date.now() - started,
+            });
+          } else {
+            result = "pending";
+            paymentDetails.push({
+              key: "stripe_intent_id",
+              value: stripeResult.id,
+            });
+            logPaymentTrace("info", {
+              msg: "process_order_payment_stripe_pending",
+              requestId: ctx.requestId,
+              orderId,
+              intentId: stripeResult.id,
+              status: stripeResult.status,
+              ms: Date.now() - started,
+            });
+          }
+        }
+        // Direct PayPal payment processing
+        else if (isPaypalPaymentMethod(paymentMethod)) {
+          if (!paypalOrderId) {
+            throw new Error("paypal_order_id is required for PayPal payment");
+          }
+
+          logPaymentTrace("info", {
+            msg: "process_order_payment_paypal_start",
+            requestId: ctx.requestId,
+            orderId,
+            paypalOrderId,
+          });
+
+          const paypalResult = await capturePaypalOrder({
+            paypalOrderId,
+            orderId,
+            expectedAmount: ctxOrder.total,
+            expectedCurrency: ctxOrder.currency,
+          });
+
+          result = paypalResult.succeeded ? "success" : "failure";
+
+          if (paypalResult.succeeded) {
+            paymentDetails.push({
+              key: "paypal_order_id",
+              value: paypalOrderId,
+            });
+            paymentDetails.push({
+              key: "transaction_id",
+              value: paypalResult.id,
+            });
+
+            // Mark WC order paid via REST
+            await updateWcOrder(orderId, {
+              status: "processing",
+              set_paid: true,
+              transaction_id: paypalResult.id,
+            });
+
+            logPaymentTrace("info", {
+              msg: "process_order_payment_paypal_success",
+              requestId: ctx.requestId,
+              orderId,
+              paypalOrderId,
+              captureId: paypalResult.id,
+              ms: Date.now() - started,
+            });
+          } else {
+            await markOrderPaymentFailed(orderId, ctx.requestId);
+            logPaymentTrace("error", {
+              msg: "process_order_payment_paypal_failure",
+              requestId: ctx.requestId,
+              orderId,
+              paypalOrderId,
+              status: paypalResult.status,
+              ms: Date.now() - started,
+            });
+          }
+        } else {
+          throw new Error(`Unsupported payment method: ${paymentMethod}`);
+        }
       } catch (err) {
         logPaymentTrace("error", {
           msg: "process_order_payment_fail",
@@ -1128,27 +978,12 @@ export const checkoutResolvers = {
           orderId,
           jwtUserId: ctx.userId,
           guestPayment: ctx.userId == null,
+          paymentMethod,
           err: String(err),
           ...paymentAuthSnapshot(ctx),
         });
-        const message = err instanceof Error ? err.message : String(err);
-        // Concurrent pay — do not flip the order to failed while the other request finishes.
-        if (!/already being processed/i.test(message)) {
-          await markOrderPaymentFailed(orderId, ctx.requestId);
-        }
-        throw err;
-      }
-
-      const paymentResult = storeRes.payment_result;
-      const paymentStatus = paymentResult?.payment_status ?? null;
-      if (isPaymentFailureStatus(paymentStatus)) {
         await markOrderPaymentFailed(orderId, ctx.requestId);
-      } else if (isPaymentSuccessStatus(paymentStatus)) {
-        await ensureOrderMarkedPaidAfterStoreSuccess(
-          orderId,
-          ctx.requestId,
-          storeRes,
-        );
+        throw err;
       }
 
       const needs = orderNeedsFromInfo(info, ["order"]);
@@ -1159,13 +994,13 @@ export const checkoutResolvers = {
       return {
         clientMutationId: input.clientMutationId,
         order,
-        result: paymentStatus ?? "unknown",
-        redirect: paymentResult?.redirect_url || null,
-        paymentStatus,
-        paymentDetails: (paymentResult?.payment_details ?? []).map((d) => ({
-          key: d.key,
-          value: String(d.value ?? ""),
-        })),
+        result,
+        redirect,
+        paymentStatus: result,
+        paymentDetails,
+        clientSecret,
+        publishableKey,
+        requiresAction,
       };
     },
   },

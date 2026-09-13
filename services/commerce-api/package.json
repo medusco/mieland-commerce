@@ -34,6 +34,7 @@
     "jose": "^5.10.0",
     "mysql2": "^3.14.0",
     "rate-limit-redis": "^4.2.0",
+    "stripe": "^17.6.0",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^11.1.0",
     "wordpress-hash-node": "^1.0.0",

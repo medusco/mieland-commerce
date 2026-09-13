@@ -151,3 +151,132 @@ export async function createPaypalOrder(
     status: body.status || "CREATED",
   };
 }
+
+export type CapturePaypalOrderArgs = {
+  paypalOrderId: string;
+  orderId: number;
+  expectedAmount: string;
+  expectedCurrency?: string;
+};
+
+export type PaypalCaptureResult = {
+  id: string;
+  status: string;
+  succeeded: boolean;
+  amount: string;
+  currency: string;
+  orderId: number;
+};
+
+/**
+ * Capture a PayPal Orders v2 order and validate the amount.
+ * Uses merchant credentials from WooCommerce PPCP options.
+ */
+export async function capturePaypalOrder(
+  args: CapturePaypalOrderArgs,
+): Promise<PaypalCaptureResult> {
+  const creds = await getPaypalMerchantCredentials();
+  if (!creds?.enabled) {
+    throw new Error("PayPal is not configured or not enabled");
+  }
+
+  const token = await getAccessToken(creds);
+  const started = Date.now();
+
+  try {
+    const res = await fetch(
+      `${paypalApiBase(creds.sandbox)}/v2/checkout/orders/${args.paypalOrderId}/capture`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(20_000),
+      },
+    );
+    const text = await res.text();
+    let body: {
+      id?: string;
+      status?: string;
+      message?: string;
+      name?: string;
+      purchase_units?: Array<{
+        payments?: {
+          captures?: Array<{
+            amount?: { value?: string; currency_code?: string };
+            status?: string;
+          }>;
+        };
+      }>;
+    };
+    try {
+      body = JSON.parse(text) as typeof body;
+    } catch {
+      body = { message: text };
+    }
+
+    logJson("info", {
+      msg: "paypal_capture_order",
+      status: res.status,
+      ms: Date.now() - started,
+      sandbox: creds.sandbox,
+      paypalOrderId: args.paypalOrderId,
+      orderId: args.orderId,
+      captureStatus: body.status,
+    });
+
+    if (!res.ok || !body.id) {
+      const detail =
+        body.message || body.name || text.slice(0, 200) || `HTTP ${res.status}`;
+      throw new Error(`PayPal capture failed: ${detail}`);
+    }
+
+    if (body.status !== "COMPLETED") {
+      throw new Error(
+        `PayPal capture not completed (status: ${body.status ?? "unknown"})`,
+      );
+    }
+
+    // Extract the captured amount from the first capture
+    const capture = body.purchase_units?.[0]?.payments?.captures?.[0];
+    const capturedAmount = capture?.amount?.value ?? "0";
+    const capturedCurrency = capture?.amount?.currency_code ?? "USD";
+
+    // Validate amount matches
+    const expectedAmountDollars = Number(args.expectedAmount).toFixed(2);
+    const capturedAmountDollars = Number(capturedAmount).toFixed(2);
+    if (capturedAmountDollars !== expectedAmountDollars) {
+      throw new Error(
+        `PayPal capture amount mismatch: expected ${expectedAmountDollars}, got ${capturedAmountDollars}`,
+      );
+    }
+
+    // Validate currency if specified
+    const expectedCurrency = (args.expectedCurrency || "USD").toUpperCase();
+    if (capturedCurrency.toUpperCase() !== expectedCurrency) {
+      throw new Error(
+        `PayPal capture currency mismatch: expected ${expectedCurrency}, got ${capturedCurrency}`,
+      );
+    }
+
+    return {
+      id: body.id,
+      status: body.status,
+      succeeded: body.status === "COMPLETED",
+      amount: capturedAmountDollars,
+      currency: capturedCurrency.toUpperCase(),
+      orderId: args.orderId,
+    };
+  } catch (err) {
+    logJson("error", {
+      msg: "paypal_capture_order_fail",
+      ms: Date.now() - started,
+      paypalOrderId: args.paypalOrderId,
+      orderId: args.orderId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
