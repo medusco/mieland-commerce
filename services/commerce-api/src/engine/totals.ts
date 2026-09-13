@@ -417,6 +417,25 @@ export async function calculateCart(
   const applied = [...percentApplied, ...fixedApplied];
   const afterDiscount = roundMoney(Math.max(0, subtotalNum - discountTotal));
 
+  // Distribute fixed_cart/fixed_product discount proportionally across lines for tax calculation.
+  // Tax must see the post-coupon amounts: a 100% coupon → $0 merchandise tax.
+  const taxableLines = displayLines.map((line) => {
+    const lineSubtotal = roundMoney(line.displayUnitPrice * line.quantity);
+    let lineProportion = 0;
+    if (afterPercent > 0) {
+      lineProportion = lineSubtotal / afterPercent;
+    }
+    const lineFixedDiscount = roundMoney(fixedDiscountTotal * lineProportion);
+    const postCouponLineTotal = roundMoney(Math.max(0, lineSubtotal - lineFixedDiscount));
+    const postCouponUnitPrice = line.quantity > 0 
+      ? roundMoney(postCouponLineTotal / line.quantity)
+      : 0;
+    return {
+      ...line,
+      postCouponUnitPrice,
+    };
+  });
+
   let shippingTotal = 0;
   let packages: ShippingPackage[] = [];
   let chosen = cart.chosenShippingMethods;
@@ -453,11 +472,11 @@ export async function calculateCart(
           : shippingTotal;
 
       const bridge = await previewCartTax({
-        items: displayLines.map((line) => ({
+        items: taxableLines.map((line) => ({
           productId: line.productId,
           variationId: line.variationId ?? 0,
           quantity: line.quantity,
-          unitPrice: line.displayUnitPrice,
+          unitPrice: line.postCouponUnitPrice,
         })),
         address: {
           country: address.country,
