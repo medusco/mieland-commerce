@@ -3,6 +3,16 @@ import { logJson } from "../utils/index.js";
 import type { CalculatedCart } from "../engine/totals.js";
 import type { CartAddress, CartState } from "../engine/types.js";
 import { getItemFrequency } from "../engine/types.js";
+import { expandCalculatedCartLineItemsForProductBundles } from "./wc-order-bundles.js";
+import type { WcBundleConfigurationEntry } from "../repositories/product-bundles.js";
+
+export type WcOrderLineItemPayload = {
+  product_id: number;
+  variation_id?: number;
+  quantity: number;
+  meta_data?: Array<{ key: string; value: string }>;
+  bundle_configuration?: WcBundleConfigurationEntry[];
+};
 
 export type WcOrderPayload = {
   payment_method: string;
@@ -12,12 +22,7 @@ export type WcOrderPayload = {
   customer_note?: string;
   billing: Record<string, string>;
   shipping: Record<string, string>;
-  line_items: Array<{
-    product_id: number;
-    variation_id?: number;
-    quantity: number;
-    meta_data?: Array<{ key: string; value: string }>;
-  }>;
+  line_items: WcOrderLineItemPayload[];
   shipping_lines?: Array<{
     method_id: string;
     method_title: string;
@@ -43,18 +48,10 @@ function addr(a: CartAddress): Record<string, string> {
   };
 }
 
-export function buildWcOrderFromCart(args: {
-  cart: CartState;
-  calculated: CalculatedCart;
-  paymentMethod: string;
-  customerNote?: string | null;
-  metaData?: Array<{ key: string; value: string }>;
-  customerId?: number | null;
-}): WcOrderPayload {
-  const { cart, calculated, paymentMethod, customerNote, metaData, customerId } =
-    args;
-
-  const line_items = calculated.lines.map((line) => {
+export function buildWcOrderLineItemsFromCalculated(
+  calculated: CalculatedCart,
+): WcOrderLineItemPayload[] {
+  return calculated.lines.map((line) => {
     const meta: Array<{ key: string; value: string }> = [];
     const freq = line.frequency || getItemFrequency({
       key: line.key,
@@ -79,6 +76,23 @@ export function buildWcOrderFromCart(args: {
       meta_data: meta.length ? meta : undefined,
     };
   });
+}
+
+export async function buildWcOrderFromCart(args: {
+  cart: CartState;
+  calculated: CalculatedCart;
+  paymentMethod: string;
+  customerNote?: string | null;
+  metaData?: Array<{ key: string; value: string }>;
+  customerId?: number | null;
+}): Promise<WcOrderPayload> {
+  const { cart, calculated, paymentMethod, customerNote, metaData, customerId } =
+    args;
+
+  const line_items = await expandCalculatedCartLineItemsForProductBundles(
+    calculated,
+    buildWcOrderLineItemsFromCalculated(calculated),
+  );
 
   const shipping_lines = calculated.chosenShippingMethods.map((id) => {
     const rate = calculated.availableShippingMethods
