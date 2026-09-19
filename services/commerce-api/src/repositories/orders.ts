@@ -552,7 +552,7 @@ function mapTimelineStepsToUpdates(
         eventDate: (step.occurredAt as string | null | undefined) ?? null,
         eventCode: (step.eventCode as string | null | undefined) ?? null,
         eventDescription: (step.title as string | null | undefined) ?? null,
-        eventAddress: null,
+        eventAddress,
         dateHeading: (step.dateHeading as string | null | undefined) ?? null,
         timeLabel: (step.timeLabel as string | null | undefined) ?? null,
         detail: (step.detail as string | null | undefined) ?? null,
