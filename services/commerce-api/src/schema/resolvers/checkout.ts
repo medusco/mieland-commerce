@@ -537,7 +537,7 @@ export const checkoutResolvers = {
         // Logged-in place order: mc-wp-session must match JWT (may refresh via WP GraphQL).
         // Do not send it on WC REST — a customer Cookie demotes admin consumer keys.
         await requireSyncedWpSession(ctx);
-        const wcPayload = buildWcOrderFromCart({
+        const wcPayload = await buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: "stripe",
@@ -634,7 +634,7 @@ export const checkoutResolvers = {
         if (userId != null) {
           await requireSyncedWpSession(ctx);
         }
-        const wcPayload = buildWcOrderFromCart({
+        const wcPayload = await buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: input.paymentMethod || "stripe",
