@@ -409,7 +409,7 @@ export const typeDefs = /* GraphQL */ `
     subtotal: String
     total: String
     isBundledItem: Boolean
-    /** Parent order line item id from Woo _bundled_by meta. */
+    """Parent order line item id from Woo _bundled_by meta."""
     bundledByLineItemId: Int
     product: LineItemProductEdge
     variation: LineItemVariationEdge
