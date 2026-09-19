@@ -3,12 +3,7 @@ import { findUserById, isEmailVerified } from "../auth/index.js";
 import { getProductNodes, getAttachmentUrl, getPostMeta } from "./products.js";
 import { toGlobalId } from "../utils/index.js";
 import type { OrderListNeeds } from "../utils/selection.js";
-import {
-  fetchOrderMcfTra,
-  fetchMcfTraUpdates,
-  type McfTraPackage,
-  type McfTraUpdatesResponse,
-} from "../clients/mieland-wp-bridge.js";
+import type { McfTraUpdatesResponse } from "../clients/mieland-wp-bridge.js";
 
 type HposOrder = {
   id: number;
@@ -516,64 +511,106 @@ function parseMcf(meta: Record<string, string>): McfFields {
   };
 }
 
-function mcfFromTraPackages(
-  packages: McfTraPackage[],
-  traNumber: string | null,
-  sentToFbaAt: string | null,
-): AmazonMcfTracking | null {
-  const primary = packages.find((p) => p.traNumber || p.trackingNumber) ?? packages[0];
-  if (!primary && !traNumber && !sentToFbaAt) return null;
-  return {
-    trackingNumber: primary?.trackingNumber ?? null,
-    trackingUrl: primary?.customerTrackingLink ?? null,
-    carrier: primary?.carrierCode ?? null,
-    status: primary?.status ?? null,
-    estimatedArrival: primary?.estimatedArrival ?? null,
-    sentToFbaAt,
-    traNumber: traNumber ?? primary?.traNumber ?? null,
-  };
+function sanitizeTraNumber(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toUpperCase();
 }
 
-/**
- * When TRA / carrier tracking is missing but the order was sent to FBA,
- * refresh via WP bridge (Amazon GetFulfillmentOrder through the MCF plugin).
- */
-async function enrichMcfFromBridge(
-  orderId: number,
-  mcf: McfFields,
+function parseMcfTraUpdatesFromMeta(
   meta: Record<string, string>,
-): Promise<McfFields> {
-  const sentToFba = Boolean(meta._sent_to_fba);
-  const hasTra = Boolean(mcf.amazonMcfTraNumber);
-  const hasCarrier = Boolean(mcf.amazonMcfTracking?.trackingNumber);
-  if (!sentToFba || (hasTra && hasCarrier)) return mcf;
+  traNumber: string,
+  orderId: number,
+): McfTraUpdatesResponse {
+  const empty: McfTraUpdatesResponse = {
+    traNumber,
+    orderId,
+    packageNumber: null,
+    available: false,
+    trackingNumber: null,
+    customerTrackingLink: null,
+    carrierCode: null,
+    currentStatus: null,
+    currentStatusDescription: null,
+    updates: [],
+    source: "none",
+    error: null,
+  };
 
-  const live = await fetchOrderMcfTra(orderId, { refresh: true });
-  if (!live) return mcf;
+  const raw = meta._ns_fba_amazon_tra_updates;
+  if (!raw) return empty;
 
-  const tracking =
-    mcfFromTraPackages(live.packages ?? [], live.traNumber, meta._sent_to_fba || null) ??
-    mcf.amazonMcfTracking;
-
-  if (tracking && mcf.amazonMcfTracking) {
-    tracking.trackingNumber =
-      tracking.trackingNumber ?? mcf.amazonMcfTracking.trackingNumber;
-    tracking.trackingUrl =
-      tracking.trackingUrl ?? mcf.amazonMcfTracking.trackingUrl;
-    tracking.carrier = tracking.carrier ?? mcf.amazonMcfTracking.carrier;
-    tracking.status = tracking.status ?? mcf.amazonMcfTracking.status;
-    tracking.estimatedArrival =
-      tracking.estimatedArrival ?? mcf.amazonMcfTracking.estimatedArrival;
-    tracking.sentToFbaAt =
-      tracking.sentToFbaAt ?? mcf.amazonMcfTracking.sentToFbaAt;
-    tracking.traNumber = tracking.traNumber ?? mcf.amazonMcfTracking.traNumber;
+  let map: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return empty;
+    }
+    map = parsed as Record<string, unknown>;
+  } catch {
+    return empty;
   }
 
+  const key = sanitizeTraNumber(traNumber);
+  const cached = map[key];
+  if (!cached || typeof cached !== "object" || Array.isArray(cached)) {
+    return empty;
+  }
+
+  const row = cached as Record<string, unknown>;
+  const updatesRaw = Array.isArray(row.updates) ? row.updates : [];
+  const updates = updatesRaw
+    .filter((u): u is Record<string, unknown> => Boolean(u) && typeof u === "object")
+    .map((u) => {
+      const addr = u.eventAddress;
+      const eventAddress =
+        addr && typeof addr === "object" && !Array.isArray(addr)
+          ? {
+              city: (addr as Record<string, unknown>).city as string | null | undefined,
+              state: (addr as Record<string, unknown>).state as string | null | undefined,
+              country: (addr as Record<string, unknown>).country as string | null | undefined,
+              postalCode: (addr as Record<string, unknown>).postalCode as
+                | string
+                | null
+                | undefined,
+            }
+          : null;
+      return {
+        eventDate: (u.eventDate as string | null | undefined) ?? null,
+        eventCode: (u.eventCode as string | null | undefined) ?? null,
+        eventDescription: (u.eventDescription as string | null | undefined) ?? null,
+        eventAddress,
+      };
+    });
+
+  const currentStatus = (row.currentStatus as string | null | undefined) ?? null;
+  const available =
+    updates.length > 0 || Boolean(currentStatus && String(currentStatus).trim());
+
   return {
-    amazonMcfTrackingCode:
-      tracking?.trackingNumber ?? mcf.amazonMcfTrackingCode,
-    amazonMcfTracking: tracking,
-    amazonMcfTraNumber: live.traNumber ?? tracking?.traNumber ?? mcf.amazonMcfTraNumber,
+    traNumber,
+    orderId,
+    packageNumber:
+      typeof row.packageNumber === "number"
+        ? row.packageNumber
+        : row.packageNumber != null
+          ? Number(row.packageNumber)
+          : null,
+    available,
+    trackingNumber: (row.trackingNumber as string | null | undefined) ?? null,
+    customerTrackingLink:
+      (row.customerTrackingLink as string | null | undefined) ?? null,
+    carrierCode: (row.carrierCode as string | null | undefined) ?? null,
+    currentStatus,
+    currentStatusDescription:
+      (row.currentStatusDescription as string | null | undefined) ?? null,
+    shipDate: (row.shipDate as string | null | undefined) ?? null,
+    estimatedArrivalDate:
+      (row.estimatedArrivalDate as string | null | undefined) ?? null,
+    updates,
+    source: "cache",
+    error: null,
   };
 }
 
@@ -641,7 +678,6 @@ export async function listCustomerOrders(
     couponLines: false,
     meta: false,
     subscriptionFlags: false,
-    refreshMcf: false,
   },
   options?: { includeGuestOrders?: boolean; email?: string | null },
 ) {
@@ -818,7 +854,6 @@ export async function shapeOrder(
     couponLines: true,
     meta: true,
     subscriptionFlags: true,
-    refreshMcf: true,
   },
 ) {
   const order = await queryOne<HposOrder>(
@@ -850,10 +885,7 @@ export async function shapeOrder(
         amazonMcfTracking: null as AmazonMcfTracking | null,
         amazonMcfTraNumber: null as string | null,
       };
-  const mcf =
-    needs.meta && needs.refreshMcf
-      ? await enrichMcfFromBridge(orderId, mcfCached, meta)
-      : mcfCached;
+  const mcf = mcfCached;
 
   const subtotalNum =
     Number(order.total_amount) -
@@ -1007,27 +1039,19 @@ export async function getOrderById(
 }
 
 /**
- * Package tracking timeline for a TRA via WP bridge (getPackageTrackingDetails).
- * Defaults to the order's primary TRA when traNumber is omitted.
+ * Package tracking timeline for a TRA from order meta (`_ns_fba_amazon_tra_updates`).
+ * WordPress MCF sync keeps this cache fresh; commerce does not call the WP bridge.
  */
 export async function getOrderMcfTraUpdates(
   orderId: number,
   options: { traNumber?: string | null; refresh?: boolean } = {},
 ): Promise<McfTraUpdatesResponse | null> {
-  let tra =
-    options.traNumber?.trim() ||
-    null;
+  const meta = await orderMeta(orderId);
+  let tra = options.traNumber?.trim() || null;
 
   if (!tra) {
-    const meta = await orderMeta(orderId);
     const mcf = parseMcf(meta);
     tra = mcf.amazonMcfTraNumber;
-    if (!tra && meta._sent_to_fba) {
-      const live = await fetchOrderMcfTra(orderId, {
-        refresh: options.refresh !== false,
-      });
-      tra = live?.traNumber ?? null;
-    }
   }
 
   if (!tra) {
@@ -1047,10 +1071,7 @@ export async function getOrderMcfTraUpdates(
     };
   }
 
-  return fetchMcfTraUpdates(tra, {
-    orderId,
-    refresh: options.refresh !== false,
-  });
+  return parseMcfTraUpdatesFromMeta(meta, tra, orderId);
 }
 
 /** Lean load for processOrderPayment — key + addresses + ownership. */

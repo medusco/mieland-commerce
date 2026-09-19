@@ -409,7 +409,7 @@ export const typeDefs = /* GraphQL */ `
     subtotal: String
     total: String
     isBundledItem: Boolean
-    /** Parent order line item id from Woo `_bundled_by` meta. */
+    /** Parent order line item id from Woo _bundled_by meta. */
     bundledByLineItemId: Int
     product: LineItemProductEdge
     variation: LineItemVariationEdge
@@ -508,7 +508,7 @@ export const typeDefs = /* GraphQL */ `
     amazonMcfTrackingCode: String
     amazonMcfTracking: AmazonMcfTracking
     amazonMcfTraNumber: String
-    """Package tracking timeline for a TRA (Amazon getPackageTrackingDetails via WP bridge)."""
+    """Package tracking timeline for a TRA (cached on the order as _ns_fba_amazon_tra_updates)."""
     amazonMcfTraUpdates(traNumber: String, refresh: Boolean = true): AmazonMcfTraUpdates
     billing: CustomerAddress
     shipping: CustomerAddress

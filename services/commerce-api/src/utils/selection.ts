@@ -268,8 +268,6 @@ export type OrderListNeeds = {
   couponLines: boolean;
   meta: boolean;
   subscriptionFlags: boolean;
-  /** Call WP mcf-tra bridge to refresh Amazon TRA when cache is empty (detail views). */
-  refreshMcf: boolean;
 };
 
 /** Field needs under an Order selection (path e.g. `["order"]` or `["nodes"]`). */
@@ -315,8 +313,6 @@ export function orderNeedsFromInfo(
       hasAny(nodeFields, ["transactionId"]) ||
       wantsSubscriptionFlags,
     subscriptionFlags: wantsSubscriptionFlags,
-    // Live Amazon refresh only for single-order selections (not list `nodes`).
-    refreshMcf: wantsMcf && path[path.length - 1] !== "nodes",
   };
 }
 
