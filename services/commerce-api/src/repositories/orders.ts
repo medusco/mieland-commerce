@@ -518,6 +518,107 @@ function sanitizeTraNumber(value: string | null | undefined): string {
     .toUpperCase();
 }
 
+function inferTraNumberFromMeta(meta: Record<string, string>): string | null {
+  const fromTimeline = meta._ns_fba_amazon_delivery_timeline;
+  if (fromTimeline) {
+    try {
+      const parsed = JSON.parse(fromTimeline) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const row = parsed as Record<string, unknown>;
+        const tra = sanitizeTraNumber(
+          (row.traNumber as string | null | undefined) ||
+            (row.trackingNumber as string | null | undefined),
+        );
+        if (tra) return tra;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const tracking =
+    meta._ns_fba_shipment_tracking_number ||
+    meta._ns_fba_amazon_fulfillment_tracking_number ||
+    "";
+  const sanitized = sanitizeTraNumber(tracking);
+  return sanitized || null;
+}
+
+function mapTraCacheUpdates(
+  updatesRaw: unknown[],
+): McfTraUpdatesResponse["updates"] {
+  return updatesRaw
+    .filter((u): u is Record<string, unknown> => Boolean(u) && typeof u === "object")
+    .map((u) => {
+      const addr = u.eventAddress;
+      const eventAddress =
+        addr && typeof addr === "object" && !Array.isArray(addr)
+          ? {
+              city: (addr as Record<string, unknown>).city as string | null | undefined,
+              state: (addr as Record<string, unknown>).state as string | null | undefined,
+              country: (addr as Record<string, unknown>).country as string | null | undefined,
+              postalCode: (addr as Record<string, unknown>).postalCode as
+                | string
+                | null
+                | undefined,
+            }
+          : null;
+      const locationFromRow =
+        typeof u.location === "string" ? u.location.trim() : "";
+      return {
+        eventDate: (u.eventDate as string | null | undefined) ?? null,
+        eventCode: (u.eventCode as string | null | undefined) ?? null,
+        eventDescription: (u.eventDescription as string | null | undefined) ?? null,
+        eventAddress,
+        dateHeading: (u.dateHeading as string | null | undefined) ?? null,
+        timeLabel: (u.timeLabel as string | null | undefined) ?? null,
+        detail: (u.detail as string | null | undefined) ?? null,
+        location:
+          locationFromRow ||
+          formatTraEventLocation(eventAddress as Record<string, unknown> | null | undefined) ||
+          null,
+      };
+    });
+}
+
+function buildTraUpdatesResponseFromTimeline(
+  timeline: Record<string, unknown>,
+  traNumber: string,
+  orderId: number,
+): McfTraUpdatesResponse {
+  const updates = mapTimelineStepsToUpdates(timeline.steps);
+  const timelineTra = sanitizeTraNumber(
+    typeof timeline.traNumber === "string" ? timeline.traNumber : traNumber,
+  );
+  const currentStatus =
+    (timeline.currentStatus as string | null | undefined) ?? null;
+  const available =
+    updates.length > 0 || Boolean(currentStatus && String(currentStatus).trim());
+
+  return {
+    traNumber: timelineTra || traNumber,
+    orderId,
+    packageNumber: null,
+    available,
+    trackingNumber:
+      (timeline.trackingNumber as string | null | undefined) ??
+      (timelineTra || traNumber),
+    customerTrackingLink:
+      (timeline.customerTrackingLink as string | null | undefined) ?? null,
+    carrierCode: (timeline.carrierCode as string | null | undefined) ?? null,
+    carrierLabel: (timeline.carrierLabel as string | null | undefined) ?? null,
+    currentStatus,
+    currentStatusDescription:
+      (timeline.currentStatusDescription as string | null | undefined) ?? null,
+    shipDate: null,
+    estimatedArrivalDate:
+      (timeline.estimatedArrivalDate as string | null | undefined) ?? null,
+    updates,
+    source: "timeline_meta",
+    error: null,
+  };
+}
+
 function formatTraEventLocation(
   address: Record<string, unknown> | null | undefined,
 ): string {
@@ -580,41 +681,8 @@ function parseDeliveryTimelineFromMeta(
     return null;
   }
 
-  const timelineTra = sanitizeTraNumber(
-    typeof timeline.traNumber === "string" ? timeline.traNumber : traNumber,
-  );
-  if (timelineTra && sanitizeTraNumber(traNumber) !== timelineTra) {
-    return null;
-  }
-
-  const updates = mapTimelineStepsToUpdates(timeline.steps);
-  const currentStatus =
-    (timeline.currentStatus as string | null | undefined) ?? null;
-  const available =
-    updates.length > 0 || Boolean(currentStatus && String(currentStatus).trim());
-
-  return {
-    traNumber: timelineTra || traNumber,
-    orderId,
-    packageNumber: null,
-    available,
-    trackingNumber:
-      (timeline.trackingNumber as string | null | undefined) ??
-      (timelineTra || traNumber),
-    customerTrackingLink:
-      (timeline.customerTrackingLink as string | null | undefined) ?? null,
-    carrierCode: (timeline.carrierCode as string | null | undefined) ?? null,
-    carrierLabel: (timeline.carrierLabel as string | null | undefined) ?? null,
-    currentStatus,
-    currentStatusDescription:
-      (timeline.currentStatusDescription as string | null | undefined) ?? null,
-    shipDate: null,
-    estimatedArrivalDate:
-      (timeline.estimatedArrivalDate as string | null | undefined) ?? null,
-    updates,
-    source: "timeline_meta",
-    error: null,
-  };
+  // Order-scoped meta — always use when present (do not discard on TRA key mismatch).
+  return buildTraUpdatesResponseFromTimeline(timeline, traNumber, orderId);
 }
 
 function parseMcfTraUpdatesFromMeta(
@@ -656,6 +724,10 @@ function parseMcfTraUpdatesFromMeta(
     return empty;
   }
 
+  if (Array.isArray(map.steps)) {
+    return buildTraUpdatesResponseFromTimeline(map, traNumber, orderId);
+  }
+
   const key = sanitizeTraNumber(traNumber);
   const cached = map[key];
   if (!cached || typeof cached !== "object" || Array.isArray(cached)) {
@@ -664,35 +736,10 @@ function parseMcfTraUpdatesFromMeta(
 
   const row = cached as Record<string, unknown>;
   const updatesRaw = Array.isArray(row.updates) ? row.updates : [];
-  const updates = updatesRaw
-    .filter((u): u is Record<string, unknown> => Boolean(u) && typeof u === "object")
-    .map((u) => {
-      const addr = u.eventAddress;
-      const eventAddress =
-        addr && typeof addr === "object" && !Array.isArray(addr)
-          ? {
-              city: (addr as Record<string, unknown>).city as string | null | undefined,
-              state: (addr as Record<string, unknown>).state as string | null | undefined,
-              country: (addr as Record<string, unknown>).country as string | null | undefined,
-              postalCode: (addr as Record<string, unknown>).postalCode as
-                | string
-                | null
-                | undefined,
-            }
-          : null;
-      return {
-        eventDate: (u.eventDate as string | null | undefined) ?? null,
-        eventCode: (u.eventCode as string | null | undefined) ?? null,
-        eventDescription: (u.eventDescription as string | null | undefined) ?? null,
-        eventAddress,
-        dateHeading: null,
-        timeLabel: null,
-        detail: null,
-        location: formatTraEventLocation(
-          eventAddress as Record<string, unknown> | null | undefined,
-        ) || null,
-      };
-    });
+  let updates = mapTraCacheUpdates(updatesRaw);
+  if (updates.length === 0) {
+    updates = mapTimelineStepsToUpdates(row.steps);
+  }
 
   const currentStatus = (row.currentStatus as string | null | undefined) ?? null;
   const available =
@@ -714,7 +761,9 @@ function parseMcfTraUpdatesFromMeta(
     customerTrackingLink:
       (row.customerTrackingLink as string | null | undefined) ?? null,
     carrierCode,
-    carrierLabel: carrierCode ? carrierCode : null,
+    carrierLabel:
+      (row.carrierLabel as string | null | undefined) ??
+      (carrierCode ? carrierCode : null),
     currentStatus,
     currentStatusDescription:
       (row.currentStatusDescription as string | null | undefined) ?? null,
@@ -1165,6 +1214,10 @@ export async function getOrderMcfTraUpdates(
   if (!tra) {
     const mcf = parseMcf(meta);
     tra = mcf.amazonMcfTraNumber;
+  }
+
+  if (!tra) {
+    tra = inferTraNumberFromMeta(meta);
   }
 
   if (!tra) {

@@ -53,6 +53,8 @@ export type CartFieldNeeds = {
   variations: boolean;
   lineSubtotal: boolean;
   lineExtraData: boolean;
+  lineBundleFlags: boolean;
+  bundledProducts: boolean;
   cartTotals: boolean;
   /** TaxCloud bridge — only when totalTax / taxSuccess / taxMessage selected. */
   tax: boolean;
@@ -99,7 +101,7 @@ function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
   };
 }
 
-function mergeProductListNeeds(
+export function mergeProductListNeeds(
   a: ProductListNeeds,
   b: ProductListNeeds,
 ): ProductListNeeds {
@@ -145,6 +147,10 @@ export function cartNeedsFromInfo(
     variations: nodeFields.some((f) => f.name.value === "variation"),
     lineSubtotal: nodeFields.some((f) => f.name.value === "subtotal"),
     lineExtraData: nodeFields.some((f) => f.name.value === "extraData"),
+    lineBundleFlags:
+      nodeFields.some((f) => f.name.value === "isBundledItem") ||
+      nodeFields.some((f) => f.name.value === "bundledByCartKey"),
+    bundledProducts: nodeFields.some((f) => f.name.value === "bundledProducts"),
     cartTotals: hasAny(cartFields, [
       "total",
       "subtotal",
@@ -245,6 +251,50 @@ export function cartProductListNeedsFromInfo(
   merged.variations = false;
 
   return merged;
+}
+
+/** Hydrate needs for `CartItem.bundledProducts` child lines. */
+export function cartBundledProductListNeedsFromInfo(
+  info: GraphQLResolveInfo,
+  kind: "root" | "payload",
+): ProductListNeeds | null {
+  const cartFields =
+    kind === "payload" ? selectionsAt(info, ["cart"]) : selectionsAt(info, []);
+  const contentFields = cartFields
+    ? expandSelections(
+        cartFields.find((f) => f.name.value === "contents")?.selectionSet
+          ?.selections ?? [],
+        info.fragments,
+      )
+    : [];
+  const nodeFields = contentFields.length
+    ? expandSelections(
+        contentFields.find((f) => f.name.value === "nodes")?.selectionSet
+          ?.selections ?? [],
+        info.fragments,
+      )
+    : [];
+  const bundledField = nodeFields.find((f) => f.name.value === "bundledProducts");
+  if (!bundledField?.selectionSet) return null;
+
+  const names = new Set(
+    expandSelections(bundledField.selectionSet.selections, info.fragments).map(
+      (f) => f.name.value,
+    ),
+  );
+  const wantsImage = names.has("image") || names.size === 0;
+  return {
+    price: false,
+    acfThumbnail: wantsImage,
+    images: wantsImage,
+    categories: false,
+    attributes: false,
+    variations: false,
+    content: false,
+    reviews: false,
+    stock: false,
+    featured: false,
+  };
 }
 
 export function cartNeedsPricing(needs: CartFieldNeeds): boolean {

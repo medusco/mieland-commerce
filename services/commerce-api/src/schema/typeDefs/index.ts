@@ -278,11 +278,25 @@ export const typeDefs = /* GraphQL */ `
     node: ProductVariation
   }
 
+  """Bundled component on a Woo Product Bundles parent cart line."""
+  type CartBundledProduct {
+    key: ID
+    quantity: Int
+    title: String
+    image: MediaItem
+  }
+
   type CartItem {
     key: ID
     quantity: Int
     subtotal: String
     extraData: [MetaData]
+    """Woo Product Bundles component line (_bundled_by in cart extraData)."""
+    isBundledItem: Boolean
+    """Parent cart line key when isBundledItem."""
+    bundledByCartKey: ID
+    """Child products when this line is a bundle container; empty otherwise."""
+    bundledProducts: [CartBundledProduct]
     product: CartItemProductEdge
     variation: CartItemVariationEdge
   }

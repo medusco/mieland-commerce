@@ -12,6 +12,12 @@ import {
   type CartAddress,
   type CartState,
 } from "../../engine/types.js";
+import {
+  bundledChildKeysByParentKey,
+  bundledProductImage,
+  bundledProductTitle,
+  cartLineBundleMeta,
+} from "../../engine/bundle-cart.js";
 import { withCartSubscriptionDisplayPrices, type PricedProductNode } from "../../engine/pricing.js";
 import {
   assertInStock,
@@ -35,10 +41,12 @@ import {
 } from "../../repositories/coupon-holds.js";
 import { findUserById } from "../../auth/index.js";
 import {
+  cartBundledProductListNeedsFromInfo,
   cartNeedsFromInfo,
   cartNeedsPricing,
   cartProductListNeedsFromInfo,
   CART_PRODUCT_LIST_NEEDS,
+  mergeProductListNeeds,
   type CartFieldNeeds,
   type ProductListNeeds,
 } from "../../utils/selection.js";
@@ -94,13 +102,14 @@ async function shapeCartGraphql(
     await saveCart(ctx.sessionToken, calculated.cart);
   }
 
-  const loadProducts = needs.products || needs.variations;
+  const loadProducts =
+    needs.products || needs.variations || needs.bundledProducts;
   const productIds = loadProducts
     ? [
         ...new Set(
           calculated.lines.flatMap((line) => {
             const ids = [line.productId];
-            if (needs.variations && line.variationId) ids.push(line.variationId);
+            if (line.variationId) ids.push(line.variationId);
             return ids;
           }),
         ),
@@ -124,6 +133,17 @@ async function shapeCartGraphql(
   const hasPercentCoupon = calculated.appliedCoupons.some(
     (coupon) => coupon.discountType === "percent",
   );
+
+  const bundledChildKeysByParent = needs.bundledProducts
+    ? bundledChildKeysByParentKey(
+        calculated.lines.map((line) => ({
+          key: line.key,
+          extraData: line.extraData,
+        })),
+      )
+    : new Map<string, string[]>();
+  const lineByKey = new Map(calculated.lines.map((line) => [line.key, line]));
+
   const nodes = calculated.lines.map((line) => {
     const productRaw = needs.products
       ? (productById.get(line.productId) as PricedProductNode | undefined)
@@ -149,11 +169,39 @@ async function shapeCartGraphql(
             displayOpts,
           )
         : variationRaw;
+    const bundleMeta = cartLineBundleMeta(line.extraData);
+    const childKeys = bundledChildKeysByParent.get(line.key) ?? [];
+    const bundledProducts = !needs.bundledProducts
+      ? null
+      : bundleMeta.isBundledItem
+        ? null
+        : childKeys
+            .map((childKey) => {
+              const child = lineByKey.get(childKey);
+              if (!child) return null;
+              const childProduct = productById.get(child.productId);
+              const childVariation = child.variationId
+                ? productById.get(child.variationId)
+                : null;
+              return {
+                key: child.key,
+                quantity: child.quantity,
+                title: bundledProductTitle(childProduct, childVariation),
+                image: bundledProductImage(childProduct, childVariation),
+              };
+            })
+            .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
     return {
       key: line.key,
       quantity: line.quantity,
       subtotal: needs.lineSubtotal ? line.subtotal : null,
       extraData: needs.lineExtraData ? line.extraData : null,
+      isBundledItem: needs.lineBundleFlags ? bundleMeta.isBundledItem : null,
+      bundledByCartKey: needs.lineBundleFlags
+        ? bundleMeta.bundledByCartKey
+        : null,
+      bundledProducts,
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     };
@@ -216,9 +264,17 @@ function cartSelectionFromInfo(
   info: GraphQLResolveInfo,
   kind: "root" | "payload",
 ) {
+  const needs = cartNeedsFromInfo(info, kind);
+  let productNeeds = cartProductListNeedsFromInfo(info, kind);
+  const bundledNeeds = cartBundledProductListNeedsFromInfo(info, kind);
+  if (bundledNeeds) {
+    productNeeds = productNeeds
+      ? mergeProductListNeeds(productNeeds, bundledNeeds)
+      : bundledNeeds;
+  }
   return {
-    needs: cartNeedsFromInfo(info, kind),
-    productNeeds: cartProductListNeedsFromInfo(info, kind),
+    needs,
+    productNeeds,
   };
 }
 
