@@ -71,12 +71,7 @@ const envSchema = z.object({
     emptyToUndefined,
     z.coerce.number().default(15000),
   ),
-  /** Store API POST /checkout/{id} (Stripe); longer than WC_REST_TIMEOUT_MS. */
-  WC_STORE_PAYMENT_TIMEOUT_MS: z.preprocess(
-    emptyToUndefined,
-    z.coerce.number().default(60_000),
-  ),
-  /** Stripe secret key for direct payment processing (replaces Store API for Stripe). */
+  /** Stripe secret key for direct payment processing (Stripe / PayPal capture in Node). */
   STRIPE_SECRET_KEY: z.preprocess(emptyToUndefined, z.string().default("")),
   /** Stripe publishable key exposed to browser for Stripe.js / Express Checkout. */
   STRIPE_PUBLISHABLE_KEY: z.preprocess(emptyToUndefined, z.string().default("")),

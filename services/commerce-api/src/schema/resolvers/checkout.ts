@@ -534,8 +534,8 @@ export const checkoutResolvers = {
         .digest("hex");
 
       const payload = await withCheckoutIdempotency(idempKey, async () => {
-        // Ensure browser sent mc-wp-session cookie for later Store API payment; do not
-        // send it on WC REST — a customer Cookie demotes admin consumer keys.
+        // Logged-in place order: mc-wp-session must match JWT (may refresh via WP GraphQL).
+        // Do not send it on WC REST — a customer Cookie demotes admin consumer keys.
         await requireSyncedWpSession(ctx);
         const wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
@@ -630,8 +630,7 @@ export const checkoutResolvers = {
       const wcOrder = await withCheckoutIdempotency(idempKey, async () => {
         // WC REST uses consumer key/secret (admin). Do not attach the WP auth
         // cookie — WordPress would run as the customer and reject create with
-        // "Sorry, you are not allowed to create resources." Cookie is only for
-        // Store API payment. Still require it now so pay won't fail after place.
+        // "Sorry, you are not allowed to create resources."
         if (userId != null) {
           await requireSyncedWpSession(ctx);
         }

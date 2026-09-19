@@ -254,39 +254,6 @@ export function decodeWpAuthCookieValue(
   return normalizeWpCookieHeader(raw);
 }
 
-/**
- * Require a browser-held WP auth cookie (from `mc-wp-session`).
- * Used by checkout / createOrder / processOrderPayment for logged-in payers.
- */
-export function requireWpAuthCookie(
-  cookie: string | null | undefined,
-): string {
-  const trimmed = normalizeWpCookieHeader(cookie) || cookie?.trim() || "";
-  if (!trimmed) {
-    throw new Error(
-      "WordPress session required — log in again (missing mc-wp-session cookie)",
-    );
-  }
-  return trimmed;
-}
-
-/**
- * Resolve WP auth for Store API from the browser cookie / decoded header value.
- */
-export async function resolveWpAuthCookie(opts: {
-  cookie?: string | null;
-  userId?: number | null;
-}): Promise<string> {
-  const cookie = requireWpAuthCookie(opts.cookie);
-  if (
-    opts.userId != null &&
-    !(await isWpSessionMatchingUser(cookie, opts.userId))
-  ) {
-    throw new Error("wp_session_mismatch");
-  }
-  return cookie;
-}
-
 /** Extract WP user_login from a Cookie header value (wordpress_logged_in_* pair). */
 export function parseWpLoggedInUserLogin(cookieHeader: string): string | null {
   for (const part of cookieHeader.split(";")) {

@@ -65,7 +65,7 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 - `woocommerce-session: Session <token>` — Redis cart key; echoed on every response
 - `Authorization: Bearer <JWT>` — commerce-issued JWT after a successful WPGraphQL login
 - On login, commerce proxies to WPGraphQL, captures WordPress auth `Set-Cookie` headers, and sets HttpOnly `mc-wp-session` / `mc-wp-refresh` cookies (never Redis; Max-Age floored at 14 days). **Sibling subdomains** (e.g. `www.mielandmanuka.com` → `shop.mielandmanuka.com`) use `SameSite=Lax; Secure; Domain=.mielandmanuka.com` (same-site, not third-party). **Truly cross-site** storefronts use `SameSite=None; Secure; Partitioned`. Optional `AUTH_COOKIE_DOMAIN` overrides the shared domain. It also mints commerce access/refresh JWTs (`JWT_ACCESS_TTL_SECONDS` default 14d, `JWT_REFRESH_TTL_SECONDS` default 30d)
-- Browser sends `mc-wp-session` on later GraphQL calls (`credentials: include`). Prefer the storefront `/api/commerce` proxy so the cookie is first-party when commerce is on another host. Logged-in `checkout` / `createOrder` / `processOrderPayment` require it; commerce forwards it only to WP Store API on pay
+- Browser sends `mc-wp-session` on later GraphQL calls (`credentials: include`). Prefer the storefront `/api/commerce` proxy so the cookie is first-party when commerce is on another host. Logged-in `checkout` / `createOrder` validate it (sync/refresh via WPGraphQL); `processOrderPayment` uses commerce JWT + order ownership (`orderKey`, guest `billingEmail`) and does not forward the cookie to WordPress
 - Optional `x-graphql-secret` when `GRAPHQL_SECRET` is set
 
 **WP prerequisite:** Headless Login → enable “Set authentication cookie” on the password/Google providers so login responses include `wordpress_logged_in_*` cookies.
@@ -76,13 +76,11 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 `checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`) using consumer key/secret only (no WP user cookie — a customer cookie would demote the request and return “not allowed to create resources”). Logged-in orders still set the real `customer_id`. Guests use `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
 
-`processOrderPayment` pays via Store API `POST /wc/store/v1/checkout/{orderId}` and attaches the browser `mc-wp-session` cookie for logged-in payers so ownership matches. Pass WPGraphQL-style `_stripe_source_id` (`pm_…`); commerce maps it to Store API `wc-stripe-payment-method` + `stripe_source` and injects `payment_method: stripe` into `payment_data` (required because Store API replaces `$_POST` with `payment_data` only).
-
 `updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
 ## Payment Processing
 
-Commerce processes Stripe and PayPal payments directly, bypassing WooCommerce Store API.
+`processOrderPayment` charges via Stripe or PayPal in commerce-api, then marks the order paid with WC REST (`set_paid`, notes, `transaction_id`). Pass `_stripe_source_id` (`pm_…`) or `wc-stripe-payment-method` for Stripe; `paypal_order_id` for `ppcp-gateway`.
 
 **Required Railway Environment Variables:**
 - `STRIPE_SECRET_KEY` — Stripe secret key (sk_test_... or sk_live_...)

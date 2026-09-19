@@ -160,6 +160,15 @@ function isBundledLineItemMeta(meta: Record<string, string>): boolean {
   return Boolean(meta._bundled_by?.trim());
 }
 
+function bundledByLineItemIdFromMeta(
+  meta: Record<string, string>,
+): number | null {
+  const raw = meta._bundled_by?.trim();
+  if (!raw) return null;
+  const id = Number(raw);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 function statusGql(status: string): string {
   const s = status.replace(/^wc-/, "");
   return s.toUpperCase();
@@ -311,6 +320,7 @@ async function orderLines(orderId: number, withProducts: boolean) {
       subtotal: money(meta._line_subtotal),
       total: money(meta._line_total),
       isBundledItem: isBundledLineItemMeta(meta),
+      bundledByLineItemId: bundledByLineItemIdFromMeta(meta),
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     };
@@ -371,6 +381,7 @@ async function orderLinesMany(orderIds: number[], withProducts: boolean) {
       subtotal: money(meta._line_subtotal),
       total: money(meta._line_total),
       isBundledItem: isBundledLineItemMeta(meta),
+      bundledByLineItemId: bundledByLineItemIdFromMeta(meta),
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     });
@@ -1042,7 +1053,7 @@ export async function getOrderMcfTraUpdates(
   });
 }
 
-/** Lean load for Store API checkout/{id} payment — key + addresses + ownership. */
+/** Lean load for processOrderPayment — key + addresses + ownership. */
 export async function getOrderPaymentContext(orderId: number) {
   const order = await queryOne<{
     id: number;

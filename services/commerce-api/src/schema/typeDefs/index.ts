@@ -409,6 +409,8 @@ export const typeDefs = /* GraphQL */ `
     subtotal: String
     total: String
     isBundledItem: Boolean
+    /** Parent order line item id from Woo `_bundled_by` meta. */
+    bundledByLineItemId: Int
     product: LineItemProductEdge
     variation: LineItemVariationEdge
   }
@@ -908,8 +910,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   """
-  Pay an existing unpaid order via WooCommerce Store API
-  POST /wc/store/v1/checkout/{orderId} (runs gateway process_payment).
+  Pay an existing unpaid order (Stripe PaymentIntent or PayPal capture in commerce-api).
   """
   input ProcessOrderPaymentInput {
     clientMutationId: String
@@ -920,9 +921,9 @@ export const typeDefs = /* GraphQL */ `
     billingEmail: String
     paymentMethod: String
     """
-    Store API payment_data key/values.
-    Stripe: prefer _stripe_source_id (pm_…) — mapped to wc-stripe-payment-method + stripe_source.
-    PayPal (ppcp-gateway): paypal_order_id + funding_source (same keys PPCP Blocks send).
+    Gateway fields from the storefront.
+    Stripe: _stripe_source_id or wc-stripe-payment-method (pm_…).
+    PayPal (ppcp-gateway): paypal_order_id (+ optional funding_source).
     """
     paymentData: [MetaDataInput]
   }

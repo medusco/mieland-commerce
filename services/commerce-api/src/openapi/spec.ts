@@ -233,7 +233,7 @@ Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/gra
                   },
                 },
                 processOrderPayment: {
-                  summary: "processOrderPayment (Store API)",
+                  summary: "processOrderPayment (Stripe)",
                   value: {
                     query: `mutation Pay($input: ProcessOrderPaymentInput!) {
   processOrderPayment(input: $input) {
