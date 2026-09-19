@@ -469,6 +469,10 @@ export const typeDefs = /* GraphQL */ `
     eventCode: String
     eventDescription: String
     eventAddress: AmazonMcfTraEventAddress
+    dateHeading: String
+    timeLabel: String
+    detail: String
+    location: String
   }
 
   type AmazonMcfTraUpdates {
@@ -481,6 +485,7 @@ export const typeDefs = /* GraphQL */ `
     trackingNumber: String
     customerTrackingLink: String
     carrierCode: String
+    carrierLabel: String
     shipDate: String
     estimatedArrivalDate: String
     updates: [AmazonMcfTraUpdate]

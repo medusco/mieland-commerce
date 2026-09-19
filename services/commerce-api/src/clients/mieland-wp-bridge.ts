@@ -36,6 +36,10 @@ export type McfTraUpdateEvent = {
   eventCode: string | null;
   eventDescription: string | null;
   eventAddress: McfTraEventAddress | null;
+  dateHeading?: string | null;
+  timeLabel?: string | null;
+  detail?: string | null;
+  location?: string | null;
 };
 
 export type McfTraUpdatesResponse = {
@@ -47,6 +51,7 @@ export type McfTraUpdatesResponse = {
   trackingNumber: string | null;
   customerTrackingLink: string | null;
   carrierCode: string | null;
+  carrierLabel?: string | null;
   currentStatus: string | null;
   currentStatusDescription: string | null;
   shipDate?: string | null;
