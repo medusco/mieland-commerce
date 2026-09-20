@@ -18,6 +18,11 @@ import {
   bundledProductTitle,
   cartLineBundleMeta,
 } from "../../engine/bundle-cart.js";
+import {
+  addBundleProductToCart,
+  catalogBundledProductsForParent,
+} from "../../engine/expand-bundle-cart.js";
+import { getBundledCatalogItems, getBundledCatalogItemsMany } from "../../repositories/product-bundles.js";
 import { withCartSubscriptionDisplayPrices, type PricedProductNode } from "../../engine/pricing.js";
 import {
   assertInStock,
@@ -102,6 +107,14 @@ async function shapeCartGraphql(
     await saveCart(ctx.sessionToken, calculated.cart);
   }
 
+  const bundleCatalogByProductId = needs.bundledProducts
+    ? await getBundledCatalogItemsMany(
+        calculated.lines
+          .filter((line) => !cartLineBundleMeta(line.extraData).isBundledItem)
+          .map((line) => line.productId),
+      )
+    : new Map<number, Awaited<ReturnType<typeof getBundledCatalogItems>>>();
+
   const loadProducts =
     needs.products || needs.variations || needs.bundledProducts;
   const productIds = loadProducts
@@ -111,7 +124,17 @@ async function shapeCartGraphql(
             const ids = [line.productId];
             if (line.variationId) ids.push(line.variationId);
             return ids;
-          }),
+          }).concat(
+            needs.bundledProducts
+              ? [...bundleCatalogByProductId.values()].flatMap((catalog) =>
+                  catalog.flatMap((entry) => {
+                    const ids = [entry.productId];
+                    if (entry.variationId) ids.push(entry.variationId);
+                    return ids;
+                  }),
+                )
+              : [],
+          ),
         ),
       ]
     : [];
@@ -171,26 +194,42 @@ async function shapeCartGraphql(
         : variationRaw;
     const bundleMeta = cartLineBundleMeta(line.extraData);
     const childKeys = bundledChildKeysByParent.get(line.key) ?? [];
+    const catalog = bundleCatalogByProductId.get(line.productId) ?? [];
+    const bundledRows =
+      childKeys.length > 0
+        ? childKeys
+            .map((childKey) => {
+              const child = lineByKey.get(childKey);
+              if (!child) return null;
+              return {
+                key: child.key,
+                quantity: child.quantity,
+                productId: child.productId,
+                variationId: child.variationId,
+              };
+            })
+            .filter((row): row is NonNullable<typeof row> => Boolean(row))
+        : catalog.length > 0
+          ? catalogBundledProductsForParent(line, catalog)
+          : [];
     const bundledProducts = !needs.bundledProducts
       ? null
       : bundleMeta.isBundledItem
         ? null
-        : childKeys
-            .map((childKey) => {
-              const child = lineByKey.get(childKey);
-              if (!child) return null;
-              const childProduct = productById.get(child.productId);
-              const childVariation = child.variationId
-                ? productById.get(child.variationId)
+        : bundledRows
+            .map((row) => {
+              const childProduct = productById.get(row.productId);
+              const childVariation = row.variationId
+                ? productById.get(row.variationId)
                 : null;
               return {
-                key: child.key,
-                quantity: child.quantity,
+                key: row.key,
+                quantity: row.quantity,
                 title: bundledProductTitle(childProduct, childVariation),
                 image: bundledProductImage(childProduct, childVariation),
               };
             })
-            .filter((row): row is NonNullable<typeof row> => Boolean(row));
+            .filter((row) => Boolean(row.title));
 
     return {
       key: line.key,
@@ -314,8 +353,32 @@ export const cartResolvers = {
     ) => {
       const qty = input.quantity ?? 1;
       const extra = parseExtraDataString(input.extraData);
+      const bundleCatalog = await getBundledCatalogItems(input.productId);
 
       const cart = await mutateCart(ctx.sessionToken, async (c) => {
+        if (bundleCatalog.length > 0) {
+          await assertInStock(
+            input.productId,
+            input.variationId ?? null,
+            qty,
+          );
+          for (const entry of bundleCatalog) {
+            await assertInStock(
+              entry.productId,
+              entry.variationId,
+              entry.quantityPerBundle * qty,
+            );
+          }
+          addBundleProductToCart(c, {
+            bundleProductId: input.productId,
+            bundleVariationId: input.variationId ?? null,
+            quantity: qty,
+            extraData: extra,
+            catalog: bundleCatalog,
+          });
+          return { cart: c, result: c };
+        }
+
         const existing = findMergeableItem(
           c,
           input.productId,
