@@ -749,14 +749,16 @@ export const customerResolvers = {
         input,
       }: {
         input: {
-          tokenId: number;
+          tokenId: string | number;
           clientMutationId?: string;
         };
       },
       ctx: AppContext,
     ) => {
       const userId = requireUser(ctx);
-      const success = await deleteCustomerPaymentToken(userId, input.tokenId);
+      const tokenId = parseDatabaseId(input.tokenId);
+      if (!tokenId) throw new Error("Invalid payment token ID");
+      const success = await deleteCustomerPaymentToken(userId, tokenId);
       return {
         clientMutationId: input.clientMutationId,
         success,
@@ -769,16 +771,18 @@ export const customerResolvers = {
         input,
       }: {
         input: {
-          tokenId: number;
+          tokenId: string | number;
           clientMutationId?: string;
         };
       },
       ctx: AppContext,
     ) => {
       const userId = requireUser(ctx);
+      const tokenId = parseDatabaseId(input.tokenId);
+      if (!tokenId) throw new Error("Invalid payment token ID");
       const success = await setCustomerDefaultPaymentToken(
         userId,
-        input.tokenId,
+        tokenId,
       );
       return {
         clientMutationId: input.clientMutationId,

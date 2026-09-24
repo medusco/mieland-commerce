@@ -1097,14 +1097,14 @@ export const typeDefs = /* GraphQL */ `
 
   input DeletePaymentMethodInput {
     clientMutationId: String
-    """WooCommerce payment token ID."""
-    tokenId: Int!
+    """WooCommerce payment token ID (matches PaymentToken.id)."""
+    tokenId: ID!
   }
 
   input SetDefaultPaymentMethodInput {
     clientMutationId: String
-    """WooCommerce payment token ID to set as default."""
-    tokenId: Int!
+    """WooCommerce payment token ID to set as default (matches PaymentToken.id)."""
+    tokenId: ID!
   }
 
   type AddPaymentMethodPayload {
