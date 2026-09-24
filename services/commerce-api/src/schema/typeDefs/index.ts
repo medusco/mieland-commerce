@@ -1087,6 +1087,16 @@ export const typeDefs = /* GraphQL */ `
     id: Int!
   }
 
+  input PauseMielandSubscriptionInput {
+    clientMutationId: String
+    id: Int!
+  }
+
+  input ResumeMielandSubscriptionInput {
+    clientMutationId: String
+    id: Int!
+  }
+
   input AddPaymentMethodInput {
     clientMutationId: String
     """Stripe PaymentMethod ID (pm_...)."""
@@ -1244,6 +1254,16 @@ export const typeDefs = /* GraphQL */ `
     clientMutationId: String
   }
 
+  type PauseMielandSubscriptionPayload {
+    subscription: MielandSubscription
+    clientMutationId: String
+  }
+
+  type ResumeMielandSubscriptionPayload {
+    subscription: MielandSubscription
+    clientMutationId: String
+  }
+
   """Public WooCommerce PayPal Payments settings (no secrets)."""
   type PaypalSettings {
     clientId: String
@@ -1335,6 +1355,8 @@ export const typeDefs = /* GraphQL */ `
     syncWordPressSession(input: SyncWordPressSessionInput): SyncWordPressSessionPayload
     updateMielandSubscription(input: UpdateMielandSubscriptionInput!): UpdateMielandSubscriptionPayload
     cancelMielandSubscription(input: CancelMielandSubscriptionInput!): CancelMielandSubscriptionPayload
+    pauseMielandSubscription(input: PauseMielandSubscriptionInput!): PauseMielandSubscriptionPayload
+    resumeMielandSubscription(input: ResumeMielandSubscriptionInput!): ResumeMielandSubscriptionPayload
     """
     Add a saved payment method for the authenticated customer. Accepts a Stripe PaymentMethod ID (pm_...).
     The token is saved in WooCommerce payment_tokens for use in My Account and subscription renewals.

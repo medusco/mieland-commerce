@@ -5,6 +5,8 @@ import {
   getSubscription,
   getSubscriptionSettings,
   listSubscriptions,
+  pauseSubscription,
+  resumeSubscription,
   updateSubscription,
 } from "../../repositories/subscriptions.js";
 
@@ -55,6 +57,24 @@ export const subscriptionResolvers = {
     ) => {
       const userId = requireUser(ctx);
       const subscription = await cancelSubscription(input.id, userId);
+      return { clientMutationId: input.clientMutationId, subscription };
+    },
+    pauseMielandSubscription: async (
+      _: unknown,
+      { input }: { input: { id: number; clientMutationId?: string } },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const subscription = await pauseSubscription(input.id, userId);
+      return { clientMutationId: input.clientMutationId, subscription };
+    },
+    resumeMielandSubscription: async (
+      _: unknown,
+      { input }: { input: { id: number; clientMutationId?: string } },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const subscription = await resumeSubscription(input.id, userId);
       return { clientMutationId: input.clientMutationId, subscription };
     },
   },

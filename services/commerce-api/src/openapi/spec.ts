@@ -29,7 +29,7 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 \`cart\`, \`products\`, \`customer\`, \`order\`, \`loginClients\`, \`mielandSubscriptionSettings\`, \`mielandSubscriptions\`, \`mielandSubscription\`, \`posts\`, \`post\`, \`categories\`, \`pages\`, \`page\`, \`navigation\`, \`labResults\`
 
 ### Mutations
-\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`calculateCartTax\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`createPayPalOrder\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`, \`writeReview\`
+\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`calculateCartTax\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`createPayPalOrder\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`, \`pauseMielandSubscription\`, \`resumeMielandSubscription\`, \`writeReview\`
 
 \`Cart.totalTax\` / \`calculateCartTax\` preview US sales tax when a complete delivery address is on the cart (\`CART_TAX_PROVIDER=taxcloud\` uses the WordPress TaxCloud bridge; \`woocommerce\` uses WooCommerce tax rate tables in MySQL). WC still recalculates on place order.
 

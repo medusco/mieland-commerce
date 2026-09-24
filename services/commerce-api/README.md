@@ -76,7 +76,7 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 `checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`) using consumer key/secret only (no WP user cookie — a customer cookie would demote the request and return "not allowed to create resources"). Logged-in orders still set the real `customer_id`. Guests use `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
 
-`updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
+`updateMielandSubscription` / `cancelMielandSubscription` / `pauseMielandSubscription` / `resumeMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
 ## Payment Processing
 

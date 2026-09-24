@@ -146,3 +146,47 @@ export async function cancelSubscription(id: number, userId: number) {
   );
   return getSubscription(id, userId);
 }
+
+export async function pauseSubscription(id: number, userId: number) {
+  const row = await queryOne<SubscriptionRow>(
+    `SELECT * FROM ${t("mieland_subscriptions")} WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  if (!row) throw new Error("Subscription not found.");
+  if (Number(row.user_id) !== userId) {
+    throw new Error("You are not allowed to pause this subscription.");
+  }
+  if (!["active", "payment_failed"].includes(row.status)) {
+    throw new Error("Only active subscriptions can be paused.");
+  }
+  await query(
+    `UPDATE ${t("mieland_subscriptions")}
+     SET status = 'paused', updated_at = UTC_TIMESTAMP()
+     WHERE id = ? AND user_id = ?`,
+    [id, userId],
+  );
+  return getSubscription(id, userId);
+}
+
+export async function resumeSubscription(id: number, userId: number) {
+  const row = await queryOne<SubscriptionRow>(
+    `SELECT * FROM ${t("mieland_subscriptions")} WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  if (!row) throw new Error("Subscription not found.");
+  if (Number(row.user_id) !== userId) {
+    throw new Error("You are not allowed to resume this subscription.");
+  }
+  if (row.status !== "paused") {
+    throw new Error("Only paused subscriptions can be resumed.");
+  }
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const nextPayment = nextPaymentFrom(now, row.frequency);
+  await query(
+    `UPDATE ${t("mieland_subscriptions")}
+     SET status = 'active', next_payment_at = ?, updated_at = UTC_TIMESTAMP()
+     WHERE id = ? AND user_id = ?`,
+    [nextPayment, id, userId],
+  );
+  return getSubscription(id, userId);
+}
