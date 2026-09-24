@@ -545,6 +545,22 @@ export const typeDefs = /* GraphQL */ `
     nodes: [Order]
   }
 
+  type PaymentToken {
+    id: ID
+    gateway: String
+    token: String
+    isDefault: Boolean
+    type: String
+    """Card brand (visa, mastercard, amex, etc.) for card payment methods."""
+    cardType: String
+    """Last 4 digits of the card."""
+    last4: String
+    """Card expiry month (MM)."""
+    expiryMonth: String
+    """Card expiry year (YYYY)."""
+    expiryYear: String
+  }
+
   type Customer {
     id: ID
     databaseId: Int
@@ -560,6 +576,8 @@ export const typeDefs = /* GraphQL */ `
     billing: CustomerAddress
     shipping: CustomerAddress
     orders: OrderConnection
+    """Customer's saved payment methods (WooCommerce payment tokens)."""
+    paymentTokens: [PaymentToken]
   }
 
   type User {
@@ -1069,6 +1087,41 @@ export const typeDefs = /* GraphQL */ `
     id: Int!
   }
 
+  input AddPaymentMethodInput {
+    clientMutationId: String
+    """Stripe PaymentMethod ID (pm_...)."""
+    paymentMethodId: String!
+    """Payment gateway (default: stripe)."""
+    gateway: String
+  }
+
+  input DeletePaymentMethodInput {
+    clientMutationId: String
+    """WooCommerce payment token ID."""
+    tokenId: Int!
+  }
+
+  input SetDefaultPaymentMethodInput {
+    clientMutationId: String
+    """WooCommerce payment token ID to set as default."""
+    tokenId: Int!
+  }
+
+  type AddPaymentMethodPayload {
+    clientMutationId: String
+    paymentToken: PaymentToken
+  }
+
+  type DeletePaymentMethodPayload {
+    clientMutationId: String
+    success: Boolean
+  }
+
+  type SetDefaultPaymentMethodPayload {
+    clientMutationId: String
+    success: Boolean
+  }
+
   type CartPayload {
     cart: Cart
     clientMutationId: String
@@ -1282,6 +1335,19 @@ export const typeDefs = /* GraphQL */ `
     syncWordPressSession(input: SyncWordPressSessionInput): SyncWordPressSessionPayload
     updateMielandSubscription(input: UpdateMielandSubscriptionInput!): UpdateMielandSubscriptionPayload
     cancelMielandSubscription(input: CancelMielandSubscriptionInput!): CancelMielandSubscriptionPayload
+    """
+    Add a saved payment method for the authenticated customer. Accepts a Stripe PaymentMethod ID (pm_...).
+    The token is saved in WooCommerce payment_tokens for use in My Account and subscription renewals.
+    """
+    addPaymentMethod(input: AddPaymentMethodInput!): AddPaymentMethodPayload
+    """
+    Delete a saved payment method. Requires authentication and ownership.
+    """
+    deletePaymentMethod(input: DeletePaymentMethodInput!): DeletePaymentMethodPayload
+    """
+    Set the default payment method for subscription renewals. Requires authentication and ownership.
+    """
+    setDefaultPaymentMethod(input: SetDefaultPaymentMethodInput!): SetDefaultPaymentMethodPayload
     """
     Leave a WooCommerce product review. Requires Authorization Bearer JWT.
     Creates the review via WC REST and associates it with the authenticated user.

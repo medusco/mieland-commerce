@@ -33,6 +33,13 @@ import {
 import { isEmailVerified } from "../../auth/index.js";
 import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
 import { listCustomerOrders, getOrderById, getOrderMcfTraUpdates } from "../../repositories/orders.js";
+import {
+  listCustomerPaymentTokens,
+  createCustomerPaymentToken,
+  deleteCustomerPaymentToken,
+  setCustomerDefaultPaymentToken,
+  fetchStripePaymentMethodDetails,
+} from "../../repositories/payment-tokens.js";
 import { bindCartToCustomer, loadCart, mutateCart } from "../../engine/cart-store.js";
 import { logJson, parseDatabaseId } from "../../utils/index.js";
 import {
@@ -139,6 +146,15 @@ export const customerResolvers = {
         includeGuestOrders: emailConfirmed,
         email: customer?.email ?? parent.email ?? null,
       });
+    },
+    paymentTokens: async (
+      parent: { databaseId: number },
+      _: unknown,
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      if (parent.databaseId !== userId) throw new Error("Not authorized");
+      return listCustomerPaymentTokens(userId);
     },
   },
   Order: {
@@ -674,6 +690,99 @@ export const customerResolvers = {
         ...tokens,
         wpSession: renewed?.sessionHeaderValue ?? null,
         wpRefresh: renewed?.refreshHeaderValue ?? null,
+      };
+    },
+
+    addPaymentMethod: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input: {
+          paymentMethodId: string;
+          gateway?: string;
+          clientMutationId?: string;
+        };
+      },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const gateway = input.gateway?.trim() || "stripe";
+      const paymentMethodId = input.paymentMethodId.trim();
+
+      if (!paymentMethodId.startsWith("pm_")) {
+        throw new Error("Invalid PaymentMethod ID format (expected pm_...)");
+      }
+
+      // Fetch card details from Stripe
+      const cardDetails = await fetchStripePaymentMethodDetails(paymentMethodId);
+
+      const token = await createCustomerPaymentToken(userId, {
+        gateway,
+        token: paymentMethodId,
+        type: "CC",
+        cardType: cardDetails?.cardType,
+        last4: cardDetails?.last4,
+        expiryMonth: cardDetails?.expiryMonth,
+        expiryYear: cardDetails?.expiryYear,
+      });
+
+      return {
+        clientMutationId: input.clientMutationId,
+        paymentToken: {
+          id: String(token.id),
+          gateway: token.gateway,
+          token: token.token,
+          isDefault: token.isDefault,
+          type: token.type,
+          cardType: token.cardType,
+          last4: token.last4,
+          expiryMonth: token.expiryMonth,
+          expiryYear: token.expiryYear,
+        },
+      };
+    },
+
+    deletePaymentMethod: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input: {
+          tokenId: number;
+          clientMutationId?: string;
+        };
+      },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const success = await deleteCustomerPaymentToken(userId, input.tokenId);
+      return {
+        clientMutationId: input.clientMutationId,
+        success,
+      };
+    },
+
+    setDefaultPaymentMethod: async (
+      _: unknown,
+      {
+        input,
+      }: {
+        input: {
+          tokenId: number;
+          clientMutationId?: string;
+        };
+      },
+      ctx: AppContext,
+    ) => {
+      const userId = requireUser(ctx);
+      const success = await setCustomerDefaultPaymentToken(
+        userId,
+        input.tokenId,
+      );
+      return {
+        clientMutationId: input.clientMutationId,
+        success,
       };
     },
   },

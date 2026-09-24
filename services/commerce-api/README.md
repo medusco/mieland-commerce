@@ -20,7 +20,7 @@ Set `MEDIA_BASE_URL` (or `S3_UPLOADS_BUCKET_URL`) to the same public uploads CDN
 Railpack fails if it analyzes the monorepo root (no root `package.json`). Use Docker:
 
 1. **Repo root** — root `railway.toml` + `Dockerfile` build `services/commerce-api`, or
-2. **Root Directory** = `services/commerce-api` — uses that folder’s `Dockerfile` / `railway.toml`.
+2. **Root Directory** = `services/commerce-api` — uses that folder's `Dockerfile` / `railway.toml`.
 
 Redeploy after this config is on the branch Railway builds.
 
@@ -68,13 +68,13 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 - Browser sends `mc-wp-session` on later GraphQL calls (`credentials: include`). Prefer the storefront `/api/commerce` proxy so the cookie is first-party when commerce is on another host. Logged-in `checkout` / `createOrder` validate it (sync/refresh via WPGraphQL); `processOrderPayment` uses commerce JWT + order ownership (`orderKey`, guest `billingEmail`) and does not forward the cookie to WordPress
 - Optional `x-graphql-secret` when `GRAPHQL_SECRET` is set
 
-**WP prerequisite:** Headless Login → enable “Set authentication cookie” on the password/Google providers so login responses include `wordpress_logged_in_*` cookies.
+**WP prerequisite:** Headless Login → enable "Set authentication cookie" on the password/Google providers so login responses include `wordpress_logged_in_*` cookies.
 
-**Note:** If WP defines `GRAPHQL_LOGIN_JWT_SECRET_KEY`, that can differ from the MySQL `jwt_secret_key`. Commerce therefore issues its own JWTs after WP authenticates the user, instead of returning WP’s `authToken` directly.
+**Note:** If WP defines `GRAPHQL_LOGIN_JWT_SECRET_KEY`, that can differ from the MySQL `jwt_secret_key`. Commerce therefore issues its own JWTs after WP authenticates the user, instead of returning WP's `authToken` directly.
 
 ## Checkout
 
-`checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`) using consumer key/secret only (no WP user cookie — a customer cookie would demote the request and return “not allowed to create resources”). Logged-in orders still set the real `customer_id`. Guests use `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
+`checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`) using consumer key/secret only (no WP user cookie — a customer cookie would demote the request and return "not allowed to create resources"). Logged-in orders still set the real `customer_id`. Guests use `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
 
 `updateMielandSubscription` / `cancelMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
@@ -107,7 +107,19 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 ## Personal coupon
 
-`requestPersonalCoupon(input: { email })` get-or-creates a one-time WooCommerce coupon restricted to that email (`usage_limit: 1`, `individual_use: true`). Repeat requests for the same email return the same code while unused (looked up via `mieland_personal_coupon_email` postmeta). Errors if Woo `usage_count` shows a real redemption, or if an unpaid (pending/failed/on-hold) order still holds the code — commerce returns a clear “incomplete checkout” message instead of cancelling that order. `applyCoupon` / checkout use the same checks. Cart totals skip spent coupons (`usage_count` ≥ `usage_limit`). Configure amount/type/prefix with `PERSONAL_COUPON_AMOUNT`, `PERSONAL_COUPON_DISCOUNT_TYPE`, `PERSONAL_COUPON_CODE_PREFIX`. Requires WC REST credentials. Apply the returned code with `applyCoupon`.
+`requestPersonalCoupon(input: { email })` get-or-creates a one-time WooCommerce coupon restricted to that email (`usage_limit: 1`, `individual_use: true`). Repeat requests for the same email return the same code while unused (looked up via `mieland_personal_coupon_email` postmeta). Errors if Woo `usage_count` shows a real redemption, or if an unpaid (pending/failed/on-hold) order still holds the code — commerce returns a clear "incomplete checkout" message instead of cancelling that order. `applyCoupon` / checkout use the same checks. Cart totals skip spent coupons (`usage_count` ≥ `usage_limit`). Configure amount/type/prefix with `PERSONAL_COUPON_AMOUNT`, `PERSONAL_COUPON_DISCOUNT_TYPE`, `PERSONAL_COUPON_CODE_PREFIX`. Requires WC REST credentials. Apply the returned code with `applyCoupon`.
+
+## Customer payment tokens
+
+Logged-in customers can manage saved payment methods (WooCommerce `woocommerce_payment_tokens` table) via GraphQL:
+
+- **Query**: `customer.paymentTokens` — list saved payment tokens with card details (last4, brand, expiry)
+- **Mutations**:
+  - `addPaymentMethod(input: { paymentMethodId })` — save a Stripe PaymentMethod (`pm_...`) as a WooCommerce token. Fetches card metadata from Stripe API
+  - `deletePaymentMethod(input: { tokenId })` — remove a saved token (must own it)
+  - `setDefaultPaymentMethod(input: { tokenId })` — mark a token as default for renewals
+
+All mutations require JWT authentication (`Authorization: Bearer <token>`). Tokens are customer-level (not per-subscription). Subscription renewals bill the current default token at renewal time.
 
 ## WP bridge
 
