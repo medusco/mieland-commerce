@@ -22,14 +22,16 @@ export async function listCustomerPaymentTokens(
   userId: number,
 ): Promise<PaymentToken[]> {
   try {
-    const rows = await query<{
-      token_id: number;
-      user_id: number;
-      gateway_id: string;
-      token: string;
-      is_default: number;
-      type: string;
-    }>(
+    const rows = await query<
+      {
+        token_id: number;
+        user_id: number;
+        gateway_id: string;
+        token: string;
+        is_default: number;
+        type: string;
+      }[]
+    >(
       `SELECT token_id, user_id, gateway_id, token, is_default, type
        FROM ${t("woocommerce_payment_tokens")}
        WHERE user_id = ?
@@ -71,7 +73,7 @@ export async function listCustomerPaymentTokens(
 async function getPaymentTokenMeta(
   tokenId: number,
 ): Promise<Record<string, string>> {
-  const rows = await query<{ meta_key: string; meta_value: string }>(
+  const rows = await query<{ meta_key: string; meta_value: string }[]>(
     `SELECT meta_key, meta_value
      FROM ${t("woocommerce_payment_tokenmeta")}
      WHERE payment_token_id = ?`,
