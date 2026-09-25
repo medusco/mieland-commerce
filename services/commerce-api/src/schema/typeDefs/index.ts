@@ -461,6 +461,18 @@ export const typeDefs = /* GraphQL */ `
     nodes: [CouponLine]
   }
 
+  type OrderFulfillmentCancellation {
+    cancelledAt: String
+    source: String
+    amazonStatus: String
+    wasPaid: Boolean
+    paidAmount: String
+    paymentMethod: String
+    transactionId: String
+    datePaid: String
+    refundStatus: String
+  }
+
   type AmazonMcfTracking {
     trackingNumber: String
     trackingUrl: String
@@ -529,6 +541,8 @@ export const typeDefs = /* GraphQL */ `
     amazonMcfTraNumber: String
     """Package tracking timeline for a TRA (cached on the order as _ns_fba_amazon_tra_updates)."""
     amazonMcfTraUpdates(traNumber: String, refresh: Boolean = true): AmazonMcfTraUpdates
+    """Amazon MCF cancellation metadata (null unless mieland_mcf_cancelled_at or mieland_mcf_cancellation_source is set)."""
+    fulfillmentCancellation: OrderFulfillmentCancellation
     billing: CustomerAddress
     shipping: CustomerAddress
     lineItems: LineItemConnection
