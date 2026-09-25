@@ -35,6 +35,18 @@ type McfFields = {
   amazonMcfTraNumber: string | null;
 };
 
+type FulfillmentCancellationFields = {
+  cancelledAt: string | null;
+  source: string | null;
+  amazonStatus: string | null;
+  wasPaid: boolean | null;
+  paidAmount: string | null;
+  paymentMethod: string | null;
+  transactionId: string | null;
+  datePaid: string | null;
+  refundStatus: string | null;
+};
+
 type OrderSubscriptionFlags = {
   hasSubscriptions: boolean;
   isSubscriptionOrder: boolean;
@@ -511,6 +523,41 @@ function parseMcf(meta: Record<string, string>): McfFields {
   };
 }
 
+function parseFulfillmentCancellation(
+  meta: Record<string, string>,
+): FulfillmentCancellationFields | null {
+  const cancelledAt = meta.mieland_mcf_cancelled_at?.trim() || null;
+  const source = meta.mieland_mcf_cancellation_source?.trim() || null;
+
+  // Only return cancellation data if at least one key field is present
+  if (!cancelledAt && !source) {
+    return null;
+  }
+
+  const wasPaidRaw = meta.mieland_mcf_was_paid_at_cancel?.trim().toLowerCase();
+  const wasPaid =
+    wasPaidRaw === "yes" ? true : wasPaidRaw === "no" ? false : null;
+
+  const paidAmount = meta.mieland_mcf_paid_amount?.trim() || null;
+  const paymentMethod = meta.mieland_mcf_payment_method?.trim() || null;
+  const transactionId = meta.mieland_mcf_transaction_id?.trim() || null;
+  const datePaid = meta.mieland_mcf_date_paid?.trim() || null;
+  const refundStatus = meta.mieland_mcf_refund_status?.trim().toLowerCase() || null;
+  const amazonStatus = meta.mieland_mcf_amazon_status?.trim() || null;
+
+  return {
+    cancelledAt,
+    source,
+    amazonStatus,
+    wasPaid,
+    paidAmount,
+    paymentMethod,
+    transactionId,
+    datePaid,
+    refundStatus,
+  };
+}
+
 function sanitizeTraNumber(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
@@ -817,6 +864,7 @@ function leanOrderNode(row: {
     amazonMcfTrackingCode: null as string | null,
     amazonMcfTracking: null as unknown,
     amazonMcfTraNumber: null as string | null,
+    fulfillmentCancellation: null as FulfillmentCancellationFields | null,
     billing: null as ReturnType<typeof mapAddress>,
     shipping: null as ReturnType<typeof mapAddress>,
     lineItems: { nodes: [] as unknown[] },
@@ -985,6 +1033,7 @@ export async function listCustomerOrders(
       node.amazonMcfTrackingCode = mcf.amazonMcfTrackingCode;
       node.amazonMcfTracking = mcf.amazonMcfTracking;
       node.amazonMcfTraNumber = mcf.amazonMcfTraNumber;
+      node.fulfillmentCancellation = parseFulfillmentCancellation(meta);
       if (!node.transactionId) {
         node.transactionId = meta._transaction_id || "";
       }
@@ -1049,6 +1098,10 @@ export async function shapeOrder(
       };
   const mcf = mcfCached;
 
+  const fulfillmentCancellation = needs.meta
+    ? parseFulfillmentCancellation(meta)
+    : null;
+
   const subtotalNum =
     Number(order.total_amount) -
     Number(ops?.shipping_total_amount ?? 0) -
@@ -1105,6 +1158,7 @@ export async function shapeOrder(
       order.status.replace(/^wc-/, ""),
     ),
     ...mcf,
+    fulfillmentCancellation,
     billing,
     shipping,
     lineItems,
@@ -1157,6 +1211,7 @@ export function shapeOrderFromWc(wc: Record<string, unknown>) {
     amazonMcfTrackingCode: null as string | null,
     amazonMcfTracking: null as unknown,
     amazonMcfTraNumber: null as string | null,
+    fulfillmentCancellation: null as FulfillmentCancellationFields | null,
     billing: null,
     shipping: null,
     lineItems: { nodes: [] as unknown[] },

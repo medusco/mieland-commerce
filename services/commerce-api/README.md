@@ -132,3 +132,20 @@ Logged-in password change (`updateCustomer` with `password`) requires a commerce
 MCF TRA: order fields `amazonMcfTraNumber` / `amazonMcfTracking` read WooCommerce order meta synced by WordPress (`_ns_fba_*`, `_fba_shipment_status`, `_sent_to_fba`, etc.). Commerce does not call the WP `mcf-tra` REST bridge for storefront order/tracking queries (`CommerceOrderTrackingById`, `amazonMcfTraUpdates`).
 
 MCF TRA updates: `amazonMcfTraUpdates` reads `_ns_fba_amazon_delivery_timeline` (preferred, full step list) or `_ns_fba_amazon_tra_updates` (JSON map keyed by TRA). Optional args: `traNumber` (defaults to primary TRA from meta). The `refresh` argument is kept for API compatibility and is ignored — live Amazon refresh runs on WordPress.
+
+## Order fulfillment cancellation
+
+`Order.fulfillmentCancellation` exposes WordPress order meta written when the Amazon MCF sync cancels an order. The field returns `null` unless `mieland_mcf_cancelled_at` or `mieland_mcf_cancellation_source` is set. Orders cancelled manually in WooCommerce admin have no MCF cancellation metadata.
+
+Meta keys:
+- `mieland_mcf_cancelled_at` (ISO 8601) → `cancelledAt`
+- `mieland_mcf_cancellation_source` (always `amazon_mcf`) → `source`
+- `mieland_mcf_amazon_status` (e.g. `Cancelled`) → `amazonStatus`
+- `mieland_mcf_was_paid_at_cancel` (`yes`/`no`) → `wasPaid` (Boolean or null)
+- `mieland_mcf_paid_amount` (decimal string) → `paidAmount`
+- `mieland_mcf_payment_method` → `paymentMethod`
+- `mieland_mcf_transaction_id` → `transactionId`
+- `mieland_mcf_date_paid` (ISO 8601) → `datePaid`
+- `mieland_mcf_refund_status` (`refund_required`, `refunded`, `no_refund_needed`) → `refundStatus`
+
+Selection is optimized: meta is only fetched when the field is requested. The existing `status` field still returns `CANCELLED` for all cancelled orders; `fulfillmentCancellation` provides additional context for MCF-driven cancellations.
