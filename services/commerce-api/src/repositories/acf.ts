@@ -168,6 +168,55 @@ function flexLayoutMap(raw: string | undefined): Map<number, string> | null {
   return map.size ? map : null;
 }
 
+/** ACF 6.5+ stores disabled flexible rows in `_{field}_layout_meta` (PHP-serialized). */
+export function acfFlexibleLayoutMetaKey(field: string): string {
+  return `_${field}_layout_meta`;
+}
+
+function flexibleLayoutMetaRaw(meta: Record<string, string>, field: string): string | undefined {
+  const hidden = meta[acfFlexibleLayoutMetaKey(field)];
+  if (hidden != null && hidden !== "") return hidden;
+  const plain = meta[`${field}_layout_meta`];
+  if (plain != null && plain !== "") return plain;
+  return undefined;
+}
+
+/** Whether indexed meta belongs to flexible content (not a repeater). */
+export function fieldLooksLikeFlexibleContent(
+  meta: Record<string, string>,
+  field: string,
+): boolean {
+  if (flexibleLayoutMetaRaw(meta, field)) return true;
+  const prefix = `${field}_`;
+  return Object.keys(meta).some(
+    (key) => key.startsWith(prefix) && key.endsWith("_acf_fc_layout"),
+  );
+}
+
+/** Disabled row indices from ACF 6.5 `layout_meta` (`disabled` key). */
+export function parseAcfFlexibleContentDisabledIndices(
+  meta: Record<string, string>,
+  field: string,
+): Set<number> {
+  const raw = flexibleLayoutMetaRaw(meta, field);
+  if (!raw?.trim()) return new Set();
+
+  const parsed = unserializeAcf(raw.trim());
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return new Set();
+  }
+
+  const disabled = (parsed as Record<string, unknown>).disabled;
+  if (!Array.isArray(disabled)) return new Set();
+
+  const indices = new Set<number>();
+  for (const entry of disabled) {
+    const index = Number(entry);
+    if (Number.isFinite(index) && index >= 0) indices.add(index);
+  }
+  return indices;
+}
+
 export async function shapeAcfField(
   meta: Record<string, string>,
   field: string,
@@ -190,7 +239,14 @@ export async function shapeAcfField(
             }),
         );
     const items: unknown[] = [];
+    const isFlexible = fieldLooksLikeFlexibleContent(meta, field);
+    const disabledIndices = isFlexible
+      ? parseAcfFlexibleContentDisabledIndices(meta, field)
+      : new Set<number>();
+
     for (let i = 0; i < count; i++) {
+      if (disabledIndices.has(i)) continue;
+
       const itemPrefix = `${field}_${i}`;
       const layout = meta[`${itemPrefix}_acf_fc_layout`] ?? layoutMap?.get(i);
       const childNames = collectIndexedChildNames(meta, itemPrefix);

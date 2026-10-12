@@ -1,6 +1,7 @@
 import { query, t } from "../db/mysql.js";
 import { getRedis } from "../redis/client.js";
 import { loadConfig } from "../config.js";
+import { filterEnabledFlexLayoutRows } from "./acf-flex-disable.js";
 import {
   relationshipConnection,
   shapeAcfField,
@@ -541,6 +542,10 @@ function remapAcfSubfields(
       out[sub.graphqlName] = value.map((entry) => remapAcfSubfields(entry, sub.subFields));
       continue;
     }
+    if (sub.type === "flexible_content" && Array.isArray(value)) {
+      out[sub.graphqlName] = filterEnabledFlexLayoutRows(value);
+      continue;
+    }
     if (sub.type === "group" && value && typeof value === "object") {
       out[sub.graphqlName] = remapAcfSubfields(value, sub.subFields);
       continue;
@@ -573,8 +578,16 @@ function normalizeFlexLayoutRow(
 
     if (sub.type === "repeater" && Array.isArray(existing)) {
       obj[sub.graphqlName] = existing.map((item) => remapAcfSubfields(item, sub.subFields));
+    } else if (sub.type === "flexible_content" && Array.isArray(existing)) {
+      obj[sub.graphqlName] = filterEnabledFlexLayoutRows(existing);
     } else if (sub.type === "group" && existing && typeof existing === "object") {
       obj[sub.graphqlName] = remapAcfSubfields(existing, sub.subFields);
+    } else if (sub.type === "true_false") {
+      obj[sub.graphqlName] =
+        existing === "1" ||
+        existing === "true" ||
+        existing === true ||
+        existing === 1;
     } else {
       obj[sub.graphqlName] = existing;
     }
@@ -607,7 +620,7 @@ async function shapeDefinedField(
       await shapeAcfField(meta, field.name, { flexTypePrefix: flexPrefix }),
     );
     if (field.layouts.length) {
-      return rows.map((row) => {
+      const shaped = rows.map((row) => {
         if (!row || typeof row !== "object") return row;
         const obj = row as Record<string, unknown>;
         const layoutName = String(obj.fieldGroupName ?? "");
@@ -628,8 +641,9 @@ async function shapeDefinedField(
         }
         return obj;
       });
+      return filterEnabledFlexLayoutRows(shaped);
     }
-    return rows;
+    return filterEnabledFlexLayoutRows(rows);
   }
 
   if (field.type === "repeater" || field.type === "group") {
