@@ -13,6 +13,14 @@ npm run dev
 
 Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `NEXT_PUBLIC_CONTENT_BACKEND=commerce` at `http://localhost:4000/graphql` for cart, profile, and CMS content (posts, pages, navigation, ACF). Keep `GRAPHQL_ENDPOINT` on WordPress only when you still need WPGraphQL-only fields.
 
+### ACF flexible content — disabled layouts
+
+Commerce omits disabled rows from every `flexible_content` field (`pageBlocks`, `contentLayout`, `contentBlocks`, nested flex inside layouts, etc.).
+
+**ACF 6.5+ (wp-admin “disable layout”):** reads PHP-serialized postmeta `_{field}_layout_meta` (e.g. `_page_blocks_layout_meta` for `page_blocks`) and skips indices listed under `disabled`. Applies only when the field looks like flexible content (`_*_layout_meta` or `*_acf_fc_layout` keys), so repeaters are unchanged.
+
+**Optional per-layout checkbox:** add a `true_false` subfield named **`disable`** (label “Disable”, **Show in GraphQL** on) on each flexible layout, or use **`block_disable`**. When truthy, that row is filtered after shaping. Exposed as `Boolean` on layout types when present in ACF. Names are configurable in `ACF_FLEX_LAYOUT_DISABLE_FIELD_NAMES` (`src/repositories/acf-flex-disable.ts`).
+
 Set `MEDIA_BASE_URL` (or `S3_UPLOADS_BUCKET_URL`) to the same public uploads CDN WordPress uses — e.g. `https://img.mieland.com` — so product/media `sourceUrl` values match the media library instead of frozen `posts.guid` hosts.
 
 ## Deploy (Railway)
