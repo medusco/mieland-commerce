@@ -55,6 +55,14 @@ const envSchema = z.object({
     emptyToUndefined,
     z.string().default("http://localhost:8000"),
   ),
+  /** WPGraphQL endpoint for stitched/forwarded fields (default `${WORDPRESS_URL}/graphql`). */
+  WORDPRESS_GRAPHQL_URL: z.preprocess(emptyToUndefined, z.string().optional()),
+  /** Origin sent to WPGraphQL (WP Headless Login allow-list). Default: first non-* CORS_ORIGIN. */
+  WORDPRESS_GRAPHQL_ORIGIN: z.preprocess(emptyToUndefined, z.string().optional()),
+  /** Set to "false" to disable forwarding `navigation` to WPGraphQL (DB reader only). */
+  WP_GRAPHQL_FORWARD: z.preprocess(emptyToUndefined, z.string().default("true")),
+  WP_GRAPHQL_CACHE_TTL_SECONDS: z.preprocess(emptyToUndefined, z.coerce.number().default(60)),
+  WP_GRAPHQL_SCHEMA_REFRESH_MS: z.preprocess(emptyToUndefined, z.coerce.number().default(600000)),
   /**
    * Shared with WP `MIELAND_INTERNAL_REST_SECRET` / option `mieland_internal_rest_secret`.
    * Sent as `X-Mieland-Internal-Secret` on mieland/v1 internal routes (mcf-tra, cart helpers).

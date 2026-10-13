@@ -1,3 +1,5 @@
+import { createNavigationForwarding } from "./remote/wp-navigation.js";
+import { getNavigation } from "./repositories/content.js";
 import {
   annotateGraphqlOperationFromBody,
   captureSentryException,
@@ -123,8 +125,13 @@ try {
   process.exit(1);
 }
 
+const navForwarding = await createNavigationForwarding({
+  local: schema,
+  fallbackNavigation: () => getNavigation(),
+});
+
 const yoga = createYoga<AppContext>({
-  schema,
+  schema: () => navForwarding.current(),
   graphqlEndpoint: "/graphql",
   landingPage: !cfg.isProd,
   graphiql: !cfg.isProd,
