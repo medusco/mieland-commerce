@@ -344,6 +344,10 @@ export function orderNeedsFromInfo(
     "amazonMcfTraUpdates",
   ]);
 
+  const wantsFulfillmentCancellation = hasAny(nodeFields, [
+    "fulfillmentCancellation",
+  ]);
+
   const wantsSubscriptionFlags = hasAny(nodeFields, [
     "hasSubscriptions",
     "isSubscriptionOrder",
@@ -360,6 +364,7 @@ export function orderNeedsFromInfo(
     couponLines: nodeFields.some((f) => f.name.value === "couponLines"),
     meta:
       wantsMcf ||
+      wantsFulfillmentCancellation ||
       hasAny(nodeFields, ["transactionId"]) ||
       wantsSubscriptionFlags,
     subscriptionFlags: wantsSubscriptionFlags,
