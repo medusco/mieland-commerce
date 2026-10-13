@@ -785,8 +785,15 @@ export const typeDefs = /* GraphQL */ `
   type RootQueryToMenuItemConnection {
     nodes: [MenuItem!]!
   }
+  type NavigationLink {
+    title: String
+    url: String
+    target: String
+  }
   type Navigation {
     id: ID
+    termsOfService: NavigationLink
+    privacyPolicy: NavigationLink
     pageTitle: String
     menuTitle: String
     topMenu: NavigationTopMenu
