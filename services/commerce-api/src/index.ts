@@ -1,5 +1,3 @@
-import { createNavigationForwarding } from "./remote/wp-navigation.js";
-import { getNavigation } from "./repositories/content.js";
 import {
   annotateGraphqlOperationFromBody,
   captureSentryException,
@@ -30,8 +28,23 @@ import {
 } from "./context.js";
 import { loadConfig } from "./config.js";
 import { pingMysql, closeMysql } from "./db/mysql.js";
-import { loadAcfGraphqlGroups } from "./repositories/acf-graphql.js";
-import { listPageTemplateFiles } from "./repositories/content.js";
+import {
+  loadAcfGraphqlGroups,
+  loadAcfGraphqlGroupsUncached,
+  shapeAcfGroupFields,
+  type AcfGraphqlGroup,
+} from "./repositories/acf-graphql.js";
+import {
+  getNavigation,
+  getNavigationOptionMeta,
+  listPageTemplateFiles,
+} from "./repositories/content.js";
+import {
+  buildNavigationSchema,
+  isNavigationGroup,
+  navigationInterfaceResolvers,
+  resolveNavigation,
+} from "./schema/navigation.js";
 import { pingRedis, closeRedis } from "./redis/client.js";
 import { createApqPlugin } from "./apq/plugin.js";
 import {
@@ -99,39 +112,92 @@ try {
   });
 }
 
-const acfSchema = buildAcfSchema(acfGroups, await listPageTemplateFiles());
-logAcfSchemaBuild(acfSchema.summary);
+async function loadNavigationGroups(): Promise<AcfGraphqlGroup[]> {
+  try {
+    const all = await loadAcfGraphqlGroupsUncached({ includeHidden: true });
+    return all.filter((g) => isNavigationGroup(g, cfg.NAVIGATION_OPTIONS_PAGE));
+  } catch (err) {
+    logJson("warn", {
+      msg: "navigation_acf_groups_load_failed",
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
 
-let schema;
-try {
-  schema = createSchema<AppContext>({
-    typeDefs: acfSchema.sdl.trim() ? [typeDefs, acfSchema.sdl] : typeDefs,
-    resolvers: mergeResolvers(resolvers, generateAcfResolvers(acfGroups)),
-  });
+const pageTemplateFiles = await listPageTemplateFiles();
+
+function buildAppSchema(navGroups: AcfGraphqlGroup[]) {
+  const navIds = new Set(navGroups.map((g) => g.id));
+  const contentGroups = acfGroups.filter((g) => !navIds.has(g.id));
+  const acfSchema = buildAcfSchema(contentGroups, pageTemplateFiles);
+  logAcfSchemaBuild(acfSchema.summary);
+  const nav = buildNavigationSchema(navGroups, typeDefs);
   logJson("info", {
-    msg: "schema_build_ok",
-    mergedAcfSdl: acfSchema.sdl.trim().length > 0,
-    acfSdlLength: acfSchema.summary.sdlLength,
+    msg: "navigation_schema_generated",
+    groups: navGroups.map((g) => g.graphqlFieldName),
+    plan: nav.plan.map((p) => `${p.field}:${p.mode}`),
+    mismatches: nav.mismatches,
   });
+  return createSchema<AppContext>({
+    typeDefs: [typeDefs, nav.sdl, ...(acfSchema.sdl.trim() ? [acfSchema.sdl] : [])],
+    resolvers: mergeResolvers(
+      resolvers,
+      generateAcfResolvers(contentGroups),
+      navigationInterfaceResolvers(nav.sdl),
+      {
+        Query: {
+          navigation: () =>
+            resolveNavigation(nav.plan, {
+              legacy: () => getNavigation() as Promise<Record<string, unknown>>,
+              optionMeta: getNavigationOptionMeta,
+              shapeGroup: shapeAcfGroupFields,
+            }),
+        },
+      },
+    ),
+  });
+}
+
+let navGroups = await loadNavigationGroups();
+let navFingerprint = JSON.stringify(navGroups);
+let schema: ReturnType<typeof buildAppSchema>;
+try {
+  schema = buildAppSchema(navGroups);
+  logJson("info", { msg: "schema_build_ok", navigationGroups: navGroups.length });
 } catch (err) {
   logJson("error", {
     msg: "schema_build_failed",
     err: err instanceof Error ? err.message : String(err),
     acfGroups: acfGroups.length,
-    acfSdlLength: acfSchema.summary.sdlLength,
-    skippedGroups: acfSchema.summary.skippedGroups,
-    emittedTypes: acfSchema.summary.emittedTypes,
   });
   process.exit(1);
 }
 
-const navForwarding = await createNavigationForwarding({
-  local: schema,
-  fallbackNavigation: () => getNavigation(),
-});
+// Re-read Navigation ACF definitions periodically so new CMS fields appear without a deploy.
+if (cfg.NAVIGATION_SCHEMA_REFRESH_MS > 0) {
+  setInterval(() => {
+    void (async () => {
+      const next = await loadNavigationGroups();
+      const fp = JSON.stringify(next);
+      if (!next.length || fp === navFingerprint) return;
+      try {
+        schema = buildAppSchema(next);
+        navGroups = next;
+        navFingerprint = fp;
+        logJson("info", { msg: "navigation_schema_refreshed", groups: next.length });
+      } catch (err) {
+        logJson("warn", {
+          msg: "navigation_schema_refresh_failed",
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  }, cfg.NAVIGATION_SCHEMA_REFRESH_MS).unref();
+}
 
 const yoga = createYoga<AppContext>({
-  schema: () => navForwarding.current(),
+  schema: () => schema,
   graphqlEndpoint: "/graphql",
   landingPage: !cfg.isProd,
   graphiql: !cfg.isProd,

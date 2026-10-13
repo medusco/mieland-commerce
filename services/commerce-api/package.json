@@ -17,11 +17,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@graphql-tools/delegate": "^12.2.1",
     "@graphql-tools/schema": "^10.0.23",
-    "@graphql-tools/stitch": "^10.3.2",
-    "@graphql-tools/utils": "^12.0.4",
-    "@graphql-tools/wrap": "^11.2.1",
     "@graphql-yoga/plugin-disable-introspection": "^2.0.0",
     "@sentry/node": "^10.70.0",
     "bcryptjs": "^3.0.3",

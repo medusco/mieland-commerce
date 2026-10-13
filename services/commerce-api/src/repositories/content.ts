@@ -548,7 +548,7 @@ export async function shapePageTemplate(page: PageRecord) {
   return base;
 }
 
-function optionsToMeta(options: Record<string, string>, prefix: string): Record<string, string> {
+export function optionsToMeta(options: Record<string, string>, prefix: string): Record<string, string> {
   const meta: Record<string, string> = {};
   for (const [name, value] of Object.entries(options)) {
     const key = name.startsWith(prefix) ? name.slice(prefix.length) : name;
@@ -780,4 +780,8 @@ export async function searchLabResults(lotNumber: string) {
     });
   }
   return { nodes };
+}
+
+export async function getNavigationOptionMeta(): Promise<Record<string, string>> {
+  return optionsToMeta(await getOptionsByPrefix("options_"), "options_");
 }

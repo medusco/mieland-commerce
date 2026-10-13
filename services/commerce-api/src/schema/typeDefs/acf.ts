@@ -110,7 +110,7 @@ function scalarForAcfType(type: string): string {
 }
 
 /** WPGraphQL-for-ACF field typing with commerce overrides for known CMS fields. */
-function scalarForField(field: AcfFieldDef): string {
+export function scalarForField(field: AcfFieldDef): string {
   const name = field.graphqlName || field.name;
   if (name === "productThumbnailImage") {
     return "ProductThumbnailImage";
@@ -440,4 +440,24 @@ export function generateAcfResolvers(
   }
 
   return resolvers;
+}
+
+
+/**
+ * Emit object types for an arbitrary root (e.g. the Navigation options page).
+ * Returns SDL for every nested type plus interfaces for flexible content.
+ */
+export function emitAcfTypes(
+  roots: Array<{ typeName: string; fields: AcfFieldDef[] }>,
+): string {
+  const ctx: EmitContext = { emitted: new Map(), interfaces: new Map() };
+  for (const r of roots) emitObjectType(r.typeName, r.fields, [], ctx);
+  const interfaceSdl = [...ctx.interfaces.keys()].map(
+    (name) => `  interface ${name} {\n    fieldGroupName: String\n  }`,
+  );
+  return [...interfaceSdl, ...ctx.emitted.values()].join("\n\n");
+}
+
+export function acfGraphqlTypeName(name: string): string {
+  return gqlName(name);
 }
