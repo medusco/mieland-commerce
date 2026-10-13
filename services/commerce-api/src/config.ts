@@ -55,6 +55,10 @@ const envSchema = z.object({
     emptyToUndefined,
     z.string().default("http://localhost:8000"),
   ),
+  /** ACF options page slug whose field groups build `Navigation`. */
+  NAVIGATION_OPTIONS_PAGE: z.preprocess(emptyToUndefined, z.string().default("navigation")),
+  /** Re-read Navigation ACF definitions every N ms (0 = startup only). */
+  NAVIGATION_SCHEMA_REFRESH_MS: z.preprocess(emptyToUndefined, z.coerce.number().default(300000)),
   /**
    * Shared with WP `MIELAND_INTERNAL_REST_SECRET` / option `mieland_internal_rest_secret`.
    * Sent as `X-Mieland-Internal-Secret` on mieland/v1 internal routes (mcf-tra, cart helpers).

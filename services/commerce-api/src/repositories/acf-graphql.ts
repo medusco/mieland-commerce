@@ -292,7 +292,9 @@ function parseFieldConfig(id: number, parentId: number, name: string, raw: strin
   return parseFieldFromConfig(asRecord(parseMaybe(raw)), id, parentId, name);
 }
 
-async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
+export async function loadAcfGraphqlGroupsUncached(
+  opts: { includeHidden?: boolean } = {},
+): Promise<AcfGraphqlGroup[]> {
   const groups = await query<
     {
       ID: number;
@@ -350,7 +352,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   for (const row of groups) {
     const config = asRecord(parseMaybe(row.post_content || ""));
     const showInGraphql = asBool(config.show_in_graphql);
-    if (!showInGraphql) continue;
+    if (!showInGraphql && !opts.includeHidden) continue;
 
     const location = parseLocation(config.location);
     const mapFromLocation = asBool(config.map_graphql_types_from_location_rules);

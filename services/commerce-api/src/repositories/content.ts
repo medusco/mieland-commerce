@@ -7,6 +7,7 @@ import {
   getProductNode,
 } from "./products.js";
 import { getOption, getOptionsByPrefix } from "./options.js";
+import { navigationLegalLinks } from "./navigation-links.js";
 import {
   pickMeta,
   relationshipConnection,
@@ -547,7 +548,7 @@ export async function shapePageTemplate(page: PageRecord) {
   return base;
 }
 
-function optionsToMeta(options: Record<string, string>, prefix: string): Record<string, string> {
+export function optionsToMeta(options: Record<string, string>, prefix: string): Record<string, string> {
   const meta: Record<string, string> = {};
   for (const [name, value] of Object.entries(options)) {
     const key = name.startsWith(prefix) ? name.slice(prefix.length) : name;
@@ -703,6 +704,7 @@ async function buildNavigationFromOptionsMeta(optionMeta: Record<string, string>
       subscriptionBox: subscriptionBox ?? null,
       trustBadges: trustBadges ?? [],
     }),
+    ...navigationLegalLinks(optionMeta),
     navigationFields: {
       logoImage: asMediaString(logo),
       promoText: pickMeta(optionMeta, "promo_text"),
@@ -717,9 +719,14 @@ export async function getNavigation() {
     const opt = await getOption(name);
     if (opt && typeof opt === "object" && hasNavigationPayload(opt)) {
       const shaped = opt as Record<string, unknown>;
+      const legal = navigationLegalLinks(
+        optionsToMeta(await getOptionsByPrefix("options_"), "options_"),
+      );
       return {
         id: "navigation",
         ...shaped,
+        termsOfService: legal.termsOfService,
+        privacyPolicy: legal.privacyPolicy,
         topMenu: normalizeTopMenu(shaped.topMenu),
         footer: normalizeFooter(shaped.footer),
       };
@@ -773,4 +780,8 @@ export async function searchLabResults(lotNumber: string) {
     });
   }
   return { nodes };
+}
+
+export async function getNavigationOptionMeta(): Promise<Record<string, string>> {
+  return optionsToMeta(await getOptionsByPrefix("options_"), "options_");
 }

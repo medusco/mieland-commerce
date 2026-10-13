@@ -12,6 +12,7 @@ import {
   shapePageTemplate,
   type PageRecord,
 } from "../../repositories/content.js";
+import { getMenuItemsByLocation } from "../../repositories/menus.js";
 import { resolveContentTemplateType } from "../../repositories/acf-graphql.js";
 import {
   postDetailNeedsFromInfo,
@@ -57,6 +58,15 @@ export const contentResolvers = {
     page: async (_: unknown, args: { id: string; idType?: string }) =>
       getPageByUri(String(args.id)),
     navigation: async () => getNavigation(),
+    menuItems: async (
+      _: unknown,
+      args: { first?: number; where?: { location?: string } },
+    ) => {
+      const nodes = args.where?.location
+        ? await getMenuItemsByLocation(args.where.location)
+        : [];
+      return { nodes: args.first ? nodes.slice(0, args.first) : nodes };
+    },
     labResults: async (
       _: unknown,
       args: { where?: { title?: string; status?: string } },
