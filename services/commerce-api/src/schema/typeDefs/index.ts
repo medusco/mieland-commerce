@@ -764,6 +764,27 @@ export const typeDefs = /* GraphQL */ `
     promoText: String
     topMenuCta: AcfLink
   }
+  enum MenuLocationEnum {
+    FOOTER
+    PRIMARY
+  }
+  input RootQueryToMenuItemConnectionWhereArgs {
+    location: MenuLocationEnum
+  }
+  type MenuItem {
+    id: ID!
+    databaseId: Int!
+    label: String
+    url: String
+    uri: String
+    order: Int
+    target: String
+    parentDatabaseId: Int
+    locations: [MenuLocationEnum]
+  }
+  type RootQueryToMenuItemConnection {
+    nodes: [MenuItem!]!
+  }
   type Navigation {
     id: ID
     pageTitle: String
@@ -1304,6 +1325,8 @@ export const typeDefs = /* GraphQL */ `
     pages(first: Int, where: RootQueryToPageConnectionWhereArgs): RootQueryToPageConnection
     page(id: ID!, idType: PageIdType): Page
     navigation: Navigation
+    """WPGraphQL-compatible menu items for a registered menu location."""
+    menuItems(first: Int, where: RootQueryToMenuItemConnectionWhereArgs): RootQueryToMenuItemConnection
     labResults(where: LabResultsWhereArgs): LabResultConnection
   }
 
