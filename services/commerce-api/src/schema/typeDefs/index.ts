@@ -773,6 +773,7 @@ export const typeDefs = /* GraphQL */ `
     id: ID
     termsOfService: NavigationLink
     privacyPolicy: NavigationLink
+    robotsTxt: String
     pageTitle: String
     menuTitle: String
     topMenu: NavigationTopMenu

@@ -7,7 +7,7 @@ import {
   getProductNode,
 } from "./products.js";
 import { getOption, getOptionsByPrefix } from "./options.js";
-import { navigationLegalLinks } from "./navigation-links.js";
+import { navigationLegalLinks, navigationRobotsTxt } from "./navigation-links.js";
 import {
   pickMeta,
   relationshipConnection,
@@ -705,6 +705,7 @@ async function buildNavigationFromOptionsMeta(optionMeta: Record<string, string>
       trustBadges: trustBadges ?? [],
     }),
     ...navigationLegalLinks(optionMeta),
+    robotsTxt: navigationRobotsTxt(optionMeta),
     navigationFields: {
       logoImage: asMediaString(logo),
       promoText: pickMeta(optionMeta, "promo_text"),
@@ -719,14 +720,14 @@ export async function getNavigation() {
     const opt = await getOption(name);
     if (opt && typeof opt === "object" && hasNavigationPayload(opt)) {
       const shaped = opt as Record<string, unknown>;
-      const legal = navigationLegalLinks(
-        optionsToMeta(await getOptionsByPrefix("options_"), "options_"),
-      );
+      const optionMeta = optionsToMeta(await getOptionsByPrefix("options_"), "options_");
+      const legal = navigationLegalLinks(optionMeta);
       return {
         id: "navigation",
         ...shaped,
         termsOfService: legal.termsOfService,
         privacyPolicy: legal.privacyPolicy,
+        robotsTxt: navigationRobotsTxt(optionMeta),
         topMenu: normalizeTopMenu(shaped.topMenu),
         footer: normalizeFooter(shaped.footer),
       };
