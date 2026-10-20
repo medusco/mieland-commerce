@@ -39,3 +39,9 @@ export function navigationLegalLinks(optionMeta: Record<string, unknown>) {
     privacyPolicy: firstLink(optionMeta, "privacy_policy"),
   };
 }
+
+/** Reads ACF option `robots_txt` (stored as options_robots_txt); null when empty or whitespace. */
+export function navigationRobotsTxt(optionMeta: Record<string, unknown>): string | null {
+  const v = optionMeta.robots_txt;
+  return typeof v === "string" && v.trim() ? v : null;
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { navigationLegalLinks, parseNavigationLink } from "./navigation-links.js";
+import { navigationLegalLinks, navigationRobotsTxt, parseNavigationLink } from "./navigation-links.js";
 
 const s = (v: string) => `s:${Buffer.byteLength(v, "utf8")}:"${v}";`;
 const link = (title: string, url: string, target: string) =>
@@ -32,5 +32,13 @@ describe("navigation legal links", () => {
   });
   it("accepts already-parsed objects", () => {
     assert.deepEqual(parseNavigationLink({ title: "T", url: "/t" }), { title: "T", url: "/t", target: null });
+  });
+});
+
+describe("navigation robots.txt", () => {
+  it("returns options_robots_txt, null when empty or whitespace", () => {
+    assert.equal(navigationRobotsTxt({ robots_txt: "User-agent: *\nAllow: /" }), "User-agent: *\nAllow: /");
+    assert.equal(navigationRobotsTxt({ robots_txt: "  \n " }), null);
+    assert.equal(navigationRobotsTxt({}), null);
   });
 });
