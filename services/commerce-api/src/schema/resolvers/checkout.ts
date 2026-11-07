@@ -656,6 +656,73 @@ export const checkoutResolvers = {
             cartTotal: calculated.total,
             ...paymentAuthSnapshot(ctx),
           });
+
+          // Handle $0 orders: mark paid immediately for legitimate free orders.
+          // Server-authoritative: use WooCommerce's computed total from the order.
+          const wcTotal = Number(order.total ?? calculated.total);
+          if (Number.isFinite(wcTotal) && wcTotal === 0) {
+            // Check if order has subscription items
+            const hasSubscriptions = Array.isArray(order.line_items)
+              ? order.line_items.some((item: unknown) => {
+                  if (!item || typeof item !== "object") return false;
+                  const lineItem = item as Record<string, unknown>;
+                  const lineItemMeta = Array.isArray(lineItem.meta_data)
+                    ? lineItem.meta_data
+                    : [];
+                  return lineItemMeta.some((m: unknown) => {
+                    if (!m || typeof m !== "object") return false;
+                    const meta = m as { key?: string; value?: unknown };
+                    const key = String(meta.key ?? "");
+                    return (
+                      (key === "_subscription_frequency" ||
+                        key === "subscription_frequency") &&
+                      typeof meta.value === "string" &&
+                      meta.value.trim().length > 0
+                    );
+                  });
+                })
+              : false;
+
+            if (hasSubscriptions) {
+              // Subscription with $0 initial total: keep status pending.
+              // Payment method setup is required for future renewals.
+              // The order remains needsPayment=true so the client captures
+              // payment method (SetupIntent) for renewals.
+              logPaymentTrace("info", {
+                msg: "checkout_zero_order_subscription",
+                requestId: ctx.requestId,
+                orderId: order.id,
+                total: wcTotal,
+                needsPaymentMethodSetup: true,
+              });
+            } else {
+              // Non-subscription $0 order: mark paid via WC REST set_paid.
+              // This triggers payment_complete, reduces stock, fires hooks.
+              await updateWcOrder(Number(order.id), {
+                set_paid: true,
+                transaction_id: `free-order-${order.id}`,
+                meta_data: [
+                  {
+                    key: "_mieland_zero_order_completed",
+                    value: new Date().toISOString(),
+                  },
+                ],
+              });
+              await addWcOrderNote(Number(order.id), {
+                note: "Order completed: total is $0.00 (coupon discount)",
+                customer_note: false,
+              });
+              logPaymentTrace("info", {
+                msg: "checkout_zero_order_completed",
+                requestId: ctx.requestId,
+                orderId: order.id,
+                total: wcTotal,
+              });
+              // Refresh order to get updated status
+              return await updateWcOrder(Number(order.id), {});
+            }
+          }
+
           return order;
         } catch (err) {
           logPaymentTrace("error", {

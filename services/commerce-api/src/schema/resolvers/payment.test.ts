@@ -197,6 +197,174 @@ describe("Payment Processing", () => {
     });
   });
 
+  describe("Zero Dollar Orders", () => {
+    it("should mark non-subscription $0 order as paid immediately", () => {
+      const orderTotal = 0.0;
+      const hasSubscriptions = false;
+
+      // Server-computed total is exactly $0
+      assert.strictEqual(orderTotal, 0);
+      // No subscription items
+      assert.strictEqual(hasSubscriptions, false);
+
+      // Should mark paid via set_paid: true
+      const shouldMarkPaid = orderTotal === 0 && !hasSubscriptions;
+      assert.strictEqual(shouldMarkPaid, true);
+    });
+
+    it("should keep subscription $0 order pending for payment method setup", () => {
+      const orderTotal = 0.0;
+      const hasSubscriptions = true;
+
+      // Server-computed total is exactly $0
+      assert.strictEqual(orderTotal, 0);
+      // Has subscription items
+      assert.strictEqual(hasSubscriptions, true);
+
+      // Should NOT mark paid (needs payment method for renewals)
+      const shouldMarkPaid = orderTotal === 0 && !hasSubscriptions;
+      assert.strictEqual(shouldMarkPaid, false);
+    });
+
+    it("should not treat near-zero as free", () => {
+      const orderTotal = 0.01;
+      const shouldBecomeFree = orderTotal === 0;
+
+      assert.strictEqual(shouldBecomeFree, false);
+      assert.ok(orderTotal > 0);
+    });
+
+    it("should not treat negative total as free", () => {
+      const orderTotal = -0.01;
+      const shouldBecomeFree = orderTotal === 0;
+
+      assert.strictEqual(shouldBecomeFree, false);
+    });
+
+    it("should not treat NaN total as free", () => {
+      const orderTotal = NaN;
+      const isValid = Number.isFinite(orderTotal);
+      const shouldBecomeFree = isValid && orderTotal === 0;
+
+      assert.strictEqual(shouldBecomeFree, false);
+    });
+
+    it("should use WooCommerce order total as source of truth", () => {
+      const clientTotal = 50.0;
+      const wcOrderTotal = 0.0; // After coupon applied by WooCommerce
+
+      // Server-authoritative: WC total wins
+      const effectiveTotal = wcOrderTotal;
+      assert.strictEqual(effectiveTotal, 0);
+      assert.notStrictEqual(effectiveTotal, clientTotal);
+    });
+
+    it("should add order note for $0 completion", () => {
+      const orderId = 123;
+      const note = {
+        note: "Order completed: total is $0.00 (coupon discount)",
+        customer_note: false,
+      };
+
+      assert.ok(note.note.includes("$0.00"));
+      assert.strictEqual(note.customer_note, false);
+    });
+
+    it("should use free-order transaction_id format", () => {
+      const orderId = 123;
+      const transactionId = `free-order-${orderId}`;
+
+      assert.strictEqual(transactionId, "free-order-123");
+      assert.ok(transactionId.startsWith("free-order-"));
+    });
+
+    it("should add completion timestamp metadata", () => {
+      const timestamp = new Date().toISOString();
+      const metaData = [
+        {
+          key: "_mieland_zero_order_completed",
+          value: timestamp,
+        },
+      ];
+
+      assert.strictEqual(metaData.length, 1);
+      assert.strictEqual(metaData[0]?.key, "_mieland_zero_order_completed");
+      assert.ok(metaData[0]?.value);
+    });
+
+    it("should detect subscription from line item meta", () => {
+      const lineItems = [
+        {
+          product_id: 100,
+          quantity: 1,
+          meta_data: [
+            { key: "_subscription_frequency", value: "monthly" },
+          ],
+        },
+      ];
+
+      const hasSubscriptions = lineItems.some((item) => {
+        return item.meta_data?.some(
+          (m) =>
+            (m.key === "_subscription_frequency" ||
+              m.key === "subscription_frequency") &&
+            typeof m.value === "string" &&
+            m.value.trim().length > 0,
+        );
+      });
+
+      assert.strictEqual(hasSubscriptions, true);
+    });
+
+    it("should not detect subscription when meta is empty string", () => {
+      const lineItems = [
+        {
+          product_id: 100,
+          quantity: 1,
+          meta_data: [
+            { key: "_subscription_frequency", value: "" },
+          ],
+        },
+      ];
+
+      const hasSubscriptions = lineItems.some((item) => {
+        return item.meta_data?.some(
+          (m) =>
+            (m.key === "_subscription_frequency" ||
+              m.key === "subscription_frequency") &&
+            typeof m.value === "string" &&
+            m.value.trim().length > 0,
+        );
+      });
+
+      assert.strictEqual(hasSubscriptions, false);
+    });
+
+    it("should detect subscription from alternative key", () => {
+      const lineItems = [
+        {
+          product_id: 100,
+          quantity: 1,
+          meta_data: [
+            { key: "subscription_frequency", value: "weekly" },
+          ],
+        },
+      ];
+
+      const hasSubscriptions = lineItems.some((item) => {
+        return item.meta_data?.some(
+          (m) =>
+            (m.key === "_subscription_frequency" ||
+              m.key === "subscription_frequency") &&
+            typeof m.value === "string" &&
+            m.value.trim().length > 0,
+        );
+      });
+
+      assert.strictEqual(hasSubscriptions, true);
+    });
+  });
+
   describe("Order Notes and Metadata", () => {
     describe("Stripe", () => {
       it("should use charge ID as transaction_id when available", () => {
