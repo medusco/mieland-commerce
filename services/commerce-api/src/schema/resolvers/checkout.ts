@@ -698,28 +698,46 @@ export const checkoutResolvers = {
             } else {
               // Non-subscription $0 order: mark paid via WC REST set_paid.
               // This triggers payment_complete, reduces stock, fires hooks.
-              await updateWcOrder(Number(order.id), {
-                set_paid: true,
-                transaction_id: `free-order-${order.id}`,
-                meta_data: [
-                  {
-                    key: "_mieland_zero_order_completed",
-                    value: new Date().toISOString(),
-                  },
-                ],
-              });
-              await addWcOrderNote(Number(order.id), {
-                note: "Order completed: total is $0.00 (coupon discount)",
-                customer_note: false,
-              });
-              logPaymentTrace("info", {
-                msg: "checkout_zero_order_completed",
-                requestId: ctx.requestId,
-                orderId: order.id,
-                total: wcTotal,
-              });
-              // Refresh order to get updated status
-              return await updateWcOrder(Number(order.id), {});
+              // Guard: check meta to ensure set_paid only fires once.
+              const alreadyMarkedPaid = Array.isArray(order.meta_data)
+                ? order.meta_data.some(
+                    (m: unknown) => {
+                      if (!m || typeof m !== "object") return false;
+                      const meta = m as { key?: string };
+                      return meta.key === "_mieland_zero_order_completed";
+                    },
+                  )
+                : false;
+
+              if (!alreadyMarkedPaid) {
+                await updateWcOrder(Number(order.id), {
+                  set_paid: true,
+                  transaction_id: `free-order-${order.id}`,
+                  meta_data: [
+                    {
+                      key: "_mieland_zero_order_completed",
+                      value: new Date().toISOString(),
+                    },
+                  ],
+                });
+                await addWcOrderNote(Number(order.id), {
+                  note: "Order completed: total is $0.00 (coupon discount)",
+                  customer_note: false,
+                });
+                logPaymentTrace("info", {
+                  msg: "checkout_zero_order_completed",
+                  requestId: ctx.requestId,
+                  orderId: order.id,
+                  total: wcTotal,
+                });
+              } else {
+                logPaymentTrace("info", {
+                  msg: "checkout_zero_order_already_completed",
+                  requestId: ctx.requestId,
+                  orderId: order.id,
+                  total: wcTotal,
+                });
+              }
             }
           }
 
@@ -743,15 +761,21 @@ export const checkoutResolvers = {
       const orderId = Number(wcOrder.id);
       const needs = orderNeedsFromInfo(info, ["order"]);
       const shapeStarted = Date.now();
-      const order = orderNeedsAreLean(needs)
+      
+      // For $0 orders that were marked paid, fetch fresh to get updated status
+      const wcTotal = Number(wcOrder.total ?? 0);
+      const was$0Order = Number.isFinite(wcTotal) && wcTotal === 0;
+      const order = orderNeedsAreLean(needs) && !was$0Order
         ? shapeOrderFromWc(wcOrder)
         : await shapeOrder(orderId, needs);
+      
       logJson("info", {
         msg: "checkout_shape_order",
         requestId: ctx.requestId,
         ms: Date.now() - shapeStarted,
-        lean: orderNeedsAreLean(needs),
+        lean: orderNeedsAreLean(needs) && !was$0Order,
         orderId,
+        was$0Order,
       });
 
       const customer = wantsCustomer(info)
@@ -904,7 +928,98 @@ export const checkoutResolvers = {
       const paymentDetails: Array<{ key: string; value: string }> = [];
 
       try {
-        // Direct Stripe payment processing
+        // $0 order payment method attachment (subscriptions with $0 initial total)
+        const orderTotal = Number(ctxOrder.total);
+        if (Number.isFinite(orderTotal) && orderTotal === 0) {
+          if (!isStripePaymentMethod(paymentMethod)) {
+            throw new Error(
+              "$0 order completion requires Stripe payment method for subscription renewals",
+            );
+          }
+
+          if (!paymentMethodId || !paymentMethodId.startsWith("pm_")) {
+            throw new Error(
+              "Stripe payment method ID (pm_...) is required for $0 subscription order completion. " +
+                "Create a SetupIntent to save a payment method for future renewals.",
+            );
+          }
+
+          logPaymentTrace("info", {
+            msg: "process_order_payment_zero_order_start",
+            requestId: ctx.requestId,
+            orderId,
+            paymentMethodId,
+          });
+
+          // Idempotent: check if already paid
+          const alreadyPaid = !["pending", "on-hold", "failed"].includes(
+            ctxOrder.status,
+          );
+          if (alreadyPaid) {
+            logPaymentTrace("info", {
+              msg: "process_order_payment_zero_order_already_paid",
+              requestId: ctx.requestId,
+              orderId,
+              status: ctxOrder.status,
+            });
+            result = "success";
+          } else {
+            // Attach payment method to order for subscription renewals
+            await updateWcOrder(orderId, {
+              set_paid: true,
+              payment_method: "stripe",
+              transaction_id: `zero-subscription-${orderId}`,
+              meta_data: [
+                { key: "_stripe_customer_id", value: paymentMethodId },
+                { key: "_stripe_source_id", value: paymentMethodId },
+                {
+                  key: "_mieland_zero_subscription_completed",
+                  value: new Date().toISOString(),
+                },
+              ],
+            });
+
+            await addWcOrderNote(orderId, {
+              note: `$0 subscription order completed with saved payment method (${paymentMethodId})`,
+              customer_note: false,
+            });
+
+            logPaymentTrace("info", {
+              msg: "process_order_payment_zero_order_completed",
+              requestId: ctx.requestId,
+              orderId,
+              paymentMethodId,
+              ms: Date.now() - started,
+            });
+
+            result = "success";
+          }
+
+          paymentDetails.push({
+            key: "stripe_payment_method",
+            value: paymentMethodId,
+          });
+
+          // Fetch fresh order to return updated status
+          const needs = orderNeedsFromInfo(info, ["order"]);
+          const order =
+            (await shapeOrder(orderId, needs)) ??
+            (await getOrderById(orderId, ctx.userId));
+
+          return {
+            clientMutationId: input.clientMutationId,
+            order,
+            result,
+            redirect,
+            paymentStatus: result,
+            paymentDetails,
+            clientSecret,
+            publishableKey,
+            requiresAction,
+          };
+        }
+
+        // Direct Stripe payment processing (non-zero amounts only)
         if (isStripePaymentMethod(paymentMethod)) {
           logPaymentTrace("info", {
             msg: "process_order_payment_stripe_start",

@@ -56,7 +56,10 @@ export async function createPaymentIntent(
   const stripe = getStripeClient();
   const amountCents = Math.round(Number(args.amount) * 100);
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
-    throw new Error(`Invalid payment amount: ${args.amount}`);
+    throw new Error(
+      `Invalid payment amount: ${args.amount}. ` +
+        `For $0 orders, use processOrderPayment with a saved payment method instead of creating a PaymentIntent.`,
+    );
   }
 
   const idempotencyKey = `order-${args.orderId}-${args.orderKey}`;

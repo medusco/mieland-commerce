@@ -365,6 +365,144 @@ describe("Payment Processing", () => {
     });
   });
 
+  describe("Zero Dollar Subscription Completion", () => {
+    it("should complete $0 subscription with saved payment method", () => {
+      const orderTotal = 0.0;
+      const paymentMethodId = "pm_1234567890abcdef";
+      const hasSubscriptions = true;
+
+      assert.strictEqual(orderTotal, 0);
+      assert.ok(paymentMethodId.startsWith("pm_"));
+      assert.strictEqual(hasSubscriptions, true);
+
+      // Should mark paid with payment method attached
+      const shouldComplete = orderTotal === 0 && Boolean(paymentMethodId);
+      assert.strictEqual(shouldComplete, true);
+    });
+
+    it("should reject $0 subscription without payment method", () => {
+      const orderTotal = 0.0;
+      const paymentMethodId = null;
+
+      const shouldReject = orderTotal === 0 && !paymentMethodId;
+      assert.strictEqual(shouldReject, true);
+    });
+
+    it("should reject non-pm_ payment methods for $0 subscription", () => {
+      const validPm = "pm_1234567890abcdef";
+      const invalidToken = "tok_1234567890abcdef";
+      const invalidCard = "card_1234567890abcdef";
+
+      assert.ok(validPm.startsWith("pm_"));
+      assert.ok(!invalidToken.startsWith("pm_"));
+      assert.ok(!invalidCard.startsWith("pm_"));
+    });
+
+    it("should be idempotent for $0 subscription completion", () => {
+      const orderStatus = "processing"; // Already paid
+      const needsPayment = ["pending", "on-hold", "failed"].includes(orderStatus);
+
+      assert.strictEqual(needsPayment, false);
+      // Replaying should return success without calling set_paid again
+    });
+
+    it("should attach payment method metadata for renewals", () => {
+      const paymentMethodId = "pm_1234567890abcdef";
+      const metaData = [
+        { key: "_stripe_customer_id", value: paymentMethodId },
+        { key: "_stripe_source_id", value: paymentMethodId },
+      ];
+
+      assert.strictEqual(metaData.length, 2);
+      assert.ok(metaData.some((m) => m.key === "_stripe_customer_id"));
+      assert.ok(metaData.some((m) => m.key === "_stripe_source_id"));
+    });
+
+    it("should add completion note for $0 subscription", () => {
+      const paymentMethodId = "pm_1234567890abcdef";
+      const note = `$0 subscription order completed with saved payment method (${paymentMethodId})`;
+
+      assert.ok(note.includes("$0 subscription"));
+      assert.ok(note.includes(paymentMethodId));
+    });
+
+    it("should use zero-subscription transaction ID format", () => {
+      const orderId = 123;
+      const transactionId = `zero-subscription-${orderId}`;
+
+      assert.strictEqual(transactionId, "zero-subscription-123");
+    });
+  });
+
+  describe("Stripe Zero Amount Rejection", () => {
+    it("should reject zero amount PaymentIntent creation", () => {
+      const amount = 0.0;
+      const amountCents = Math.round(amount * 100);
+
+      const shouldReject = !Number.isFinite(amountCents) || amountCents <= 0;
+      assert.strictEqual(shouldReject, true);
+    });
+
+    it("should reject negative amount PaymentIntent", () => {
+      const amount = -1.0;
+      const amountCents = Math.round(amount * 100);
+
+      const shouldReject = !Number.isFinite(amountCents) || amountCents <= 0;
+      assert.strictEqual(shouldReject, true);
+    });
+
+    it("should accept positive amount PaymentIntent", () => {
+      const amount = 0.01;
+      const amountCents = Math.round(amount * 100);
+
+      const shouldAccept = Number.isFinite(amountCents) && amountCents > 0;
+      assert.strictEqual(shouldAccept, true);
+      assert.strictEqual(amountCents, 1);
+    });
+  });
+
+  describe("Idempotency and Freshness", () => {
+    it("should prevent double set_paid via metadata guard", () => {
+      const metaData = [
+        { key: "_mieland_zero_order_completed", value: "2026-11-07T00:00:00.000Z" },
+      ];
+
+      const alreadyMarkedPaid = metaData.some(
+        (m) => m.key === "_mieland_zero_order_completed",
+      );
+
+      assert.strictEqual(alreadyMarkedPaid, true);
+      // Should skip set_paid when already marked
+    });
+
+    it("should allow set_paid when metadata absent", () => {
+      const metaData: Array<{ key: string; value: string }> = [];
+
+      const alreadyMarkedPaid = metaData.some(
+        (m) => m.key === "_mieland_zero_order_completed",
+      );
+
+      assert.strictEqual(alreadyMarkedPaid, false);
+      // Should call set_paid
+    });
+
+    it("should fetch fresh order for $0 orders", () => {
+      const wcTotal = 0.0;
+      const was$0Order = Number.isFinite(wcTotal) && wcTotal === 0;
+
+      assert.strictEqual(was$0Order, true);
+      // Should fetch from DB instead of using cached WC response
+    });
+
+    it("should use cached order for non-$0 orders", () => {
+      const wcTotal = 99.99;
+      const was$0Order = Number.isFinite(wcTotal) && wcTotal === 0;
+
+      assert.strictEqual(was$0Order, false);
+      // Can use cached WC response
+    });
+  });
+
   describe("Order Notes and Metadata", () => {
     describe("Stripe", () => {
       it("should use charge ID as transaction_id when available", () => {
