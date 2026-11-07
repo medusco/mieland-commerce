@@ -50,6 +50,11 @@ import {
   shapeOrder,
   shapeOrderFromWc,
 } from "../../repositories/orders.js";
+import {
+  isWcZeroOrderTotal,
+  orderMetaHasZeroOrderCompleted,
+  wcLineItemsHaveSubscription,
+} from "../../payment/zero-order.js";
 import { getRedis } from "../../redis/client.js";
 import { logJson, parseDatabaseId } from "../../utils/index.js";
 import {
@@ -660,28 +665,8 @@ export const checkoutResolvers = {
           // Handle $0 orders: mark paid immediately for legitimate free orders.
           // Server-authoritative: use WooCommerce's computed total from the order.
           const wcTotal = Number(order.total ?? calculated.total);
-          if (Number.isFinite(wcTotal) && wcTotal === 0) {
-            // Check if order has subscription items
-            const hasSubscriptions = Array.isArray(order.line_items)
-              ? order.line_items.some((item: unknown) => {
-                  if (!item || typeof item !== "object") return false;
-                  const lineItem = item as Record<string, unknown>;
-                  const lineItemMeta = Array.isArray(lineItem.meta_data)
-                    ? lineItem.meta_data
-                    : [];
-                  return lineItemMeta.some((m: unknown) => {
-                    if (!m || typeof m !== "object") return false;
-                    const meta = m as { key?: string; value?: unknown };
-                    const key = String(meta.key ?? "");
-                    return (
-                      (key === "_subscription_frequency" ||
-                        key === "subscription_frequency") &&
-                      typeof meta.value === "string" &&
-                      meta.value.trim().length > 0
-                    );
-                  });
-                })
-              : false;
+          if (isWcZeroOrderTotal(wcTotal)) {
+            const hasSubscriptions = wcLineItemsHaveSubscription(order.line_items);
 
             if (hasSubscriptions) {
               // Subscription with $0 initial total: keep status pending.
@@ -699,15 +684,10 @@ export const checkoutResolvers = {
               // Non-subscription $0 order: mark paid via WC REST set_paid.
               // This triggers payment_complete, reduces stock, fires hooks.
               // Guard: check meta to ensure set_paid only fires once.
-              const alreadyMarkedPaid = Array.isArray(order.meta_data)
-                ? order.meta_data.some(
-                    (m: unknown) => {
-                      if (!m || typeof m !== "object") return false;
-                      const meta = m as { key?: string };
-                      return meta.key === "_mieland_zero_order_completed";
-                    },
-                  )
-                : false;
+              const alreadyMarkedPaid = orderMetaHasZeroOrderCompleted(
+                order.meta_data,
+                "_mieland_zero_order_completed",
+              );
 
               if (!alreadyMarkedPaid) {
                 await updateWcOrder(Number(order.id), {
@@ -930,7 +910,7 @@ export const checkoutResolvers = {
       try {
         // $0 order payment method attachment (subscriptions with $0 initial total)
         const orderTotal = Number(ctxOrder.total);
-        if (Number.isFinite(orderTotal) && orderTotal === 0) {
+        if (isWcZeroOrderTotal(orderTotal)) {
           if (!isStripePaymentMethod(paymentMethod)) {
             throw new Error(
               "$0 order completion requires Stripe payment method for subscription renewals",
@@ -965,13 +945,21 @@ export const checkoutResolvers = {
             result = "success";
           } else {
             // Validate payment method and get Stripe customer ID
-            const { validatePaymentMethodForSubscription, getStripeCustomerIdForUser } =
-              await import("../../clients/stripe.js");
-            
-            const expectedCustomerId =
-              ctxOrder.customerId > 0
-                ? await getStripeCustomerIdForUser(ctxOrder.customerId)
-                : null;
+            const {
+              validatePaymentMethodForSubscription,
+              resolveExpectedStripeCustomerId,
+            } = await import("../../clients/stripe.js");
+
+            const expectedCustomerId = await resolveExpectedStripeCustomerId({
+              userId: ctxOrder.customerId,
+              orderStripeCustomerId: ctxOrder.orderStripeCustomerId,
+            });
+            if (!expectedCustomerId) {
+              throw new Error(
+                "Unable to resolve Stripe customer for this order. " +
+                  "Log in with a saved Stripe customer, or complete checkout with a customer linked to this order.",
+              );
+            }
 
             const pmDetails = await validatePaymentMethodForSubscription({
               paymentMethodId,
