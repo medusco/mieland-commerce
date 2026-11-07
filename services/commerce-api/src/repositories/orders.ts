@@ -1267,6 +1267,9 @@ export async function getOrderPaymentContext(orderId: number) {
   ]);
 
   const status = order.status.replace(/^wc-/, "");
+  const orderStripeCustomerIdRaw = meta._stripe_customer_id?.trim();
+  const orderStripeCustomerId =
+    orderStripeCustomerIdRaw?.startsWith("cus_") ? orderStripeCustomerIdRaw : null;
   return {
     id: order.id,
     customerId: Number(order.customer_id),
@@ -1278,6 +1281,7 @@ export async function getOrderPaymentContext(orderId: number) {
     needsPayment: ["pending", "on-hold", "failed"].includes(status),
     billing,
     shipping,
+    orderStripeCustomerId,
   };
 }
 
