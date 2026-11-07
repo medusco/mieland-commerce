@@ -964,14 +964,62 @@ export const checkoutResolvers = {
             });
             result = "success";
           } else {
-            // Attach payment method to order for subscription renewals
+            // Validate payment method and get Stripe customer ID
+            const { validatePaymentMethodForSubscription, getStripeCustomerIdForUser } =
+              await import("../../clients/stripe.js");
+            
+            const expectedCustomerId =
+              ctxOrder.customerId > 0
+                ? await getStripeCustomerIdForUser(ctxOrder.customerId)
+                : null;
+
+            const pmDetails = await validatePaymentMethodForSubscription({
+              paymentMethodId,
+              expectedCustomerId,
+              userId: ctxOrder.customerId,
+            });
+
+            // Save payment method as WC payment token for future use
+            if (ctxOrder.customerId > 0) {
+              const { createCustomerPaymentToken } = await import(
+                "../../repositories/payment-tokens.js"
+              );
+              try {
+                await createCustomerPaymentToken(ctxOrder.customerId, {
+                  gateway: "stripe",
+                  token: pmDetails.paymentMethodId,
+                  type: "CC",
+                  cardType: pmDetails.cardBrand ?? undefined,
+                  last4: pmDetails.last4 ?? undefined,
+                  expiryMonth: pmDetails.expMonth?.toString() ?? undefined,
+                  expiryYear: pmDetails.expYear?.toString() ?? undefined,
+                  customerId: pmDetails.customerId,
+                });
+                logPaymentTrace("info", {
+                  msg: "process_order_payment_zero_order_token_saved",
+                  requestId: ctx.requestId,
+                  orderId,
+                  userId: ctxOrder.customerId,
+                });
+              } catch (err) {
+                // Token save is best-effort; don't fail the order
+                logPaymentTrace("warn", {
+                  msg: "process_order_payment_zero_order_token_save_failed",
+                  requestId: ctx.requestId,
+                  orderId,
+                  err: String(err),
+                });
+              }
+            }
+
+            // Attach payment method to order for subscription renewals (Woo Stripe format)
             await updateWcOrder(orderId, {
               set_paid: true,
               payment_method: "stripe",
               transaction_id: `zero-subscription-${orderId}`,
               meta_data: [
-                { key: "_stripe_customer_id", value: paymentMethodId },
-                { key: "_stripe_source_id", value: paymentMethodId },
+                { key: "_stripe_customer_id", value: pmDetails.customerId },
+                { key: "_stripe_source_id", value: pmDetails.paymentMethodId },
                 {
                   key: "_mieland_zero_subscription_completed",
                   value: new Date().toISOString(),
@@ -980,7 +1028,7 @@ export const checkoutResolvers = {
             });
 
             await addWcOrderNote(orderId, {
-              note: `$0 subscription order completed with saved payment method (${paymentMethodId})`,
+              note: `$0 subscription order completed with saved payment method (${pmDetails.paymentMethodId}, customer ${pmDetails.customerId})`,
               customer_note: false,
             });
 
@@ -988,7 +1036,8 @@ export const checkoutResolvers = {
               msg: "process_order_payment_zero_order_completed",
               requestId: ctx.requestId,
               orderId,
-              paymentMethodId,
+              paymentMethodId: pmDetails.paymentMethodId,
+              customerId: pmDetails.customerId,
               ms: Date.now() - started,
             });
 

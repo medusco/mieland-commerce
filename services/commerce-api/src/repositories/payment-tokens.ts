@@ -116,6 +116,7 @@ export async function createCustomerPaymentToken(
     last4?: string;
     expiryMonth?: string;
     expiryYear?: string;
+    customerId?: string;
   },
 ): Promise<PaymentToken> {
   try {
@@ -144,6 +145,9 @@ export async function createCustomerPaymentToken(
     }
     if (input.expiryYear) {
       await setPaymentTokenMeta(tokenId, "expiry_year", input.expiryYear);
+    }
+    if (input.customerId) {
+      await setPaymentTokenMeta(tokenId, "customer_id", input.customerId);
     }
 
     // If this is the first token, set it as default

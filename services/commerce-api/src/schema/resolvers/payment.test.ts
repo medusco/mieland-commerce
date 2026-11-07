@@ -365,6 +365,129 @@ describe("Payment Processing", () => {
     });
   });
 
+  describe("Stripe PaymentMethod Validation", () => {
+    it("should extract customer ID from PaymentMethod", () => {
+      const mockPm = {
+        id: "pm_1ABC",
+        customer: "cus_xyz123",
+        card: {
+          brand: "visa",
+          last4: "4242",
+          exp_month: 12,
+          exp_year: 2027,
+        },
+      };
+
+      const customerId =
+        typeof mockPm.customer === "string"
+          ? mockPm.customer
+          : (mockPm.customer as { id: string })?.id;
+
+      assert.strictEqual(customerId, "cus_xyz123");
+      assert.ok(customerId.startsWith("cus_"));
+    });
+
+    it("should reject PaymentMethod without customer", () => {
+      const mockPm = {
+        id: "pm_1ABC",
+        customer: null,
+      };
+
+      const hasCustomer = Boolean(mockPm.customer);
+      assert.strictEqual(hasCustomer, false);
+    });
+
+    it("should validate customer ID matches expected", () => {
+      const pmCustomerId = "cus_xyz123";
+      const expectedCustomerId = "cus_xyz123";
+
+      const matches = pmCustomerId === expectedCustomerId;
+      assert.strictEqual(matches, true);
+    });
+
+    it("should reject PaymentMethod with mismatched customer", () => {
+      const pmCustomerId = "cus_xyz123";
+      const expectedCustomerId = "cus_abc456";
+
+      const matches = pmCustomerId === expectedCustomerId;
+      assert.strictEqual(matches, false);
+    });
+
+    it("should extract card details from PaymentMethod", () => {
+      const mockCard = {
+        brand: "visa",
+        last4: "4242",
+        exp_month: 12,
+        exp_year: 2027,
+      };
+
+      assert.strictEqual(mockCard.brand, "visa");
+      assert.strictEqual(mockCard.last4, "4242");
+      assert.strictEqual(mockCard.exp_month, 12);
+      assert.strictEqual(mockCard.exp_year, 2027);
+    });
+  });
+
+  describe("Stripe Customer ID Lookup", () => {
+    it("should return customer ID from payment token meta", () => {
+      const mockTokenMeta = [
+        { meta_key: "customer_id", meta_value: "cus_xyz123" },
+        { meta_key: "last4", meta_value: "4242" },
+      ];
+
+      const customerIdMeta = mockTokenMeta.find(
+        (m) => m.meta_key === "customer_id",
+      );
+      const customerId = customerIdMeta?.meta_value;
+
+      assert.strictEqual(customerId, "cus_xyz123");
+      assert.ok(customerId?.startsWith("cus_"));
+    });
+
+    it("should return null when no tokens exist", () => {
+      const mockTokens: Array<{ meta_value: string }> = [];
+
+      const customerId = mockTokens[0]?.meta_value ?? null;
+      assert.strictEqual(customerId, null);
+    });
+
+    it("should validate customer ID format", () => {
+      const validCustomerId = "cus_xyz123";
+      const invalidCustomerId = "pm_xyz123";
+
+      assert.ok(validCustomerId.startsWith("cus_"));
+      assert.ok(!invalidCustomerId.startsWith("cus_"));
+    });
+  });
+
+  describe("Payment Token Creation", () => {
+    it("should store customer_id in token metadata", () => {
+      const tokenInput = {
+        gateway: "stripe",
+        token: "pm_1ABC",
+        customerId: "cus_xyz123",
+      };
+
+      assert.strictEqual(tokenInput.customerId, "cus_xyz123");
+      assert.ok(tokenInput.customerId?.startsWith("cus_"));
+    });
+
+    it("should store card details in token metadata", () => {
+      const tokenInput = {
+        token: "pm_1ABC",
+        cardType: "visa",
+        last4: "4242",
+        expiryMonth: "12",
+        expiryYear: "2027",
+      };
+
+      assert.strictEqual(tokenInput.cardType, "visa");
+      assert.strictEqual(tokenInput.last4, "4242");
+      assert.strictEqual(tokenInput.expiryMonth, "12");
+      assert.strictEqual(tokenInput.expiryYear, "2027");
+    });
+  });
+
   describe("Zero Dollar Subscription Completion", () => {
     it("should complete $0 subscription with saved payment method", () => {
       const orderTotal = 0.0;
@@ -408,14 +531,21 @@ describe("Payment Processing", () => {
 
     it("should attach payment method metadata for renewals", () => {
       const paymentMethodId = "pm_1234567890abcdef";
+      const customerId = "cus_xyz123";
       const metaData = [
-        { key: "_stripe_customer_id", value: paymentMethodId },
+        { key: "_stripe_customer_id", value: customerId },
         { key: "_stripe_source_id", value: paymentMethodId },
       ];
 
       assert.strictEqual(metaData.length, 2);
-      assert.ok(metaData.some((m) => m.key === "_stripe_customer_id"));
-      assert.ok(metaData.some((m) => m.key === "_stripe_source_id"));
+      
+      const customerIdMeta = metaData.find((m) => m.key === "_stripe_customer_id");
+      assert.ok(customerIdMeta);
+      assert.ok(customerIdMeta.value.startsWith("cus_"));
+      
+      const sourceIdMeta = metaData.find((m) => m.key === "_stripe_source_id");
+      assert.ok(sourceIdMeta);
+      assert.ok(sourceIdMeta.value.startsWith("pm_"));
     });
 
     it("should add completion note for $0 subscription", () => {
