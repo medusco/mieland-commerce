@@ -56,7 +56,10 @@ export async function createPaymentIntent(
   const stripe = getStripeClient();
   const amountCents = Math.round(Number(args.amount) * 100);
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
-    throw new Error(`Invalid payment amount: ${args.amount}`);
+    throw new Error(
+      `Invalid payment amount: ${args.amount}. ` +
+        `For $0 orders, use processOrderPayment with a saved payment method instead of creating a PaymentIntent.`,
+    );
   }
 
   const idempotencyKey = `order-${args.orderId}-${args.orderKey}`;
@@ -137,6 +140,122 @@ export type ConfirmPaymentIntentResult = {
   paymentIntentId: string;
   chargeId: string | null;
 };
+
+export type ValidatePaymentMethodArgs = {
+  paymentMethodId: string;
+  expectedCustomerId: string | null;
+  userId: number;
+};
+
+export type ValidatePaymentMethodResult = {
+  paymentMethodId: string;
+  customerId: string;
+  cardBrand: string | null;
+  last4: string | null;
+  expMonth: number | null;
+  expYear: number | null;
+};
+
+/**
+ * Get the Stripe customer ID for a WordPress user from saved payment tokens.
+ * Returns the customer ID from the most recent stripe payment token, or null if none exists.
+ */
+export async function getStripeCustomerIdForUser(
+  userId: number,
+): Promise<string | null> {
+  const { query, t } = await import("../db/mysql.js");
+  
+  try {
+    const row = await query<{ meta_value: string }[]>(
+      `SELECT ptm.meta_value
+       FROM ${t("woocommerce_payment_tokens")} pt
+       INNER JOIN ${t("woocommerce_payment_tokenmeta")} ptm
+         ON ptm.payment_token_id = pt.token_id
+       WHERE pt.user_id = ?
+         AND pt.gateway_id = 'stripe'
+         AND ptm.meta_key = 'customer_id'
+       ORDER BY pt.token_id DESC
+       LIMIT 1`,
+      [userId],
+    );
+
+    if (row.length > 0 && row[0]?.meta_value) {
+      const customerId = row[0].meta_value.trim();
+      if (customerId.startsWith("cus_")) {
+        return customerId;
+      }
+    }
+    return null;
+  } catch (err) {
+    logJson("warn", {
+      msg: "get_stripe_customer_id_failed",
+      userId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Retrieve and validate a Stripe PaymentMethod for $0 subscription orders.
+ * Ensures the payment method is attached to the correct customer for renewals.
+ */
+export async function validatePaymentMethodForSubscription(
+  args: ValidatePaymentMethodArgs,
+): Promise<ValidatePaymentMethodResult> {
+  const stripe = getStripeClient();
+  const started = Date.now();
+
+  try {
+    const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
+
+    logJson("info", {
+      msg: "stripe_retrieve_payment_method",
+      ms: Date.now() - started,
+      paymentMethodId: args.paymentMethodId,
+      hasCustomer: Boolean(pm.customer),
+    });
+
+    if (!pm.customer) {
+      throw new Error(
+        `Payment method ${args.paymentMethodId} is not attached to any Stripe customer. ` +
+          `Create a SetupIntent with the customer parameter to attach the payment method.`,
+      );
+    }
+
+    const customerId = typeof pm.customer === "string" ? pm.customer : pm.customer.id;
+
+    // If we have an expected customer ID, validate it matches
+    if (args.expectedCustomerId) {
+      if (customerId !== args.expectedCustomerId) {
+        throw new Error(
+          `Payment method ${args.paymentMethodId} is attached to customer ${customerId}, ` +
+            `but order belongs to customer ${args.expectedCustomerId}`,
+        );
+      }
+    }
+
+    // Extract card details for token storage
+    const card = pm.card;
+    return {
+      paymentMethodId: pm.id,
+      customerId,
+      cardBrand: card?.brand ?? null,
+      last4: card?.last4 ?? null,
+      expMonth: card?.exp_month ?? null,
+      expYear: card?.exp_year ?? null,
+    };
+  } catch (err) {
+    logJson("error", {
+      msg: "stripe_validate_payment_method_fail",
+      ms: Date.now() - started,
+      paymentMethodId: args.paymentMethodId,
+      userId: args.userId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
 
 /**
  * Retrieve and validate a Stripe PaymentIntent.
