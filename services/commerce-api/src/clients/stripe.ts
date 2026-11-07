@@ -157,16 +157,33 @@ export type ValidatePaymentMethodResult = {
 };
 
 /**
- * Get the Stripe customer ID for a WordPress user from saved payment tokens.
- * Returns the customer ID from the most recent stripe payment token, or null if none exists.
+ * Get the Stripe customer ID for a WordPress user.
+ * Checks in order: user meta, payment token meta.
+ * Returns customer ID or null if none exists.
  */
 export async function getStripeCustomerIdForUser(
   userId: number,
 ): Promise<string | null> {
-  const { query, t } = await import("../db/mysql.js");
+  const { query, queryOne, t } = await import("../db/mysql.js");
   
   try {
-    const row = await query<{ meta_value: string }[]>(
+    // 1. Check user meta _stripe_customer_id (Woo Stripe stores it here)
+    const userMeta = await queryOne<{ meta_value: string }>(
+      `SELECT meta_value FROM ${t("usermeta")}
+       WHERE user_id = ? AND meta_key = '_stripe_customer_id'
+       LIMIT 1`,
+      [userId],
+    );
+
+    if (userMeta?.meta_value) {
+      const customerId = userMeta.meta_value.trim();
+      if (customerId.startsWith("cus_")) {
+        return customerId;
+      }
+    }
+
+    // 2. Fallback: check payment token meta (customer_id)
+    const tokenMeta = await query<{ meta_value: string }[]>(
       `SELECT ptm.meta_value
        FROM ${t("woocommerce_payment_tokens")} pt
        INNER JOIN ${t("woocommerce_payment_tokenmeta")} ptm
@@ -179,6 +196,41 @@ export async function getStripeCustomerIdForUser(
       [userId],
     );
 
+    if (tokenMeta.length > 0 && tokenMeta[0]?.meta_value) {
+      const customerId = tokenMeta[0].meta_value.trim();
+      if (customerId.startsWith("cus_")) {
+        return customerId;
+      }
+    }
+
+    return null;
+  } catch (err) {
+    logJson("warn", {
+      msg: "get_stripe_customer_id_failed",
+      userId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Get the Stripe customer ID for a guest order from order meta.
+ * Returns customer ID or null if none exists.
+ */
+export async function getStripeCustomerIdForOrder(
+  orderId: number,
+): Promise<string | null> {
+  const { query, t } = await import("../db/mysql.js");
+  
+  try {
+    const row = await query<{ meta_value: string }[]>(
+      `SELECT meta_value FROM ${t("wc_orders_meta")}
+       WHERE order_id = ? AND meta_key = '_stripe_customer_id'
+       LIMIT 1`,
+      [orderId],
+    );
+
     if (row.length > 0 && row[0]?.meta_value) {
       const customerId = row[0].meta_value.trim();
       if (customerId.startsWith("cus_")) {
@@ -188,8 +240,8 @@ export async function getStripeCustomerIdForUser(
     return null;
   } catch (err) {
     logJson("warn", {
-      msg: "get_stripe_customer_id_failed",
-      userId,
+      msg: "get_stripe_customer_id_for_order_failed",
+      orderId,
       err: err instanceof Error ? err.message : String(err),
     });
     return null;

@@ -965,13 +965,32 @@ export const checkoutResolvers = {
             result = "success";
           } else {
             // Validate payment method and get Stripe customer ID
-            const { validatePaymentMethodForSubscription, getStripeCustomerIdForUser } =
-              await import("../../clients/stripe.js");
-            
-            const expectedCustomerId =
-              ctxOrder.customerId > 0
-                ? await getStripeCustomerIdForUser(ctxOrder.customerId)
-                : null;
+            const {
+              validatePaymentMethodForSubscription,
+              getStripeCustomerIdForUser,
+              getStripeCustomerIdForOrder,
+            } = await import("../../clients/stripe.js");
+
+            // Get expected customer ID: user meta for logged-in, order meta for guests
+            let expectedCustomerId: string | null = null;
+            if (ctxOrder.customerId > 0) {
+              expectedCustomerId = await getStripeCustomerIdForUser(
+                ctxOrder.customerId,
+              );
+            } else {
+              expectedCustomerId = await getStripeCustomerIdForOrder(orderId);
+            }
+
+            // Reject if no trusted customer exists (ownership hole prevention)
+            if (!expectedCustomerId) {
+              throw new Error(
+                "No Stripe customer found for this " +
+                  (ctxOrder.customerId > 0 ? "user" : "order") +
+                  ". The payment method must be attached to a customer that matches " +
+                  "the account's saved Stripe customer ID. Create a SetupIntent with " +
+                  "the customer parameter to establish the link.",
+              );
+            }
 
             const pmDetails = await validatePaymentMethodForSubscription({
               paymentMethodId,
@@ -1027,8 +1046,26 @@ export const checkoutResolvers = {
               ],
             });
 
+            // Store payment metadata on subscriptions for renewal billing
+            const {
+              getSubscriptionsByParentOrder,
+              updateSubscriptionPaymentMeta,
+            } = await import("../../repositories/subscriptions.js");
+
+            const subscriptions = await getSubscriptionsByParentOrder(orderId);
+            for (const subscription of subscriptions) {
+              await updateSubscriptionPaymentMeta(
+                subscription.id,
+                pmDetails.customerId,
+                pmDetails.paymentMethodId,
+              );
+            }
+
             await addWcOrderNote(orderId, {
-              note: `$0 subscription order completed with saved payment method (${pmDetails.paymentMethodId}, customer ${pmDetails.customerId})`,
+              note:
+                `$0 subscription order completed with saved payment method ` +
+                `(${pmDetails.paymentMethodId}, customer ${pmDetails.customerId}). ` +
+                `Updated ${subscriptions.length} subscription(s).`,
               customer_note: false,
             });
 
@@ -1038,6 +1075,7 @@ export const checkoutResolvers = {
               orderId,
               paymentMethodId: pmDetails.paymentMethodId,
               customerId: pmDetails.customerId,
+              subscriptionCount: subscriptions.length,
               ms: Date.now() - started,
             });
 

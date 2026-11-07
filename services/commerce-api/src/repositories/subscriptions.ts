@@ -75,6 +75,55 @@ export async function getSubscription(id: number, userId: number) {
   return row ? toGraphqlSubscription(row) : null;
 }
 
+export async function getSubscriptionsByParentOrder(
+  orderId: number,
+): Promise<SubscriptionRow[]> {
+  return query<SubscriptionRow[]>(
+    `SELECT * FROM ${t("mieland_subscriptions")} WHERE parent_order_id = ?`,
+    [orderId],
+  );
+}
+
+/**
+ * Store Stripe payment metadata for subscription renewals.
+ * Stores in mieland_subscriptions_meta table (similar to wp_postmeta pattern).
+ */
+export async function updateSubscriptionPaymentMeta(
+  subscriptionId: number,
+  stripeCustomerId: string,
+  stripeSourceId: string,
+): Promise<void> {
+  const { query: execQuery, t: tableName } = await import("../db/mysql.js");
+  
+  try {
+    // Store _stripe_customer_id
+    await execQuery(
+      `INSERT INTO ${tableName("mieland_subscriptions_meta")}
+       (subscription_id, meta_key, meta_value)
+       VALUES (?, '_stripe_customer_id', ?)
+       ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)`,
+      [subscriptionId, stripeCustomerId],
+    );
+
+    // Store _stripe_source_id
+    await execQuery(
+      `INSERT INTO ${tableName("mieland_subscriptions_meta")}
+       (subscription_id, meta_key, meta_value)
+       VALUES (?, '_stripe_source_id', ?)
+       ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)`,
+      [subscriptionId, stripeSourceId],
+    );
+  } catch (err) {
+    const { logJson } = await import("../utils/index.js");
+    logJson("warn", {
+      msg: "update_subscription_payment_meta_failed",
+      subscriptionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    // Don't throw - this is best-effort metadata storage
+  }
+}
+
 export async function updateSubscription(
   id: number,
   userId: number,

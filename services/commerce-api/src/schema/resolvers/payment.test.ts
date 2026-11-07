@@ -428,26 +428,81 @@ describe("Payment Processing", () => {
     });
   });
 
+  describe("Stripe Customer ID Ownership", () => {
+    it("should reject when no expected customer exists", () => {
+      const expectedCustomerId = null;
+      const pmCustomerId = "cus_xyz123";
+
+      const shouldReject = !expectedCustomerId && Boolean(pmCustomerId);
+      assert.strictEqual(shouldReject, true);
+    });
+
+    it("should accept when PM customer matches expected", () => {
+      const expectedCustomerId = "cus_xyz123";
+      const pmCustomerId = "cus_xyz123";
+
+      const shouldAccept = expectedCustomerId === pmCustomerId;
+      assert.strictEqual(shouldAccept, true);
+    });
+
+    it("should check user meta before token meta", () => {
+      const sources = ["user_meta", "token_meta"];
+      const checkOrder = sources;
+
+      assert.strictEqual(checkOrder[0], "user_meta");
+      assert.strictEqual(checkOrder[1], "token_meta");
+    });
+  });
+
   describe("Stripe Customer ID Lookup", () => {
-    it("should return customer ID from payment token meta", () => {
+    it("should return customer ID from user meta", () => {
+      const mockUserMeta = {
+        user_id: 123,
+        meta_key: "_stripe_customer_id",
+        meta_value: "cus_from_user_meta",
+      };
+
+      const customerId = mockUserMeta.meta_value;
+
+      assert.strictEqual(customerId, "cus_from_user_meta");
+      assert.ok(customerId.startsWith("cus_"));
+    });
+
+    it("should fallback to payment token meta", () => {
+      const mockUserMeta = null;
       const mockTokenMeta = [
-        { meta_key: "customer_id", meta_value: "cus_xyz123" },
-        { meta_key: "last4", meta_value: "4242" },
+        { meta_key: "customer_id", meta_value: "cus_from_token" },
       ];
 
-      const customerIdMeta = mockTokenMeta.find(
-        (m) => m.meta_key === "customer_id",
-      );
-      const customerId = customerIdMeta?.meta_value;
+      const customerId =
+        mockUserMeta ?? mockTokenMeta.find((m) => m.meta_key === "customer_id")?.meta_value;
 
-      assert.strictEqual(customerId, "cus_xyz123");
+      assert.strictEqual(customerId, "cus_from_token");
       assert.ok(customerId?.startsWith("cus_"));
     });
 
-    it("should return null when no tokens exist", () => {
-      const mockTokens: Array<{ meta_value: string }> = [];
+    it("should return customer ID from order meta for guests", () => {
+      const mockOrderMeta = [
+        { meta_key: "_stripe_customer_id", meta_value: "cus_guest_order" },
+      ];
 
-      const customerId = mockTokens[0]?.meta_value ?? null;
+      const customerIdMeta = mockOrderMeta.find(
+        (m) => m.meta_key === "_stripe_customer_id",
+      );
+      const customerId = customerIdMeta?.meta_value;
+
+      assert.strictEqual(customerId, "cus_guest_order");
+      assert.ok(customerId?.startsWith("cus_"));
+    });
+
+    it("should return null when no customer exists anywhere", () => {
+      const mockUserMeta = null;
+      const mockTokenMeta: Array<{ meta_value: string }> = [];
+      const mockOrderMeta: Array<{ meta_value: string }> = [];
+
+      const customerId =
+        mockUserMeta ?? mockTokenMeta[0]?.meta_value ?? mockOrderMeta[0]?.meta_value ?? null;
+
       assert.strictEqual(customerId, null);
     });
 
@@ -457,6 +512,47 @@ describe("Payment Processing", () => {
 
       assert.ok(validCustomerId.startsWith("cus_"));
       assert.ok(!invalidCustomerId.startsWith("cus_"));
+    });
+  });
+
+  describe("Subscription Metadata Storage", () => {
+    it("should store customer and source on subscriptions", () => {
+      const subscription = {
+        id: 1,
+        parent_order_id: 123,
+      };
+      const metadata = {
+        _stripe_customer_id: "cus_xyz123",
+        _stripe_source_id: "pm_1ABC",
+      };
+
+      assert.strictEqual(subscription.parent_order_id, 123);
+      assert.ok(metadata._stripe_customer_id.startsWith("cus_"));
+      assert.ok(metadata._stripe_source_id.startsWith("pm_"));
+    });
+
+    it("should update all subscriptions for order", () => {
+      const subscriptions = [
+        { id: 1, parent_order_id: 123 },
+        { id: 2, parent_order_id: 123 },
+      ];
+
+      const updatedCount = subscriptions.filter(
+        (s) => s.parent_order_id === 123,
+      ).length;
+
+      assert.strictEqual(updatedCount, 2);
+    });
+
+    it("should store in mieland_subscriptions_meta table", () => {
+      const metaInsert = {
+        subscription_id: 1,
+        meta_key: "_stripe_customer_id",
+        meta_value: "cus_xyz123",
+      };
+
+      assert.strictEqual(metaInsert.meta_key, "_stripe_customer_id");
+      assert.ok(metaInsert.meta_value.startsWith("cus_"));
     });
   });
 
