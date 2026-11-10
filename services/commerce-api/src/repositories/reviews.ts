@@ -136,6 +136,7 @@ export async function writeProductReview(
 export type ProductReviewComment = {
   id: string;
   databaseId: number;
+  parentDatabaseId: number;
   date: string | null;
   content: string;
   status: string;
@@ -165,12 +166,13 @@ export type ProductReviewsConnection = {
 export type ReviewCommentRow = {
   comment_ID: number;
   comment_post_ID: number;
+  comment_parent: number;
   comment_author: string;
   comment_date: string | Date | null;
   comment_date_gmt: string | Date | null;
   comment_content: string;
   comment_karma: number;
-  rating: string | number | null;
+  rating?: string | number | null;
 };
 
 export function reviewCursor(commentId: number): string {
@@ -194,24 +196,48 @@ function formatCommentDate(value: string | Date | null | undefined): string | nu
   return s || null;
 }
 
+/** Shape a Woo comment/review row into a Comment node (no author email). */
+export function shapeCommentNode(row: ReviewCommentRow): ProductReviewComment {
+  const databaseId = Number(row.comment_ID);
+  return {
+    id: toGlobalId("comment", databaseId),
+    databaseId,
+    parentDatabaseId: Number(row.comment_parent) || 0,
+    date: formatCommentDate(row.comment_date_gmt) ?? formatCommentDate(row.comment_date),
+    content: row.comment_content ?? "",
+    status: "approve",
+    karma: Number(row.comment_karma) || 0,
+    author: { node: { name: row.comment_author ?? "" } },
+  };
+}
+
 /** Shape a Woo review comment row into a WooGraphQL ProductReviewEdge. */
 export function shapeProductReviewEdge(row: ReviewCommentRow): ProductReviewEdge {
-  const databaseId = Number(row.comment_ID);
   const ratingRaw = row.rating == null || row.rating === "" ? NaN : Number(row.rating);
   const rating = Number.isFinite(ratingRaw) ? ratingRaw : 0;
   return {
-    cursor: reviewCursor(databaseId),
+    cursor: reviewCursor(Number(row.comment_ID)),
     rating,
-    node: {
-      id: toGlobalId("comment", databaseId),
-      databaseId,
-      date: formatCommentDate(row.comment_date_gmt) ?? formatCommentDate(row.comment_date),
-      content: row.comment_content ?? "",
-      status: "approve",
-      karma: Number(row.comment_karma) || 0,
-      author: { node: { name: row.comment_author ?? "" } },
-    },
+    node: shapeCommentNode(row),
   };
+}
+
+/**
+ * Group approved reply rows under their comment_parent, oldest first within each parent.
+ * Pure helper for tests and batch loaders.
+ */
+export function groupRepliesByParent(
+  rows: ReviewCommentRow[],
+): Map<number, ProductReviewComment[]> {
+  const byParent = new Map<number, ProductReviewComment[]>();
+  for (const row of rows) {
+    const parentId = Number(row.comment_parent) || 0;
+    if (parentId <= 0) continue;
+    const list = byParent.get(parentId) ?? [];
+    list.push(shapeCommentNode(row));
+    byParent.set(parentId, list);
+  }
+  return byParent;
 }
 
 /**
@@ -270,7 +296,7 @@ export async function getProductReviewsMany(
 
   const placeholders = sourceIds.map(() => "?").join(",");
   const rows = await query<ReviewCommentRow[]>(
-    `SELECT c.comment_ID, c.comment_post_ID, c.comment_author,
+    `SELECT c.comment_ID, c.comment_post_ID, c.comment_parent, c.comment_author,
             c.comment_date, c.comment_date_gmt, c.comment_content, c.comment_karma,
             cm.meta_value AS rating
      FROM ${t("comments")} c
@@ -279,6 +305,7 @@ export async function getProductReviewsMany(
      WHERE c.comment_post_ID IN (${placeholders})
        AND c.comment_type = 'review'
        AND c.comment_approved = '1'
+       AND (c.comment_parent = 0 OR c.comment_parent IS NULL)
      ORDER BY c.comment_date_gmt DESC, c.comment_ID DESC`,
     sourceIds,
   );
@@ -338,3 +365,38 @@ export const EMPTY_REVIEW_PAGE_INFO: ProductReviewsPageInfo = {
   startCursor: null,
   endCursor: null,
 };
+
+/**
+ * Batch-load approved child comments for many parents (oldest first).
+ * Does not filter by comment_type — store replies may be 'comment' or 'review'.
+ * Nested replies are loaded when Comment.replies is resolved on a child.
+ */
+export async function getCommentRepliesMany(
+  parentCommentIds: number[],
+): Promise<Map<number, ProductReviewComment[]>> {
+  const unique = [
+    ...new Set(
+      parentCommentIds.filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  const out = new Map<number, ProductReviewComment[]>();
+  for (const id of unique) out.set(id, []);
+  if (!unique.length) return out;
+
+  const placeholders = unique.map(() => "?").join(",");
+  const rows = await query<ReviewCommentRow[]>(
+    `SELECT c.comment_ID, c.comment_post_ID, c.comment_parent, c.comment_author,
+            c.comment_date, c.comment_date_gmt, c.comment_content, c.comment_karma
+     FROM ${t("comments")} c
+     WHERE c.comment_parent IN (${placeholders})
+       AND c.comment_approved = '1'
+     ORDER BY c.comment_date_gmt ASC, c.comment_ID ASC`,
+    unique,
+  );
+
+  const grouped = groupRepliesByParent(rows);
+  for (const id of unique) {
+    out.set(id, grouped.get(id) ?? []);
+  }
+  return out;
+}
