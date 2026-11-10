@@ -141,15 +141,7 @@ export const typeDefs = /* GraphQL */ `
     author: CommentAuthorEdge
   }
 
-  type PageInfo {
-    hasNextPage: Boolean!
-    hasPreviousPage: Boolean!
-    startCursor: String
-    endCursor: String
-  }
-
   type ProductReviewEdge {
-    cursor: String
     rating: Float
     node: Comment
   }
@@ -157,7 +149,6 @@ export const typeDefs = /* GraphQL */ `
   type ProductReviews {
     averageRating: Float
     edges: [ProductReviewEdge]
-    pageInfo: PageInfo
   }
 
   """WooGraphQL-compatible product review input (commentOn = product databaseId)."""
@@ -191,7 +182,7 @@ export const typeDefs = /* GraphQL */ `
     thumbnailFields: ThumbnailFields
     productCategories: ProductCategoryConnection
     galleryImages: MediaItemConnection
-    reviews(first: Int, after: String): ProductReviews
+    reviews: ProductReviews
     title: String
     faq: [ProductFaqItem!]!
   }
@@ -239,7 +230,7 @@ export const typeDefs = /* GraphQL */ `
     attributes: ProductAttributeConnection
     productCategories: ProductCategoryConnection
     galleryImages: MediaItemConnection
-    reviews(first: Int, after: String): ProductReviews
+    reviews: ProductReviews
     title: String
     faq: [ProductFaqItem!]!
     price(format: PricingFieldFormatEnum): String
@@ -268,7 +259,7 @@ export const typeDefs = /* GraphQL */ `
     attributes: ProductAttributeConnection
     productCategories: ProductCategoryConnection
     galleryImages: MediaItemConnection
-    reviews(first: Int, after: String): ProductReviews
+    reviews: ProductReviews
     title: String
     faq: [ProductFaqItem!]!
     price(format: PricingFieldFormatEnum): String
