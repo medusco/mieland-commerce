@@ -73,7 +73,10 @@ function fieldNamesUnder(
   return new Set(under.map((f) => f.name.value));
 }
 
-function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
+function productListNeedsFromNames(
+  names: Set<string>,
+  reviewEdges = false,
+): ProductListNeeds {
   return {
     price:
       names.has("price") ||
@@ -94,6 +97,7 @@ function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
       names.has("reviews") ||
       names.has("averageRating") ||
       names.has("reviewCount"),
+    reviewEdges,
     stock:
       names.has("stockStatus") ||
       names.has("stockQuantity") ||
@@ -116,9 +120,16 @@ export function mergeProductListNeeds(
     variations: a.variations || b.variations,
     content: a.content || b.content,
     reviews: a.reviews || b.reviews,
+    reviewEdges: a.reviewEdges || b.reviewEdges,
     stock: a.stock || b.stock,
     featured: a.featured || b.featured,
   };
+}
+
+/** True when `reviews { edges ... }` (or nested under edges) is selected. */
+export function productReviewsWantsEdges(info: GraphQLResolveInfo): boolean {
+  const reviewFields = selectionsAt(info, []) ?? [];
+  return hasAny(reviewFields, ["edges"]);
 }
 
 /** Detect which cart fields the operation actually selects. */
@@ -210,6 +221,7 @@ export function cartProductListNeedsFromInfo(
     variations: false,
     content: false,
     reviews: false,
+    reviewEdges: false,
     stock: false,
     featured: false,
   };
@@ -296,6 +308,7 @@ export function cartBundledProductListNeedsFromInfo(
     variations: false,
     content: false,
     reviews: false,
+    reviewEdges: false,
     stock: false,
     featured: false,
   };
@@ -398,7 +411,10 @@ export type ProductListNeeds = {
   attributes: boolean;
   variations: boolean;
   content: boolean;
+  /** averageRating / reviewCount meta (or reviews field present). */
   reviews: boolean;
+  /** reviews.edges selected — load comment rows (batched via DataLoader). */
+  reviewEdges: boolean;
   stock: boolean;
   featured: boolean;
 };
@@ -414,6 +430,7 @@ export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   variations: false,
   content: false,
   reviews: true,
+  reviewEdges: false,
   stock: true,
   featured: false,
 };
@@ -429,9 +446,15 @@ export const FULL_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   variations: true,
   content: true,
   reviews: true,
+  reviewEdges: false,
   stock: true,
   featured: true,
 };
+
+function reviewEdgesSelectedUnderNodes(info: GraphQLResolveInfo): boolean {
+  const reviewFields = selectionsAt(info, ["nodes", "reviews"]);
+  return hasAny(reviewFields, ["edges"]);
+}
 
 /** Field needs under `products { nodes { ... } }`. */
 export function productListNeedsFromInfo(
@@ -439,6 +462,7 @@ export function productListNeedsFromInfo(
 ): ProductListNeeds {
   const nodeFields = selectionsAt(info, ["nodes"]) ?? [];
   const names = new Set(nodeFields.map((f) => f.name.value));
+  const reviewEdges = reviewEdgesSelectedUnderNodes(info);
   return {
     price:
       names.has("price") ||
@@ -459,6 +483,7 @@ export function productListNeedsFromInfo(
       names.has("reviews") ||
       names.has("averageRating") ||
       names.has("reviewCount"),
+    reviewEdges,
     stock: names.has("stockStatus") || names.has("stockQuantity") || names.has("manageStock"),
     featured: names.has("featured"),
   };
@@ -472,7 +497,8 @@ export function productListIsLean(needs: ProductListNeeds): boolean {
     !needs.attributes &&
     !needs.variations &&
     !needs.content &&
-    !needs.reviews
+    !needs.reviews &&
+    !needs.reviewEdges
   );
 }
 

@@ -21,6 +21,10 @@ import {
   WP_REFRESH_HEADER_NAME,
 } from "./auth/wp-session.js";
 import { getProductNodes } from "./repositories/products.js";
+import {
+  getProductReviewsMany,
+  type ProductReviewEdge,
+} from "./repositories/reviews.js";
 import { loadConfig } from "./config.js";
 import { resolveWpCookiePolicy } from "./auth/cookie-policy.js";
 import { logPaymentTrace } from "./utils/payment-trace.js";
@@ -50,6 +54,8 @@ export type AppContext = {
   pendingWpAuthSetCookie: string | null;
   calcMode: "lightweight" | "full";
   productLoader: DataLoader<number, unknown>;
+  /** Batched approved Woo reviews per product (variations → parent). */
+  productReviewsLoader: DataLoader<number, ProductReviewEdge[]>;
   req: Request;
 };
 
@@ -214,6 +220,13 @@ export async function buildContext(
     return getProductNodes(ids);
   });
 
+  const productReviewsLoader = new DataLoader(
+    async (ids: readonly number[]) => {
+      const map = await getProductReviewsMany([...ids]);
+      return ids.map((id) => map.get(id) ?? []);
+    },
+  );
+
   void loadConfig;
   return {
     requestId: rid,
@@ -226,6 +239,7 @@ export async function buildContext(
     pendingWpAuthSetCookie: null,
     calcMode: "lightweight",
     productLoader,
+    productReviewsLoader,
     req,
   };
 }

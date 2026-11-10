@@ -1,6 +1,14 @@
 import type { GraphQLResolveInfo } from "graphql";
-import { productListNeedsFromInfo } from "../../utils/selection.js";
+import type { AppContext } from "../../context.js";
+import {
+  EMPTY_REVIEW_PAGE_INFO,
+  paginateProductReviewEdges,
+} from "../../repositories/reviews.js";
 import { resolveProductFaq } from "../../repositories/product-faq.js";
+import {
+  productListNeedsFromInfo,
+  productReviewsWantsEdges,
+} from "../../utils/selection.js";
 
 function linkedProductsResolver(metaKey: "_upsell_ids" | "_crosssell_ids") {
   return async (
@@ -28,6 +36,50 @@ const faqResolver = (
   },
 ) => resolveProductFaq(parent);
 
+async function reviewsResolver(
+  parent: {
+    databaseId?: number | null;
+    averageRating?: number | null;
+    reviews?: {
+      averageRating?: number | null;
+      edges?: unknown[];
+      pageInfo?: typeof EMPTY_REVIEW_PAGE_INFO;
+    } | null;
+  },
+  args: { first?: number | null; after?: string | null },
+  ctx: AppContext,
+  info: GraphQLResolveInfo,
+) {
+  const averageRating = Number(
+    parent.reviews?.averageRating ?? parent.averageRating ?? 0,
+  );
+
+  if (!productReviewsWantsEdges(info)) {
+    return {
+      averageRating,
+      edges: [],
+      pageInfo: EMPTY_REVIEW_PAGE_INFO,
+    };
+  }
+
+  const productId = parent.databaseId;
+  if (!productId) {
+    return {
+      averageRating,
+      edges: [],
+      pageInfo: EMPTY_REVIEW_PAGE_INFO,
+    };
+  }
+
+  const all = await ctx.productReviewsLoader.load(productId);
+  const page = paginateProductReviewEdges(all, args);
+  return {
+    averageRating,
+    edges: page.edges,
+    pageInfo: page.pageInfo,
+  };
+}
+
 export const productResolvers = {
   Query: {
     products: async (
@@ -54,6 +106,7 @@ export const productResolvers = {
     },
     title: (p: { name?: string; title?: string }) => p.title ?? p.name ?? "",
     faq: faqResolver,
+    reviews: reviewsResolver,
   },
   SimpleProduct: {
     price: (p: { price?: string }) => p.price ?? null,
@@ -61,6 +114,7 @@ export const productResolvers = {
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
     faq: faqResolver,
+    reviews: reviewsResolver,
     upsell: linkedProductsResolver("_upsell_ids"),
     crossSell: linkedProductsResolver("_crosssell_ids"),
   },
@@ -70,6 +124,7 @@ export const productResolvers = {
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
     faq: faqResolver,
+    reviews: reviewsResolver,
     upsell: linkedProductsResolver("_upsell_ids"),
     crossSell: linkedProductsResolver("_crosssell_ids"),
     variations: (

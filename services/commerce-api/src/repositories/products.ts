@@ -401,6 +401,7 @@ export async function listProducts(args: {
     variations: true,
     content: true,
     reviews: true,
+    reviewEdges: false,
     stock: true,
     featured: true,
   };
@@ -514,7 +515,16 @@ async function shapeProductsLean(
             salePrice: needs.price && salePrice ? salePrice : null,
             productCategories: { nodes: [] },
             galleryImages: { nodes: [] },
-            reviews: { averageRating: 0, edges: [] },
+            reviews: {
+              averageRating: 0,
+              edges: [],
+              pageInfo: {
+                hasNextPage: false,
+                hasPreviousPage: false,
+                startCursor: null,
+                endCursor: null,
+              },
+            },
             variations: { nodes: [] },
           },
           meta,
@@ -748,6 +758,12 @@ async function shapeProducts(
       reviews: {
         averageRating: needs.reviews ? Number(meta._wc_average_rating || 0) : 0,
         edges: [],
+        pageInfo: {
+          hasNextPage: false,
+          hasPreviousPage: false,
+          startCursor: null,
+          endCursor: null,
+        },
       },
     };
 
