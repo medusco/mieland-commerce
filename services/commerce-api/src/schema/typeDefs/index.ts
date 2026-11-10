@@ -82,6 +82,12 @@ export const typeDefs = /* GraphQL */ `
     node: MediaItem
   }
 
+  """ACF product_faq repeater row (title + WYSIWYG HTML content)."""
+  type ProductFaqItem {
+    title: String!
+    content: String!
+  }
+
   type ProductAttribute {
     name: String
     label: String
@@ -178,6 +184,7 @@ export const typeDefs = /* GraphQL */ `
     galleryImages: MediaItemConnection
     reviews: ProductReviews
     title: String
+    faq: [ProductFaqItem!]!
   }
 
   interface ProductWithAttributes {
@@ -225,6 +232,7 @@ export const typeDefs = /* GraphQL */ `
     galleryImages: MediaItemConnection
     reviews: ProductReviews
     title: String
+    faq: [ProductFaqItem!]!
     price(format: PricingFieldFormatEnum): String
     regularPrice(format: PricingFieldFormatEnum): String
     salePrice(format: PricingFieldFormatEnum): String
@@ -253,6 +261,7 @@ export const typeDefs = /* GraphQL */ `
     galleryImages: MediaItemConnection
     reviews: ProductReviews
     title: String
+    faq: [ProductFaqItem!]!
     price(format: PricingFieldFormatEnum): String
     regularPrice(format: PricingFieldFormatEnum): String
     salePrice(format: PricingFieldFormatEnum): String

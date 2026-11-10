@@ -81,6 +81,7 @@ function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
       names.has("salePrice") ||
       names.has("onSale"),
     acfThumbnail: names.has("thumbnailFields"),
+    faq: names.has("faq"),
     images:
       names.has("image") ||
       names.has("thumbnailFields") ||
@@ -108,6 +109,7 @@ export function mergeProductListNeeds(
   return {
     price: a.price || b.price,
     acfThumbnail: a.acfThumbnail || b.acfThumbnail,
+    faq: a.faq || b.faq,
     images: a.images || b.images,
     categories: a.categories || b.categories,
     attributes: a.attributes || b.attributes,
@@ -201,6 +203,7 @@ export function cartProductListNeedsFromInfo(
   let merged: ProductListNeeds = {
     price: false,
     acfThumbnail: false,
+    faq: false,
     images: false,
     categories: false,
     attributes: false,
@@ -286,6 +289,7 @@ export function cartBundledProductListNeedsFromInfo(
   return {
     price: false,
     acfThumbnail: wantsImage,
+    faq: false,
     images: wantsImage,
     categories: false,
     attributes: false,
@@ -387,6 +391,8 @@ export type ProductListNeeds = {
   price: boolean;
   /** ACF card thumbnail — pre-hydrated into product Redis cache when true. */
   acfThumbnail: boolean;
+  /** ACF product_faq repeater — batched postmeta REGEXP load when true. */
+  faq: boolean;
   images: boolean;
   categories: boolean;
   attributes: boolean;
@@ -401,6 +407,7 @@ export type ProductListNeeds = {
 export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   price: true,
   acfThumbnail: true,
+  faq: false,
   images: true,
   categories: false,
   attributes: false,
@@ -415,6 +422,7 @@ export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
 export const FULL_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   price: true,
   acfThumbnail: false,
+  faq: false,
   images: true,
   categories: true,
   attributes: true,
@@ -438,6 +446,7 @@ export function productListNeedsFromInfo(
       names.has("salePrice") ||
       names.has("onSale"),
     acfThumbnail: names.has("thumbnailFields"),
+    faq: names.has("faq"),
     images:
       names.has("image") ||
       names.has("thumbnailFields") ||
