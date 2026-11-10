@@ -12,6 +12,11 @@ import {
   PRODUCT_THUMBNAIL_META_KEYS,
   shapeProductThumbnailFields,
 } from "./product-acf.js";
+import {
+  getProductFaqMetaMany,
+  parseProductFaq,
+  type ProductFaqItem,
+} from "./product-faq.js";
 import { memoryGet, memorySet } from "../utils/memory-cache.js";
 import { parseLinkedProductIds } from "./acf.js";
 
@@ -53,6 +58,15 @@ async function attachProductAcfThumbnail<T extends Record<string, unknown>>(
   const thumbnailFields = await shapeProductThumbnailFields(meta);
   if (!thumbnailFields) return node;
   return { ...node, thumbnailFields };
+}
+
+function attachProductFaq<T extends Record<string, unknown>>(
+  node: T,
+  meta: Record<string, string>,
+  hydrateFaq: boolean,
+): T & { faq?: ProductFaqItem[] } {
+  if (!hydrateFaq) return node;
+  return { ...node, faq: parseProductFaq(meta) };
 }
 
 async function cachedJson<T>(key: string, ttl: number, loader: () => Promise<T>): Promise<T> {
@@ -380,6 +394,7 @@ export async function listProducts(args: {
   const needs: ProductListNeeds = args.needs ?? {
     price: true,
     acfThumbnail: false,
+    faq: false,
     images: true,
     categories: true,
     attributes: true,
@@ -440,16 +455,22 @@ async function shapeProductsLean(
   if (needs.featured) metaKeys.push("_featured");
   if (needs.acfThumbnail) metaKeys.push(...PRODUCT_THUMBNAIL_META_KEYS);
 
-  const [metaMap, variableIds] = await Promise.all([
+  const [metaMap, variableIds, faqMetaMap] = await Promise.all([
     metaKeys.length
       ? getPostMetaKeysMany(ids, metaKeys)
       : Promise.resolve(new Map<number, Record<string, string>>()),
     variableParentIds(ids),
+    needs.faq
+      ? getProductFaqMetaMany(ids)
+      : Promise.resolve(new Map<number, Record<string, string>>()),
   ]);
 
   const out: unknown[] = [];
   for (const row of rows) {
-    const meta = metaMap.get(row.ID) ?? {};
+    const meta = { ...(metaMap.get(row.ID) ?? {}) };
+    if (needs.faq) {
+      Object.assign(meta, faqMetaMap.get(row.ID) ?? {});
+    }
     const isVariable = variableIds.has(row.ID);
     const price = meta._price ?? "";
     const regularPrice = meta._regular_price ?? price;
@@ -462,41 +483,45 @@ async function shapeProductsLean(
         ? Number(meta._stock)
         : null;
     out.push(
-      await attachProductAcfThumbnail(
-        {
-          __typename: isVariable ? "VariableProduct" : "SimpleProduct",
-          id: toGlobalId("product", row.ID),
-          databaseId: row.ID,
-          _acfMeta: meta,
-          name: row.post_title,
-          slug: row.post_name,
-          uri: `/product/${row.post_name}/`,
-          description: "",
-          shortDescription: "",
-          featured: needs.featured ? meta._featured === "yes" : false,
-          averageRating: 0,
-          reviewCount: 0,
-          onSale: Boolean(salePrice && Number(salePrice) > 0),
-          stockStatus: needs.stock
-            ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
-            : "IN_STOCK",
-          stockQuantity:
-            stockQuantity != null && Number.isFinite(stockQuantity)
-              ? stockQuantity
-              : null,
-          manageStock,
-          image: null,
-          attributes: { nodes: [] },
-          price: needs.price ? price : "",
-          regularPrice: needs.price ? regularPrice : "",
-          salePrice: needs.price && salePrice ? salePrice : null,
-          productCategories: { nodes: [] },
-          galleryImages: { nodes: [] },
-          reviews: { averageRating: 0, edges: [] },
-          variations: { nodes: [] },
-        },
+      attachProductFaq(
+        await attachProductAcfThumbnail(
+          {
+            __typename: isVariable ? "VariableProduct" : "SimpleProduct",
+            id: toGlobalId("product", row.ID),
+            databaseId: row.ID,
+            _acfMeta: meta,
+            name: row.post_title,
+            slug: row.post_name,
+            uri: `/product/${row.post_name}/`,
+            description: "",
+            shortDescription: "",
+            featured: needs.featured ? meta._featured === "yes" : false,
+            averageRating: 0,
+            reviewCount: 0,
+            onSale: Boolean(salePrice && Number(salePrice) > 0),
+            stockStatus: needs.stock
+              ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
+              : "IN_STOCK",
+            stockQuantity:
+              stockQuantity != null && Number.isFinite(stockQuantity)
+                ? stockQuantity
+                : null,
+            manageStock,
+            image: null,
+            attributes: { nodes: [] },
+            price: needs.price ? price : "",
+            regularPrice: needs.price ? regularPrice : "",
+            salePrice: needs.price && salePrice ? salePrice : null,
+            productCategories: { nodes: [] },
+            galleryImages: { nodes: [] },
+            reviews: { averageRating: 0, edges: [] },
+            variations: { nodes: [] },
+          },
+          meta,
+          hydrateAcfThumbnail,
+        ),
         meta,
-        hydrateAcfThumbnail,
+        needs.faq,
       ),
     );
   }
@@ -697,6 +722,7 @@ async function shapeProducts(
       id: toGlobalId("product", row.ID),
       databaseId: row.ID,
       _acfMeta: meta,
+      _postMetaComplete: true as const,
       name: row.post_title,
       slug: row.post_name,
       uri: `/product/${row.post_name}/`,
@@ -727,24 +753,32 @@ async function shapeProducts(
 
     if (isVariable && needs.variations) {
       out.push(
-        await attachProductAcfThumbnail(
-          {
-            ...base,
-            variations: { nodes: variations.get(row.ID) ?? [] },
-          },
+        attachProductFaq(
+          await attachProductAcfThumbnail(
+            {
+              ...base,
+              variations: { nodes: variations.get(row.ID) ?? [] },
+            },
+            meta,
+            hydrateAcfThumbnail,
+          ),
           meta,
-          hydrateAcfThumbnail,
+          needs.faq,
         ),
       );
     } else {
       out.push(
-        await attachProductAcfThumbnail(
-          {
-            ...base,
-            variations: { nodes: [] },
-          },
+        attachProductFaq(
+          await attachProductAcfThumbnail(
+            {
+              ...base,
+              variations: { nodes: [] },
+            },
+            meta,
+            hydrateAcfThumbnail,
+          ),
           meta,
-          hydrateAcfThumbnail,
+          needs.faq,
         ),
       );
     }
