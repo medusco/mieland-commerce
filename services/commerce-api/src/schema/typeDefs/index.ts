@@ -131,22 +131,14 @@ export const typeDefs = /* GraphQL */ `
     node: CommentAuthor
   }
 
-  """WPGraphQL-compatible comment connection (Comment.replies)."""
-  type CommentToCommentConnection {
-    nodes: [Comment]
-  }
-
   type Comment {
     id: ID
     databaseId: Int
-    parentDatabaseId: Int
     date: String
     content: String
     status: String
     karma: Int
     author: CommentAuthorEdge
-    """Approved child comments (store replies), oldest first. Nested replies supported."""
-    replies: CommentToCommentConnection
   }
 
   type PageInfo {

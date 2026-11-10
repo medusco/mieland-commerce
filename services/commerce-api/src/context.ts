@@ -22,9 +22,7 @@ import {
 } from "./auth/wp-session.js";
 import { getProductNodes } from "./repositories/products.js";
 import {
-  getCommentRepliesMany,
   getProductReviewsMany,
-  type ProductReviewComment,
   type ProductReviewEdge,
 } from "./repositories/reviews.js";
 import { loadConfig } from "./config.js";
@@ -58,8 +56,6 @@ export type AppContext = {
   productLoader: DataLoader<number, unknown>;
   /** Batched approved Woo reviews per product (variations → parent). */
   productReviewsLoader: DataLoader<number, ProductReviewEdge[]>;
-  /** Batched approved child comments by parent comment_ID (nested replies). */
-  commentRepliesLoader: DataLoader<number, ProductReviewComment[]>;
   req: Request;
 };
 
@@ -231,13 +227,6 @@ export async function buildContext(
     },
   );
 
-  const commentRepliesLoader = new DataLoader(
-    async (ids: readonly number[]) => {
-      const map = await getCommentRepliesMany([...ids]);
-      return ids.map((id) => map.get(id) ?? []);
-    },
-  );
-
   void loadConfig;
   return {
     requestId: rid,
@@ -251,7 +240,6 @@ export async function buildContext(
     calcMode: "lightweight",
     productLoader,
     productReviewsLoader,
-    commentRepliesLoader,
     req,
   };
 }
