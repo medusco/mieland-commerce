@@ -227,7 +227,20 @@ export function buildAcfSchema(
 
   for (const group of groups) {
     const typeName = groupTypeName(group);
-    emitObjectType(typeName, group.fields, [], ctx);
+    const existingNames = new Set(
+      group.fields.map((field) => field.graphqlName).filter(Boolean),
+    );
+    const extraFields: string[] = [];
+    // Hard-restore storefront selections that ACF group defs may omit.
+    if (group.graphqlFieldName === "productMetaFields") {
+      if (!existingNames.has("productBadge")) {
+        extraFields.push("    productBadge: String");
+      }
+      if (!existingNames.has("flavoursAvailable")) {
+        extraFields.push("    flavoursAvailable: String");
+      }
+    }
+    emitObjectType(typeName, group.fields, extraFields, ctx);
     const fieldLine = `    ${group.graphqlFieldName}: ${typeName}`;
     if (group.graphqlTypes.includes("Page")) pageFields.push(fieldLine);
     if (group.graphqlTypes.includes("Post")) postFields.push(fieldLine);
