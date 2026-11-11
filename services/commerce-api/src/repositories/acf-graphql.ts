@@ -9,6 +9,7 @@ import {
   toPascal,
   unserializeAcf,
 } from "./acf.js";
+import { resolveProductMetaFieldExtras } from "./product-meta-fields.js";
 import { logJson } from "../utils/index.js";
 
 export type AcfLocationRule = {
@@ -605,6 +606,17 @@ export async function shapeAcfGroupFields(
   for (const field of group.fields) {
     out[field.graphqlName] = await shapeDefinedField(meta, field, group.graphqlFieldName);
   }
+
+  // Storefront ProductMetaFields extras — keep available even when ACF field-group
+  // definitions no longer list them (jarSizeImages may still be the only DB field).
+  if (group.graphqlFieldName === "productMetaFields") {
+    const extras = resolveProductMetaFieldExtras(meta);
+    if (out.productBadge == null) out.productBadge = extras.productBadge;
+    if (out.flavoursAvailable == null) {
+      out.flavoursAvailable = extras.flavoursAvailable;
+    }
+  }
+
   return out;
 }
 
