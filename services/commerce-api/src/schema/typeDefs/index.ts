@@ -174,7 +174,7 @@ export const typeDefs = /* GraphQL */ `
     uri: String
     description: String
     shortDescription: String
-    """WooCommerce SKU from postmeta `_sku` (trimmed; empty/missing -> null)."""
+    """WooCommerce SKU from postmeta _sku (trimmed; empty/missing -> null)."""
     sku: String
     featured: Boolean
     averageRating: Float
@@ -197,7 +197,7 @@ export const typeDefs = /* GraphQL */ `
     databaseId: Int
     name: String
     menuOrder: Int
-    """WooCommerce SKU from this variation's postmeta `_sku` (no parent fallback)."""
+    """WooCommerce SKU from this variation's postmeta _sku (no parent fallback)."""
     sku: String
     price(format: PricingFieldFormatEnum): String
     regularPrice(format: PricingFieldFormatEnum): String
