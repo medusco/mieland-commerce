@@ -1,6 +1,7 @@
 import type { GraphQLResolveInfo } from "graphql";
 import { productListNeedsFromInfo } from "../../utils/selection.js";
 import { resolveProductFaq } from "../../repositories/product-faq.js";
+import { resolveProductSku } from "../../repositories/product-sku.js";
 
 function linkedProductsResolver(metaKey: "_upsell_ids" | "_crosssell_ids") {
   return async (
@@ -28,6 +29,13 @@ const faqResolver = (
   },
 ) => resolveProductFaq(parent);
 
+const skuResolver = (parent: {
+  databaseId?: number | null;
+  sku?: string | null;
+  _acfMeta?: Record<string, string>;
+  _postMetaComplete?: boolean;
+}) => resolveProductSku(parent);
+
 export const productResolvers = {
   Query: {
     products: async (
@@ -54,6 +62,7 @@ export const productResolvers = {
     },
     title: (p: { name?: string; title?: string }) => p.title ?? p.name ?? "",
     faq: faqResolver,
+    sku: skuResolver,
   },
   SimpleProduct: {
     price: (p: { price?: string }) => p.price ?? null,
@@ -61,6 +70,7 @@ export const productResolvers = {
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
     faq: faqResolver,
+    sku: skuResolver,
     upsell: linkedProductsResolver("_upsell_ids"),
     crossSell: linkedProductsResolver("_crosssell_ids"),
   },
@@ -70,6 +80,7 @@ export const productResolvers = {
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
     title: (p: { name?: string }) => p.name ?? "",
     faq: faqResolver,
+    sku: skuResolver,
     upsell: linkedProductsResolver("_upsell_ids"),
     crossSell: linkedProductsResolver("_crosssell_ids"),
     variations: (
@@ -114,6 +125,7 @@ export const productResolvers = {
     price: (p: { price?: string }) => p.price ?? null,
     regularPrice: (p: { regularPrice?: string }) => p.regularPrice ?? null,
     salePrice: (p: { salePrice?: string | null }) => p.salePrice ?? null,
+    sku: skuResolver,
     attributes: (p: {
       attributes?: { nodes?: Array<{ name: string; label: string; value: string }> };
     }) => ({ nodes: p.attributes?.nodes ?? [] }),
