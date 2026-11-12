@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Mirrors Dockerfile WORKDIR /app with commerce-api package as the build context
+        # (root Dockerfile: services/commerce-api/* → /app; services/commerce-api/Dockerfile: same)
+        working-directory: services/commerce-api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Mirrors FROM node:22-alpine
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/commerce-api/package-lock.json
+
+      - name: Install dependencies
+        # Mirrors build stage: RUN npm ci
+        run: npm ci
+
+      - name: Typecheck
+        # No eslint/lint script in package.json; use existing typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Build
+        # Mirrors build stage: RUN npm run build
+        run: npm run build
+
+      - name: Test
+        run: npm test
