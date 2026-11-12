@@ -82,6 +82,7 @@ function productListNeedsFromNames(names: Set<string>): ProductListNeeds {
       names.has("onSale"),
     acfThumbnail: names.has("thumbnailFields"),
     faq: names.has("faq"),
+    sku: names.has("sku"),
     images:
       names.has("image") ||
       names.has("thumbnailFields") ||
@@ -110,6 +111,7 @@ export function mergeProductListNeeds(
     price: a.price || b.price,
     acfThumbnail: a.acfThumbnail || b.acfThumbnail,
     faq: a.faq || b.faq,
+    sku: a.sku || b.sku,
     images: a.images || b.images,
     categories: a.categories || b.categories,
     attributes: a.attributes || b.attributes,
@@ -204,6 +206,7 @@ export function cartProductListNeedsFromInfo(
     price: false,
     acfThumbnail: false,
     faq: false,
+    sku: false,
     images: false,
     categories: false,
     attributes: false,
@@ -290,6 +293,7 @@ export function cartBundledProductListNeedsFromInfo(
     price: false,
     acfThumbnail: wantsImage,
     faq: false,
+    sku: false,
     images: wantsImage,
     categories: false,
     attributes: false,
@@ -393,6 +397,8 @@ export type ProductListNeeds = {
   acfThumbnail: boolean;
   /** ACF product_faq repeater — batched postmeta REGEXP load when true. */
   faq: boolean;
+  /** Woo `_sku` — batched postmeta key load when true (lean path). */
+  sku: boolean;
   images: boolean;
   categories: boolean;
   attributes: boolean;
@@ -408,6 +414,7 @@ export const CART_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   price: true,
   acfThumbnail: true,
   faq: false,
+  sku: false,
   images: true,
   categories: false,
   attributes: false,
@@ -423,6 +430,7 @@ export const FULL_PRODUCT_LIST_NEEDS: ProductListNeeds = {
   price: true,
   acfThumbnail: false,
   faq: false,
+  sku: false,
   images: true,
   categories: true,
   attributes: true,
@@ -447,6 +455,7 @@ export function productListNeedsFromInfo(
       names.has("onSale"),
     acfThumbnail: names.has("thumbnailFields"),
     faq: names.has("faq"),
+    sku: names.has("sku"),
     images:
       names.has("image") ||
       names.has("thumbnailFields") ||

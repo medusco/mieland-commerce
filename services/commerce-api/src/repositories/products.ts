@@ -17,6 +17,7 @@ import {
   parseProductFaq,
   type ProductFaqItem,
 } from "./product-faq.js";
+import { parseProductSku } from "./product-sku.js";
 import { memoryGet, memorySet } from "../utils/memory-cache.js";
 import { parseLinkedProductIds } from "./acf.js";
 
@@ -67,6 +68,15 @@ function attachProductFaq<T extends Record<string, unknown>>(
 ): T & { faq?: ProductFaqItem[] } {
   if (!hydrateFaq) return node;
   return { ...node, faq: parseProductFaq(meta) };
+}
+
+function attachProductSku<T extends Record<string, unknown>>(
+  node: T,
+  meta: Record<string, string>,
+  hydrateSku: boolean,
+): T & { sku?: string | null } {
+  if (!hydrateSku) return node;
+  return { ...node, sku: parseProductSku(meta) };
 }
 
 async function cachedJson<T>(key: string, ttl: number, loader: () => Promise<T>): Promise<T> {
@@ -395,6 +405,7 @@ export async function listProducts(args: {
     price: true,
     acfThumbnail: false,
     faq: false,
+    sku: false,
     images: true,
     categories: true,
     attributes: true,
@@ -453,6 +464,7 @@ async function shapeProductsLean(
   if (needs.price) metaKeys.push("_price", "_regular_price", "_sale_price");
   if (needs.stock) metaKeys.push("_stock_status", "_stock", "_manage_stock");
   if (needs.featured) metaKeys.push("_featured");
+  if (needs.sku) metaKeys.push("_sku");
   if (needs.acfThumbnail) metaKeys.push(...PRODUCT_THUMBNAIL_META_KEYS);
 
   const [metaMap, variableIds, faqMetaMap] = await Promise.all([
@@ -483,45 +495,49 @@ async function shapeProductsLean(
         ? Number(meta._stock)
         : null;
     out.push(
-      attachProductFaq(
-        await attachProductAcfThumbnail(
-          {
-            __typename: isVariable ? "VariableProduct" : "SimpleProduct",
-            id: toGlobalId("product", row.ID),
-            databaseId: row.ID,
-            _acfMeta: meta,
-            name: row.post_title,
-            slug: row.post_name,
-            uri: `/product/${row.post_name}/`,
-            description: "",
-            shortDescription: "",
-            featured: needs.featured ? meta._featured === "yes" : false,
-            averageRating: 0,
-            reviewCount: 0,
-            onSale: Boolean(salePrice && Number(salePrice) > 0),
-            stockStatus: needs.stock
-              ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
-              : "IN_STOCK",
-            stockQuantity:
-              stockQuantity != null && Number.isFinite(stockQuantity)
-                ? stockQuantity
-                : null,
-            manageStock,
-            image: null,
-            attributes: { nodes: [] },
-            price: needs.price ? price : "",
-            regularPrice: needs.price ? regularPrice : "",
-            salePrice: needs.price && salePrice ? salePrice : null,
-            productCategories: { nodes: [] },
-            galleryImages: { nodes: [] },
-            reviews: { averageRating: 0, edges: [] },
-            variations: { nodes: [] },
-          },
+      attachProductSku(
+        attachProductFaq(
+          await attachProductAcfThumbnail(
+            {
+              __typename: isVariable ? "VariableProduct" : "SimpleProduct",
+              id: toGlobalId("product", row.ID),
+              databaseId: row.ID,
+              _acfMeta: meta,
+              name: row.post_title,
+              slug: row.post_name,
+              uri: `/product/${row.post_name}/`,
+              description: "",
+              shortDescription: "",
+              featured: needs.featured ? meta._featured === "yes" : false,
+              averageRating: 0,
+              reviewCount: 0,
+              onSale: Boolean(salePrice && Number(salePrice) > 0),
+              stockStatus: needs.stock
+                ? (meta._stock_status || "IN_STOCK").toUpperCase().replace("-", "_")
+                : "IN_STOCK",
+              stockQuantity:
+                stockQuantity != null && Number.isFinite(stockQuantity)
+                  ? stockQuantity
+                  : null,
+              manageStock,
+              image: null,
+              attributes: { nodes: [] },
+              price: needs.price ? price : "",
+              regularPrice: needs.price ? regularPrice : "",
+              salePrice: needs.price && salePrice ? salePrice : null,
+              productCategories: { nodes: [] },
+              galleryImages: { nodes: [] },
+              reviews: { averageRating: 0, edges: [] },
+              variations: { nodes: [] },
+            },
+            meta,
+            hydrateAcfThumbnail,
+          ),
           meta,
-          hydrateAcfThumbnail,
+          needs.faq,
         ),
         meta,
-        needs.faq,
+        needs.sku,
       ),
     );
   }
@@ -603,8 +619,10 @@ async function getVariationsMany(
     list.push({
       databaseId: r.ID,
       _acfMeta: meta,
+      _postMetaComplete: true as const,
       name: r.post_title,
       menuOrder: r.menu_order,
+      sku: parseProductSku(meta),
       price: meta._price ?? "",
       regularPrice: meta._regular_price ?? meta._price ?? "",
       salePrice: meta._sale_price || null,
@@ -728,6 +746,8 @@ async function shapeProducts(
       uri: `/product/${row.post_name}/`,
       description: needs.content ? row.post_content : "",
       shortDescription: needs.content ? row.post_excerpt : "",
+      // Full postmeta bag already loaded — always expose sku (no extra query).
+      sku: parseProductSku(meta),
       featured: needs.featured ? meta._featured === "yes" : false,
       averageRating: needs.reviews ? Number(meta._wc_average_rating || 0) : 0,
       reviewCount: needs.reviews ? Number(meta._wc_review_count || 0) : 0,
@@ -847,6 +867,7 @@ export async function getProductNodes(
               ? ["_price", "_regular_price", "_sale_price"]
               : []),
             ...(hydrateNeeds.images ? ["_thumbnail_id"] : []),
+            ...(hydrateNeeds.sku ? ["_sku"] : []),
           ],
         );
     const thumbIds = hydrateNeeds.images
@@ -860,14 +881,19 @@ export async function getProductNodes(
     for (const row of variationRows) {
       const meta = varMeta.get(row.ID) ?? {};
       const imageId = Number(meta._thumbnail_id || 0);
+      const fullMeta = Boolean(hydrateNeeds.attributes);
       shapedById.set(row.ID, {
         databaseId: row.ID,
         _acfMeta: meta,
+        ...(fullMeta ? { _postMetaComplete: true as const } : {}),
         name: row.post_title,
         image:
           hydrateNeeds.images && imageId
             ? (images.get(imageId) ?? null)
             : null,
+        ...(hydrateNeeds.sku || fullMeta
+          ? { sku: parseProductSku(meta) }
+          : {}),
         price: hydrateNeeds.price ? (meta._price ?? "") : "",
         regularPrice: hydrateNeeds.price ? (meta._regular_price ?? "") : "",
         salePrice:
