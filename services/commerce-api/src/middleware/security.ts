@@ -12,10 +12,13 @@ const sendCommand: SendCommandFn = async (...args: string[]) => {
   return redis.call(...(args as [string, ...string[]])) as Promise<RedisReply>;
 };
 
+/** Per-IP+session GraphQL requests allowed per window (triple of prior 120 for SG). */
+const GRAPHQL_RATE_LIMIT_PER_MINUTE = 360;
+
 export function createGraphqlRateLimiter() {
   return rateLimit({
     windowMs: 60_000,
-    max: 120,
+    max: GRAPHQL_RATE_LIMIT_PER_MINUTE,
     standardHeaders: true,
     legacyHeaders: false,
     store: new RedisStore({
