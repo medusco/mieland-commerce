@@ -33,13 +33,16 @@ import { listPageTemplateFiles } from "./repositories/content.js";
 import { pingRedis, closeRedis } from "./redis/client.js";
 import { createApqPlugin } from "./apq/plugin.js";
 import {
+  createCorsOriginCallback,
+  endRejectedCorsPreflight,
+} from "./middleware/cors-origin.js";
+import {
   accessControlMiddleware,
   authSensitiveBodyGuard,
   createAuthMutationRateLimiter,
   createGraphqlRateLimiter,
 } from "./middleware/security.js";
 import {
-  isLocalDevOrigin,
   logJson,
   parseSessionHeader,
   randomToken,
@@ -154,39 +157,41 @@ app.use(
   }),
 );
 
+const corsExposedHeaders = [
+  "woocommerce-session",
+  "Woocommerce-Session",
+  WP_AUTH_HEADER_NAME,
+  WP_REFRESH_HEADER_NAME,
+  FORCE_LOGOUT_HEADER,
+];
+const corsAllowedHeaders = [
+  "Content-Type",
+  "Authorization",
+  "woocommerce-session",
+  "Woocommerce-Session",
+  "x-graphql-secret",
+  "x-request-id",
+  "apollo-require-preflight",
+  WP_AUTH_HEADER_NAME,
+  WP_REFRESH_HEADER_NAME,
+  "Cookie",
+];
+
 app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      if (isLocalDevOrigin(origin)) return cb(null, true);
-      if (cfg.corsOrigins.includes("*") || cfg.corsOrigins.includes(origin)) {
-        return cb(null, true);
-      }
-      if (!cfg.isProd && cfg.corsOrigins.length === 0) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"), false);
-    },
-    credentials: true,
-    exposedHeaders: [
-      "woocommerce-session",
-      "Woocommerce-Session",
-      WP_AUTH_HEADER_NAME,
-      WP_REFRESH_HEADER_NAME,
-      FORCE_LOGOUT_HEADER,
-    ],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "woocommerce-session",
-      "Woocommerce-Session",
-      "x-graphql-secret",
-      "x-request-id",
-      "apollo-require-preflight",
-      WP_AUTH_HEADER_NAME,
-      WP_REFRESH_HEADER_NAME,
-      "Cookie",
-    ],
+  cors((req, callback) => {
+    callback(null, {
+      origin: createCorsOriginCallback(
+        { corsOrigins: cfg.corsOrigins, isProd: cfg.isProd },
+        { method: req.method, path: req.path },
+      ),
+      credentials: true,
+      exposedHeaders: corsExposedHeaders,
+      allowedHeaders: corsAllowedHeaders,
+    });
   }),
 );
+// cors calls next() when origin is rejected via cb(null, false); end OPTIONS here.
+app.use(endRejectedCorsPreflight);
 
 registerContactRoutes(app);
 
