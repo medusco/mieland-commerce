@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { isLocalDevOrigin, logJson } from "../utils/index.js";
+import { originMatchesAny } from "../utils/origin-match.js";
 
 export type CorsOriginPolicy = {
   corsOrigins: string[];
@@ -16,7 +17,7 @@ export function isCorsOriginAllowed(
 ): boolean {
   if (!origin) return true;
   if (isLocalDevOrigin(origin)) return true;
-  if (policy.corsOrigins.includes("*") || policy.corsOrigins.includes(origin)) {
+  if (originMatchesAny(origin, policy.corsOrigins)) {
     return true;
   }
   if (!policy.isProd && policy.corsOrigins.length === 0) return true;

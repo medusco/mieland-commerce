@@ -6,6 +6,7 @@ import { getRedis } from "../redis/client.js";
 import { loadConfig } from "../config.js";
 import { loadAccessControl } from "../auth/index.js";
 import { isLocalDevOrigin, logJson } from "../utils/index.js";
+import { originMatchesAny } from "../utils/origin-match.js";
 
 const sendCommand: SendCommandFn = async (...args: string[]) => {
   const redis = getRedis();
@@ -84,10 +85,7 @@ export async function accessControlMiddleware(
       block === true || block === 1 || block === "1" || block === "yes" || cfg.isProd;
 
     if (shouldBlock && origin && origins.length && !isLocalDevOrigin(origin)) {
-      const ok = origins.some(
-        (o) => o === origin || o === "*" || origin.endsWith(o.replace(/^\*/, "")),
-      );
-      if (!ok && !origins.includes("*")) {
+      if (!originMatchesAny(origin, origins)) {
         logJson("warn", { msg: "origin_blocked", origin });
         res.status(403).json({ errors: [{ message: "Origin not allowed" }] });
         return;

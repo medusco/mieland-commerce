@@ -23,6 +23,16 @@ Commerce omits disabled rows from every `flexible_content` field (`pageBlocks`, 
 
 Set `MEDIA_BASE_URL` (or `S3_UPLOADS_BUCKET_URL`) to the same public uploads CDN WordPress uses — e.g. `https://img.mieland.com` — so product/media `sourceUrl` values match the media library instead of frozen `posts.guid` hosts.
 
+## CORS
+
+`CORS_ORIGIN` is a comma-separated allowlist of browser Origins. `localhost` / `127.0.0.1` (any port, http or https) are always allowed.
+
+- **Exact** — e.g. `https://www.mielandmanuka.com`
+- **Bare `*`** — allow any Origin (existing behaviour)
+- **Hostname wildcard** — put `*` in the hostname only, e.g. `https://*-mieland-s-projects.vercel.app`. Scheme must match exactly, ports must match, and each `*` matches one or more `[a-z0-9-]` characters only (not `.`, so it cannot span subdomain labels). Matching is case-insensitive and anchored. Use this for every Vercel preview URL under a team namespace.
+
+Fallback Origin headers (WP GraphQL / contact) skip bare `*` and hostname-wildcard entries and use the first concrete Origin instead.
+
 ## Deploy (Railway)
 
 Railpack fails if it analyzes the monorepo root (no root `package.json`). Use Docker:

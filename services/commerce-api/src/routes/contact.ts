@@ -10,6 +10,7 @@ import {
   accessControlMiddleware,
   createContactRateLimiter,
 } from "../middleware/security.js";
+import { pickConcreteCorsOrigin } from "../utils/origin-match.js";
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -89,7 +90,7 @@ function resolveOrigin(req: Request): string {
   if (origin) return origin;
 
   const cfg = loadConfig();
-  const fallback = cfg.corsOrigins.find((value) => value && value !== "*");
+  const fallback = pickConcreteCorsOrigin(cfg.corsOrigins);
   return fallback || "http://localhost:3000";
 }
 
