@@ -54,6 +54,49 @@ describe("isCorsOriginAllowed", () => {
     );
   });
 
+  it("allows hostname-wildcard Vercel preview origins", () => {
+    const policy = {
+      corsOrigins: ["https://*-mieland-s-projects.vercel.app"],
+      isProd: true,
+    };
+    assert.equal(
+      isCorsOriginAllowed(
+        "https://mieland-us-git-feature-x-mieland-s-projects.vercel.app",
+        policy,
+      ),
+      true,
+    );
+    assert.equal(isCorsOriginAllowed("https://evil.com", policy), false);
+    assert.equal(
+      isCorsOriginAllowed(
+        "https://x-mieland-s-projects.vercel.app.evil.com",
+        policy,
+      ),
+      false,
+    );
+    assert.equal(
+      isCorsOriginAllowed(
+        "https://a.b-mieland-s-projects.vercel.app",
+        policy,
+      ),
+      false,
+    );
+    assert.equal(
+      isCorsOriginAllowed(
+        "http://mieland-us-git-feature-x-mieland-s-projects.vercel.app",
+        policy,
+      ),
+      false,
+    );
+    assert.equal(
+      isCorsOriginAllowed(
+        "https://mieland-us-git-feature-x-other-projects.vercel.app",
+        policy,
+      ),
+      false,
+    );
+  });
+
   it("allows any origin in non-prod when the list is empty", () => {
     assert.equal(
       isCorsOriginAllowed("https://preview.example", {

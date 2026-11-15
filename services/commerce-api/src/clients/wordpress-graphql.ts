@@ -1,5 +1,6 @@
 import { loadConfig } from "../config.js";
 import { logJson } from "../utils/index.js";
+import { pickConcreteCorsOrigin } from "../utils/origin-match.js";
 
 export type WpGraphqlLoginUser = {
   databaseId: number;
@@ -235,9 +236,10 @@ async function postGraphql<T>(
     ...opts?.headers,
   };
   // WP Headless Login access control checks Origin against allowedOrigins.
+  // Skip bare `*` and hostname-wildcard entries — they are not concrete Origins.
   const origin =
     opts?.origin?.trim() ||
-    cfg.corsOrigins.find((o) => o && o !== "*") ||
+    pickConcreteCorsOrigin(cfg.corsOrigins) ||
     "";
   if (origin) {
     headers.Origin = origin;
