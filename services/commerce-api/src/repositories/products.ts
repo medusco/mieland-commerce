@@ -1,3 +1,4 @@
+import DataLoader from "dataloader";
 import { query, t, type SqlParam } from "../db/mysql.js";
 import { getRedis } from "../redis/client.js";
 import { loadConfig } from "../config.js";
@@ -20,6 +21,13 @@ import {
 import { parseProductSku } from "./product-sku.js";
 import { memoryGet, memorySet } from "../utils/memory-cache.js";
 import { parseLinkedProductIds } from "./acf.js";
+import { getRequestAttachmentLoader } from "../request-loaders.js";
+
+export type AttachmentMedia = {
+  sourceUrl: string;
+  mediaItemUrl: string;
+  altText: string;
+};
 
 const MEMORY_NULL = "__null__";
 
@@ -296,35 +304,28 @@ export async function getStockInfo(productId: number): Promise<StockInfo> {
   return stockInfoFromMeta(map.get(productId) ?? {});
 }
 
-export async function getAttachmentUrl(id: number): Promise<{
-  sourceUrl: string;
-  mediaItemUrl: string;
-  altText: string;
-} | null> {
+export async function getAttachmentUrl(
+  id: number,
+): Promise<AttachmentMedia | null> {
   if (!id) return null;
+  const loader = getRequestAttachmentLoader();
+  if (loader) return loader.load(id);
   const map = await getAttachmentUrls([id]);
   return map.get(id) ?? null;
 }
 
 export async function getAttachmentUrls(
   ids: number[],
-): Promise<Map<number, { sourceUrl: string; mediaItemUrl: string; altText: string }>> {
+): Promise<Map<number, AttachmentMedia>> {
   const unique = [...new Set(ids.filter((id) => id > 0))];
-  const out = new Map<
-    number,
-    { sourceUrl: string; mediaItemUrl: string; altText: string }
-  >();
+  const out = new Map<number, AttachmentMedia>();
   if (!unique.length) return out;
 
   const missing: number[] = [];
   for (const id of unique) {
     const hit = memoryGet(mediaMemoryKey(id));
     if (hit !== undefined) {
-      out.set(id, JSON.parse(hit) as {
-        sourceUrl: string;
-        mediaItemUrl: string;
-        altText: string;
-      });
+      out.set(id, JSON.parse(hit) as AttachmentMedia);
     } else {
       missing.push(id);
     }
@@ -344,7 +345,7 @@ export async function getAttachmentUrls(
   for (const row of rows) {
     const meta = metaMap.get(row.ID) ?? {};
     const url = buildMediaItemUrl(meta._wp_attached_file, row.guid, mediaBaseUrl);
-    const shaped = {
+    const shaped: AttachmentMedia = {
       sourceUrl: url,
       mediaItemUrl: url,
       altText: meta._wp_attachment_image_alt || row.post_title || "",
@@ -353,6 +354,18 @@ export async function getAttachmentUrls(
     memorySet(mediaMemoryKey(row.ID), JSON.stringify(shaped));
   }
   return out;
+}
+
+/** Per-request DataLoader that batches through `getAttachmentUrls`. */
+export function createAttachmentLoader(
+  fetchUrls: (
+    ids: number[],
+  ) => Promise<Map<number, AttachmentMedia>> = getAttachmentUrls,
+): DataLoader<number, AttachmentMedia | null> {
+  return new DataLoader(async (ids: readonly number[]) => {
+    const map = await fetchUrls([...ids]);
+    return ids.map((id) => map.get(id) ?? null);
+  });
 }
 
 function mediaMemoryKey(attachmentId: number): string {
