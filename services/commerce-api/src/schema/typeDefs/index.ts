@@ -966,6 +966,11 @@ export const typeDefs = /* GraphQL */ `
   otherwise checkout fails with extensions.code ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED
   and no order is created. With a saved card, Stripe is validated first and set_paid plus
   renewal meta are sent on the WC REST order create so payment_complete runs on create.
+  If the commerce cart was $0 but WooCommerce computes a non-zero order total after create,
+  checkout fails with extensions.code ZERO_SUBSCRIPTION_TOTAL_MISMATCH: the order is placed
+  on-hold, subscription rows for that parent order are cancelled, and the session cart is
+  left intact so the customer can retry. When the commerce cart is above $0 but WooCommerce
+  still totals $0, existing behavior is unchanged.
   """
   input CheckoutInput {
     clientMutationId: String

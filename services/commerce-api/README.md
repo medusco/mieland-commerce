@@ -96,6 +96,8 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 **$0 subscription checkout:** When the cart total is `$0` and a line has subscription frequency, `checkout` requires a logged-in customer with a saved Stripe card (`pm_…` in `woocommerce_payment_tokens`). Otherwise the mutation fails with GraphQL `extensions.code` `ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED` and **no order is created**. With a saved card, checkout validates/attaches the Stripe PM **before** create, then sends `set_paid: true` plus renewal meta on the **WC REST order create** payload so WooCommerce runs `payment_complete` on create (required for WP `mieland-subscriptions` capture). After create, it adds an order note and best-effort updates `hy_mieland_subscriptions.payment_token_id`. One-time `$0` orders (no subscription lines) still use post-create `set_paid` as before.
 
+If commerce priced the cart at `$0` but WooCommerce returns a **non-zero** order total after create (coupon hold dropped, subscription discount not applied in WC, etc.), checkout fails with `extensions.code` `ZERO_SUBSCRIPTION_TOTAL_MISMATCH`, sets the WC order to **on-hold** (staff review; not `failed`, which implies payment failure), adds a private order note with both totals, and cancels `hy_mieland_subscriptions` rows for that `parent_order_id`. The cart is **not** cleared so the shopper can retry. Idempotency does not cache this outcome. When commerce total is above `$0` but WooCommerce still totals `$0`, behavior is unchanged.
+
 `updateMielandSubscription` / `cancelMielandSubscription` / `pauseMielandSubscription` / `resumeMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
 ## Payment Processing

@@ -11,7 +11,10 @@ import {
   orderMetaHasZeroOrderCompleted,
   isWcZeroOrderTotal,
 } from "./zero-order.js";
-import { linkSubscriptionPaymentForParentOrder } from "../repositories/subscriptions.js";
+import {
+  cancelSubscriptionsForParentOrder,
+  linkSubscriptionPaymentForParentOrder,
+} from "../repositories/subscriptions.js";
 import { logJson } from "../utils/index.js";
 
 export const ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED =
@@ -23,10 +26,134 @@ export const ZERO_SUBSCRIPTION_PAYMENT_METHOD_MESSAGE =
   "A saved Stripe card is required to start a $0 subscription checkout. " +
   "Sign in and add a payment method in My Account, then try again.";
 
+export const ZERO_SUBSCRIPTION_TOTAL_MISMATCH = "ZERO_SUBSCRIPTION_TOTAL_MISMATCH";
+
+export const ZERO_SUBSCRIPTION_TOTAL_MISMATCH_MESSAGE =
+  "Your order total changed during checkout. Please review your cart and try again.";
+
 export function zeroSubscriptionPaymentMethodRequiredError(): GraphQLError {
   return new GraphQLError(ZERO_SUBSCRIPTION_PAYMENT_METHOD_MESSAGE, {
     extensions: { code: ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED },
   });
+}
+
+export function zeroSubscriptionTotalMismatchError(): GraphQLError {
+  return new GraphQLError(ZERO_SUBSCRIPTION_TOTAL_MISMATCH_MESSAGE, {
+    extensions: { code: ZERO_SUBSCRIPTION_TOTAL_MISMATCH },
+  });
+}
+
+export function isZeroSubscriptionCommerceWcTotalMismatch(
+  zeroSubscriptionCheckout: boolean,
+  wcOrderTotal: unknown,
+): boolean {
+  return zeroSubscriptionCheckout && !isWcZeroOrderTotal(wcOrderTotal);
+}
+
+export type ZeroSubscriptionMismatchCleanupActions = {
+  setOrderOnHold: (orderId: number) => Promise<void>;
+  addOrderNote: (orderId: number, note: string) => Promise<void>;
+  cancelSubscriptions: (args: {
+    parentOrderId: number;
+    userId: number | null;
+  }) => Promise<number>;
+  logWarn: (payload: Record<string, unknown>) => void;
+  logStepFailure: (payload: Record<string, unknown>) => void;
+};
+
+const defaultZeroSubscriptionMismatchActions: ZeroSubscriptionMismatchCleanupActions =
+  {
+    setOrderOnHold: async (orderId) => {
+      await updateWcOrder(orderId, { status: "on-hold" });
+    },
+    addOrderNote: async (orderId, note) => {
+      await addWcOrderNote(orderId, { note, customer_note: false });
+    },
+    cancelSubscriptions: async (args) =>
+      cancelSubscriptionsForParentOrder(args),
+    logWarn: (payload) => logJson("warn", payload),
+    logStepFailure: (payload) => logJson("error", payload),
+  };
+
+function formatTotalForMismatchNote(total: unknown): string {
+  const n = Number(total);
+  if (Number.isFinite(n)) {
+    return n.toFixed(2);
+  }
+  return String(total ?? "unknown");
+}
+
+/**
+ * Commerce believed the cart was $0 but WooCommerce computed a non-zero total after create
+ * (often after set_paid on create). Hold the order, cancel subscription rows, and fail checkout.
+ */
+export async function abortZeroSubscriptionOnWcTotalMismatch(
+  args: {
+    orderId: number;
+    userId: number | null;
+    commerceTotal: unknown;
+    wcTotal: unknown;
+    requestId?: string;
+  },
+  actions: ZeroSubscriptionMismatchCleanupActions = defaultZeroSubscriptionMismatchActions,
+): Promise<never> {
+  const commerceLabel = formatTotalForMismatchNote(args.commerceTotal);
+  const wcLabel = formatTotalForMismatchNote(args.wcTotal);
+  const note =
+    `Zero-subscription checkout blocked: commerce cart total was $${commerceLabel} ` +
+    `but WooCommerce order total is $${wcLabel}. Order placed on-hold and subscriptions ` +
+    `cancelled pending review (pricing/coupon mismatch).`;
+
+  try {
+    await actions.setOrderOnHold(args.orderId);
+  } catch (err) {
+    actions.logStepFailure({
+      msg: "zero_subscription_mismatch_set_on_hold_failed",
+      orderId: args.orderId,
+      userId: args.userId,
+      err: String(err),
+      requestId: args.requestId ?? null,
+    });
+  }
+
+  try {
+    await actions.addOrderNote(args.orderId, note);
+  } catch (err) {
+    actions.logStepFailure({
+      msg: "zero_subscription_mismatch_note_failed",
+      orderId: args.orderId,
+      userId: args.userId,
+      err: String(err),
+      requestId: args.requestId ?? null,
+    });
+  }
+
+  try {
+    await actions.cancelSubscriptions({
+      parentOrderId: args.orderId,
+      userId: args.userId,
+    });
+  } catch (err) {
+    actions.logStepFailure({
+      msg: "zero_subscription_mismatch_cancel_subscriptions_failed",
+      orderId: args.orderId,
+      userId: args.userId,
+      err: String(err),
+      requestId: args.requestId ?? null,
+    });
+  }
+
+  actions.logWarn({
+    msg: "zero_subscription_total_mismatch",
+    event: "zero_subscription_total_mismatch",
+    orderId: args.orderId,
+    userId: args.userId,
+    commerceTotal: args.commerceTotal,
+    wcTotal: args.wcTotal,
+    requestId: args.requestId ?? null,
+  });
+
+  throw zeroSubscriptionTotalMismatchError();
 }
 
 export type SavedWcStripeToken = {

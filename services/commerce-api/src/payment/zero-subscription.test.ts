@@ -10,11 +10,15 @@ import type { PaymentToken } from "../repositories/payment-tokens.js";
 import { pickSavedStripePaymentToken } from "../repositories/payment-tokens.js";
 import type { WcOrderPayload } from "../clients/woocommerce-rest.js";
 import {
+  abortZeroSubscriptionOnWcTotalMismatch,
   applyZeroSubscriptionPaidToWcCreatePayload,
   buildZeroSubscriptionPaidOrderMeta,
+  isZeroSubscriptionCommerceWcTotalMismatch,
   ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED,
   ZERO_SUBSCRIPTION_CHECKOUT_TRANSACTION_PREFIX,
+  ZERO_SUBSCRIPTION_TOTAL_MISMATCH,
   zeroSubscriptionPaymentMethodRequiredError,
+  zeroSubscriptionTotalMismatchError,
 } from "./zero-subscription-complete.js";
 import {
   cartItemsHaveSubscription,
@@ -232,6 +236,124 @@ describe("Zero subscription checkout", () => {
     assert.strictEqual(shouldAutoMarkZeroNonSubscriptionPaid(0, false), true);
     assert.strictEqual(shouldAutoCompleteZeroSubscriptionAtCheckout(0, true), true);
     assert.strictEqual(shouldAutoMarkZeroNonSubscriptionPaid(0, true), false);
+  });
+
+  it("detects commerce $0 vs non-zero WC total mismatch on subscription path only", () => {
+    assert.strictEqual(isZeroSubscriptionCommerceWcTotalMismatch(true, "12.50"), true);
+    assert.strictEqual(isZeroSubscriptionCommerceWcTotalMismatch(true, 0), false);
+    assert.strictEqual(isZeroSubscriptionCommerceWcTotalMismatch(true, "0.00"), false);
+    assert.strictEqual(isZeroSubscriptionCommerceWcTotalMismatch(false, "9.99"), false);
+  });
+
+  it("exposes ZERO_SUBSCRIPTION_TOTAL_MISMATCH for customer-safe retry", () => {
+    const err = zeroSubscriptionTotalMismatchError();
+    assert.ok(err instanceof GraphQLError);
+    assert.strictEqual(err.extensions?.code, ZERO_SUBSCRIPTION_TOTAL_MISMATCH);
+    assert.ok(err.message.includes("order total changed"));
+  });
+
+  it("on mismatch holds order, notes, cancels subscriptions, logs, and throws", async () => {
+    const calls: string[] = [];
+    const warnPayloads: Record<string, unknown>[] = [];
+
+    await assert.rejects(
+      () =>
+        abortZeroSubscriptionOnWcTotalMismatch(
+          {
+            orderId: 501,
+            userId: 7,
+            commerceTotal: 0,
+            wcTotal: "19.99",
+            requestId: "req-mismatch",
+          },
+          {
+            setOrderOnHold: async (orderId) => {
+              calls.push(`hold:${orderId}`);
+            },
+            addOrderNote: async (orderId, note) => {
+              calls.push(`note:${orderId}:${note.slice(0, 40)}`);
+              assert.ok(note.includes("19.99"));
+              assert.ok(note.includes("0.00"));
+            },
+            cancelSubscriptions: async (args) => {
+              calls.push(
+                `cancel:${args.parentOrderId}:user:${args.userId ?? "none"}`,
+              );
+              return 1;
+            },
+            logWarn: (payload) => {
+              warnPayloads.push(payload);
+            },
+            logStepFailure: () => {
+              throw new Error("unexpected step failure in test");
+            },
+          },
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof GraphQLError);
+        assert.strictEqual(
+          (err as GraphQLError).extensions?.code,
+          ZERO_SUBSCRIPTION_TOTAL_MISMATCH,
+        );
+        return true;
+      },
+    );
+
+    assert.deepStrictEqual(calls, [
+      "hold:501",
+      "note:501:Zero-subscription checkout blocked: comm",
+      "cancel:501:user:7",
+    ]);
+    assert.strictEqual(warnPayloads.length, 1);
+    assert.strictEqual(warnPayloads[0]?.event, "zero_subscription_total_mismatch");
+    assert.strictEqual(warnPayloads[0]?.orderId, 501);
+    assert.strictEqual(warnPayloads[0]?.commerceTotal, 0);
+    assert.strictEqual(warnPayloads[0]?.wcTotal, "19.99");
+  });
+
+  it("still cancels and throws when an earlier cleanup step fails", async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      () =>
+        abortZeroSubscriptionOnWcTotalMismatch(
+          {
+            orderId: 777,
+            userId: 2,
+            commerceTotal: 0,
+            wcTotal: 5,
+          },
+          {
+            setOrderOnHold: async () => {
+              throw new Error("wc unavailable");
+            },
+            addOrderNote: async () => {
+              calls.push("note");
+            },
+            cancelSubscriptions: async () => {
+              calls.push("cancel");
+              return 1;
+            },
+            logWarn: () => {},
+            logStepFailure: () => {},
+          },
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof GraphQLError);
+        return true;
+      },
+    );
+    assert.deepStrictEqual(calls, ["note", "cancel"]);
+  });
+
+  it("matching $0 WC total does not enter mismatch helper", () => {
+    assert.strictEqual(
+      isZeroSubscriptionCommerceWcTotalMismatch(true, 0),
+      false,
+    );
+    assert.strictEqual(
+      isZeroSubscriptionCommerceWcTotalMismatch(true, "0"),
+      false,
+    );
   });
 
   it("validateRetrievedPaymentMethodForSubscription still rejects wrong customer", () => {
