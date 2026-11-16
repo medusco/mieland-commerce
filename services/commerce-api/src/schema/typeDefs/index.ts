@@ -959,6 +959,13 @@ export const typeDefs = /* GraphQL */ `
     customerId: Int!
   }
 
+  """
+  Place order from the session cart via WooCommerce REST.
+  Non-subscription $0 totals are marked paid immediately.
+  Subscription $0 totals require a logged-in customer with a saved Stripe card (pm_…);
+  otherwise checkout fails with extensions.code ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED
+  and no order is created.
+  """
   input CheckoutInput {
     clientMutationId: String
     paymentMethod: String

@@ -1,3 +1,11 @@
+import type { CartItem } from "../engine/types.js";
+import { getItemFrequency } from "../engine/types.js";
+
+/** Session cart items carry subscription frequency in extraData. */
+export function cartItemsHaveSubscription(items: CartItem[]): boolean {
+  return items.some((item) => getItemFrequency(item).trim().length > 0);
+}
+
 /** Detect subscription line items from WooCommerce REST line_items (checkout / $0 paths). */
 export function wcLineItemsHaveSubscription(lineItems: unknown): boolean {
   if (!Array.isArray(lineItems)) return false;
@@ -33,12 +41,14 @@ export function shouldAutoMarkZeroNonSubscriptionPaid(
   return isWcZeroOrderTotal(total) && !hasSubscriptions;
 }
 
-export function shouldDeferZeroSubscriptionAtCheckout(
+/** $0 cart with subscription lines: auto-complete at checkout when a saved card exists. */
+export function shouldAutoCompleteZeroSubscriptionAtCheckout(
   total: unknown,
   hasSubscriptions: boolean,
 ): boolean {
   return isWcZeroOrderTotal(total) && hasSubscriptions;
 }
+
 
 export function orderMetaHasZeroOrderCompleted(
   metaData: unknown,
