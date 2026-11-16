@@ -94,6 +94,8 @@ Covers stock levels → login → addToCart (incl. OOS reject) → updateQuantit
 
 `checkout` / `createOrder` create orders via WC REST (`/wc/v3/orders`) using consumer key/secret only (no WP user cookie — a customer cookie would demote the request and return "not allowed to create resources"). Logged-in orders still set the real `customer_id`. Guests use `customer_id: 0`. Node does **not** insert `hy_mieland_subscriptions` rows — WordPress owns new-order subscription capture. Line meta `_subscription_frequency` is attached so WP can capture after place.
 
+**$0 subscription checkout:** When the cart total is `$0` and a line has subscription frequency, `checkout` requires a logged-in customer with a saved Stripe card (`pm_…` in `woocommerce_payment_tokens`). Otherwise the mutation fails with GraphQL `extensions.code` `ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED` and **no order is created**. With a saved card, checkout validates/attaches the Stripe PM **before** create, then sends `set_paid: true` plus renewal meta on the **WC REST order create** payload so WooCommerce runs `payment_complete` on create (required for WP `mieland-subscriptions` capture). After create, it adds an order note and best-effort updates `hy_mieland_subscriptions.payment_token_id`. One-time `$0` orders (no subscription lines) still use post-create `set_paid` as before.
+
 `updateMielandSubscription` / `cancelMielandSubscription` / `pauseMielandSubscription` / `resumeMielandSubscription` write existing subscription rows in MySQL (customer-scoped).
 
 ## Payment Processing

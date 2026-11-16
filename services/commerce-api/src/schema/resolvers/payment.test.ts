@@ -13,7 +13,7 @@ import {
   isWcZeroOrderTotal,
   orderMetaHasZeroOrderCompleted,
   shouldAutoMarkZeroNonSubscriptionPaid,
-  shouldDeferZeroSubscriptionAtCheckout,
+  shouldAutoCompleteZeroSubscriptionAtCheckout,
   wcLineItemsHaveSubscription,
 } from "../../payment/zero-order.js";
 
@@ -226,9 +226,12 @@ describe("Payment Processing", () => {
       );
     });
 
-    it("should keep subscription $0 order pending for payment method setup", () => {
+    it("should auto-complete subscription $0 at checkout when a saved card exists", () => {
       const [wcTotal] = totalsFromFixture();
-      assert.strictEqual(shouldDeferZeroSubscriptionAtCheckout(wcTotal, true), true);
+      assert.strictEqual(
+        shouldAutoCompleteZeroSubscriptionAtCheckout(wcTotal, true),
+        true,
+      );
       assert.strictEqual(shouldAutoMarkZeroNonSubscriptionPaid(wcTotal, true), false);
     });
 

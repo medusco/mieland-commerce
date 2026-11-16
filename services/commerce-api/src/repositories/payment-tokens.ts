@@ -1,6 +1,7 @@
 import { query, queryOne, t } from "../db/mysql.js";
 import { logJson } from "../utils/index.js";
 import { loadConfig } from "../config.js";
+import { isStripePmId } from "../payment/zero-order.js";
 
 export type PaymentToken = {
   id: number;
@@ -18,6 +19,37 @@ export type PaymentToken = {
 /**
  * List all payment tokens for a customer from woocommerce_payment_tokens table.
  */
+/**
+ * Pick the default Stripe WC token (pm_…), or the first Stripe token when none is default.
+ */
+export function pickSavedStripePaymentToken(
+  tokens: PaymentToken[],
+): PaymentToken | null {
+  const stripeTokens = tokens.filter(
+    (tok) => tok.gateway === "stripe" && isStripePmId(tok.token),
+  );
+  if (!stripeTokens.length) return null;
+  return stripeTokens.find((tok) => tok.isDefault) ?? stripeTokens[0] ?? null;
+}
+
+export async function selectSavedStripePaymentTokenForUser(
+  userId: number,
+): Promise<PaymentToken | null> {
+  const tokens = await listCustomerPaymentTokens(userId);
+  return pickSavedStripePaymentToken(tokens);
+}
+
+export async function findStripePaymentTokenIdForUser(
+  userId: number,
+  paymentMethodId: string,
+): Promise<number | null> {
+  const tokens = await listCustomerPaymentTokens(userId);
+  const found = tokens.find(
+    (tok) => tok.gateway === "stripe" && tok.token === paymentMethodId,
+  );
+  return found?.id ?? null;
+}
+
 export async function listCustomerPaymentTokens(
   userId: number,
 ): Promise<PaymentToken[]> {

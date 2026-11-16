@@ -51,10 +51,24 @@ import {
   shapeOrderFromWc,
 } from "../../repositories/orders.js";
 import {
+  cartItemsHaveSubscription,
   isWcZeroOrderTotal,
   orderMetaHasZeroOrderCompleted,
   wcLineItemsHaveSubscription,
 } from "../../payment/zero-order.js";
+import {
+  applyZeroSubscriptionPaidToWcCreatePayload,
+  completeZeroSubscriptionOrderPaid,
+  finalizeZeroSubscriptionOrderAfterCreate,
+  isZeroSubscriptionCartCheckout,
+  validateZeroSubscriptionStripeBeforeCreate,
+  zeroSubscriptionPaymentMethodRequiredError,
+} from "../../payment/zero-subscription-complete.js";
+import type { ValidatePaymentMethodResult } from "../../clients/stripe.js";
+import {
+  findStripePaymentTokenIdForUser,
+  selectSavedStripePaymentTokenForUser,
+} from "../../repositories/payment-tokens.js";
 import { getRedis } from "../../redis/client.js";
 import { logJson, parseDatabaseId } from "../../utils/index.js";
 import {
@@ -626,6 +640,29 @@ export const checkoutResolvers = {
         .filter((m) => m.key)
         .map((m) => ({ key: m.key, value: String(m.value ?? "") }));
 
+      const cartHasSubscriptions = cartItemsHaveSubscription(calculated.cart.items);
+      const zeroSubscriptionCheckout = isZeroSubscriptionCartCheckout(
+        calculated.total,
+        cartHasSubscriptions,
+      );
+      let savedStripeToken: { tokenId: number; paymentMethodId: string } | null =
+        null;
+      let zeroSubPmDetails: ValidatePaymentMethodResult | null = null;
+      if (zeroSubscriptionCheckout) {
+        if (userId == null) {
+          throw zeroSubscriptionPaymentMethodRequiredError();
+        }
+        const token = await selectSavedStripePaymentTokenForUser(userId);
+        if (!token) {
+          throw zeroSubscriptionPaymentMethodRequiredError();
+        }
+        savedStripeToken = { tokenId: token.id, paymentMethodId: token.token };
+        zeroSubPmDetails = await validateZeroSubscriptionStripeBeforeCreate({
+          userId,
+          paymentMethodId: savedStripeToken.paymentMethodId,
+        });
+      }
+
       const idempKey = createHash("sha256")
         .update(
           `${ctx.sessionToken}:${JSON.stringify(cart.items)}:${JSON.stringify(meta)}:${JSON.stringify({ billing: cart.billing, shipping: cart.shipping })}:checkout`,
@@ -639,7 +676,7 @@ export const checkoutResolvers = {
         if (userId != null) {
           await requireSyncedWpSession(ctx);
         }
-        const wcPayload = buildWcOrderFromCart({
+        let wcPayload = buildWcOrderFromCart({
           cart: calculated.cart,
           calculated,
           paymentMethod: input.paymentMethod || "stripe",
@@ -647,6 +684,17 @@ export const checkoutResolvers = {
           metaData: meta,
           customerId: userId ?? 0,
         });
+        if (
+          zeroSubscriptionCheckout &&
+          savedStripeToken &&
+          zeroSubPmDetails &&
+          userId != null
+        ) {
+          wcPayload = applyZeroSubscriptionPaidToWcCreatePayload(wcPayload, {
+            pmDetails: zeroSubPmDetails,
+            wcPaymentTokenId: savedStripeToken.tokenId,
+          });
+        }
         const started = Date.now();
         try {
           const order = await createWcOrder(wcPayload);
@@ -669,16 +717,28 @@ export const checkoutResolvers = {
             const hasSubscriptions = wcLineItemsHaveSubscription(order.line_items);
 
             if (hasSubscriptions) {
-              // Subscription with $0 initial total: keep status pending.
-              // Payment method setup is required for future renewals.
-              // The order remains needsPayment=true so the client captures
-              // payment method (SetupIntent) for renewals.
+              if (
+                userId == null ||
+                !savedStripeToken ||
+                !zeroSubPmDetails
+              ) {
+                throw zeroSubscriptionPaymentMethodRequiredError();
+              }
+              await finalizeZeroSubscriptionOrderAfterCreate({
+                orderId: Number(order.id),
+                userId,
+                wcPaymentTokenId: savedStripeToken.tokenId,
+                pmDetails: zeroSubPmDetails,
+                requestId: ctx.requestId,
+              });
               logPaymentTrace("info", {
-                msg: "checkout_zero_order_subscription",
+                msg: "checkout_zero_order_subscription_completed",
                 requestId: ctx.requestId,
                 orderId: order.id,
                 total: wcTotal,
-                needsPaymentMethodSetup: true,
+                paymentMethodId: savedStripeToken.paymentMethodId,
+                wcPaymentTokenId: savedStripeToken.tokenId,
+                paidOnCreate: true,
               });
             } else {
               // Non-subscription $0 order: mark paid via WC REST set_paid.
@@ -944,9 +1004,8 @@ export const checkoutResolvers = {
             });
             result = "success";
           } else {
-            // Validate payment method and get Stripe customer ID
             const {
-              validatePaymentMethodForSubscription,
+              ensurePaymentMethodAttachedForSubscription,
               resolveExpectedStripeCustomerId,
             } = await import("../../clients/stripe.js");
 
@@ -961,63 +1020,58 @@ export const checkoutResolvers = {
               );
             }
 
-            const pmDetails = await validatePaymentMethodForSubscription({
+            const pmPreview = await ensurePaymentMethodAttachedForSubscription({
               paymentMethodId,
               expectedCustomerId,
               userId: ctxOrder.customerId,
             });
 
-            // Save payment method as WC payment token for future use
-            if (ctxOrder.customerId > 0) {
+            let wcPaymentTokenId =
+              (await findStripePaymentTokenIdForUser(
+                ctxOrder.customerId,
+                paymentMethodId,
+              )) ?? 0;
+
+            if (ctxOrder.customerId > 0 && wcPaymentTokenId === 0) {
               const { createCustomerPaymentToken } = await import(
                 "../../repositories/payment-tokens.js"
               );
-              try {
-                await createCustomerPaymentToken(ctxOrder.customerId, {
+              const created = await createCustomerPaymentToken(
+                ctxOrder.customerId,
+                {
                   gateway: "stripe",
-                  token: pmDetails.paymentMethodId,
+                  token: pmPreview.paymentMethodId,
                   type: "CC",
-                  cardType: pmDetails.cardBrand ?? undefined,
-                  last4: pmDetails.last4 ?? undefined,
-                  expiryMonth: pmDetails.expMonth?.toString() ?? undefined,
-                  expiryYear: pmDetails.expYear?.toString() ?? undefined,
-                  customerId: pmDetails.customerId,
-                });
-                logPaymentTrace("info", {
-                  msg: "process_order_payment_zero_order_token_saved",
-                  requestId: ctx.requestId,
-                  orderId,
-                  userId: ctxOrder.customerId,
-                });
-              } catch (err) {
-                // Token save is best-effort; don't fail the order
-                logPaymentTrace("warn", {
-                  msg: "process_order_payment_zero_order_token_save_failed",
-                  requestId: ctx.requestId,
-                  orderId,
-                  err: String(err),
-                });
-              }
+                  cardType: pmPreview.cardBrand ?? undefined,
+                  last4: pmPreview.last4 ?? undefined,
+                  expiryMonth: pmPreview.expMonth?.toString() ?? undefined,
+                  expiryYear: pmPreview.expYear?.toString() ?? undefined,
+                  customerId: pmPreview.customerId,
+                },
+              );
+              wcPaymentTokenId = created.id;
+              logPaymentTrace("info", {
+                msg: "process_order_payment_zero_order_token_saved",
+                requestId: ctx.requestId,
+                orderId,
+                userId: ctxOrder.customerId,
+              });
             }
 
-            // Attach payment method to order for subscription renewals (Woo Stripe format)
-            await updateWcOrder(orderId, {
-              set_paid: true,
-              payment_method: "stripe",
-              transaction_id: `zero-subscription-${orderId}`,
-              meta_data: [
-                { key: "_stripe_customer_id", value: pmDetails.customerId },
-                { key: "_stripe_source_id", value: pmDetails.paymentMethodId },
-                {
-                  key: "_mieland_zero_subscription_completed",
-                  value: new Date().toISOString(),
-                },
-              ],
-            });
+            if (wcPaymentTokenId <= 0) {
+              throw new Error(
+                "A WooCommerce payment token is required for $0 subscription completion.",
+              );
+            }
 
-            await addWcOrderNote(orderId, {
-              note: `$0 subscription order completed with saved payment method (${pmDetails.paymentMethodId}, customer ${pmDetails.customerId})`,
-              customer_note: false,
+            const pmDetails = await completeZeroSubscriptionOrderPaid({
+              orderId,
+              userId: ctxOrder.customerId,
+              paymentMethodId,
+              wcPaymentTokenId,
+              existingMetaData: undefined,
+              orderStripeCustomerId: ctxOrder.orderStripeCustomerId,
+              requestId: ctx.requestId,
             });
 
             logPaymentTrace("info", {

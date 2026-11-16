@@ -311,6 +311,51 @@ export async function validatePaymentMethodForSubscription(
 }
 
 /**
+ * Retrieve a PaymentMethod and attach it to the expected Stripe customer when detached
+ * (e.g. cards saved via addPaymentMethod without customer attach).
+ */
+export async function ensurePaymentMethodAttachedForSubscription(
+  args: ValidatePaymentMethodArgs,
+  stripeClient?: Stripe,
+): Promise<ValidatePaymentMethodResult> {
+  const stripe = stripeClient ?? getStripeClient();
+  const started = Date.now();
+
+  try {
+    let pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
+
+    if (!pm.customer) {
+      pm = await stripe.paymentMethods.attach(args.paymentMethodId, {
+        customer: args.expectedCustomerId,
+      });
+      logJson("info", {
+        msg: "stripe_attach_payment_method",
+        ms: Date.now() - started,
+        paymentMethodId: args.paymentMethodId,
+        customerId: args.expectedCustomerId,
+      });
+    }
+
+    return validateRetrievedPaymentMethodForSubscription(pm, args);
+  } catch (err) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Stripe could not validate the saved payment method for subscription renewals.";
+    logJson("error", {
+      msg: "stripe_ensure_payment_method_fail",
+      ms: Date.now() - started,
+      paymentMethodId: args.paymentMethodId,
+      userId: args.userId,
+      err: message,
+    });
+    throw new Error(
+      `Saved payment method could not be prepared for subscription renewals: ${message}`,
+    );
+  }
+}
+
+/**
  * Retrieve and validate a Stripe PaymentIntent.
  * Verifies that the amount and order_id metadata match to prevent fraud.
  * Expands latest_charge to include the charge ID for order notes.
