@@ -961,10 +961,11 @@ export const typeDefs = /* GraphQL */ `
 
   """
   Place order from the session cart via WooCommerce REST.
-  Non-subscription $0 totals are marked paid immediately.
+  Non-subscription $0 totals are marked paid immediately (post-create set_paid).
   Subscription $0 totals require a logged-in customer with a saved Stripe card (pm_…);
   otherwise checkout fails with extensions.code ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED
-  and no order is created.
+  and no order is created. With a saved card, Stripe is validated first and set_paid plus
+  renewal meta are sent on the WC REST order create so payment_complete runs on create.
   """
   input CheckoutInput {
     clientMutationId: String

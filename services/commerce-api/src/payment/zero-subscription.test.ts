@@ -8,9 +8,12 @@ import {
 } from "../clients/stripe.js";
 import type { PaymentToken } from "../repositories/payment-tokens.js";
 import { pickSavedStripePaymentToken } from "../repositories/payment-tokens.js";
+import type { WcOrderPayload } from "../clients/woocommerce-rest.js";
 import {
+  applyZeroSubscriptionPaidToWcCreatePayload,
   buildZeroSubscriptionPaidOrderMeta,
   ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED,
+  ZERO_SUBSCRIPTION_CHECKOUT_TRANSACTION_PREFIX,
   zeroSubscriptionPaymentMethodRequiredError,
 } from "./zero-subscription-complete.js";
 import {
@@ -56,6 +59,52 @@ describe("Zero subscription checkout", () => {
     ];
     assert.strictEqual(pickSavedStripePaymentToken(onlyNonDefault)?.id, 30);
     assert.strictEqual(pickSavedStripePaymentToken([]), null);
+  });
+
+  it("puts set_paid and renewal meta on WC order create payload (not post-create update)", () => {
+    const base: WcOrderPayload = {
+      payment_method: "stripe",
+      billing: {},
+      shipping: {},
+      line_items: [{ product_id: 1, quantity: 1 }],
+      meta_data: [{ key: "client_ref", value: "abc" }],
+    };
+    const pmDetails = {
+      paymentMethodId: "pm_create",
+      customerId: "cus_create",
+      cardBrand: "visa" as string | null,
+      last4: "4242",
+      expMonth: 12,
+      expYear: 2030,
+    };
+    const created = applyZeroSubscriptionPaidToWcCreatePayload(base, {
+      pmDetails,
+      wcPaymentTokenId: 55,
+    });
+    assert.strictEqual(created.set_paid, true);
+    assert.strictEqual(created.payment_method, "stripe");
+    assert.strictEqual(created.payment_method_title, "Credit Card (Stripe)");
+    assert.strictEqual(
+      created.transaction_id,
+      ZERO_SUBSCRIPTION_CHECKOUT_TRANSACTION_PREFIX,
+    );
+    assert.ok(
+      created.meta_data?.some(
+        (m) => m.key === "_stripe_source_id" && m.value === "pm_create",
+      ),
+    );
+    assert.ok(
+      created.meta_data?.some(
+        (m) =>
+          m.key === "_mieland_zero_subscription_completed" &&
+          m.value.length > 0,
+      ),
+    );
+    assert.ok(
+      created.meta_data?.some(
+        (m) => m.key === "client_ref" && m.value === "abc",
+      ),
+    );
   });
 
   it("builds order meta for paid $0 subscription checkout", () => {

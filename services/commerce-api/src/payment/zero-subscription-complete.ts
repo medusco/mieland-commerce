@@ -1,5 +1,6 @@
 import { GraphQLError } from "graphql";
 import type Stripe from "stripe";
+import type { WcOrderPayload } from "../clients/woocommerce-rest.js";
 import {
   ensurePaymentMethodAttachedForSubscription,
   resolveExpectedStripeCustomerId,
@@ -16,6 +17,8 @@ import { logJson } from "../utils/index.js";
 export const ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED =
   "ZERO_SUBSCRIPTION_PAYMENT_METHOD_REQUIRED";
 
+export const ZERO_SUBSCRIPTION_CHECKOUT_TRANSACTION_PREFIX = "zero-subscription";
+
 export const ZERO_SUBSCRIPTION_PAYMENT_METHOD_MESSAGE =
   "A saved Stripe card is required to start a $0 subscription checkout. " +
   "Sign in and add a payment method in My Account, then try again.";
@@ -30,6 +33,20 @@ export type SavedWcStripeToken = {
   tokenId: number;
   paymentMethodId: string;
 };
+
+export function mergeWcOrderMeta(
+  base: Array<{ key: string; value: string }> | undefined,
+  extra: Array<{ key: string; value: string }>,
+): Array<{ key: string; value: string }> {
+  const byKey = new Map<string, string>();
+  for (const entry of base ?? []) {
+    byKey.set(entry.key, entry.value);
+  }
+  for (const entry of extra) {
+    byKey.set(entry.key, entry.value);
+  }
+  return [...byKey.entries()].map(([key, value]) => ({ key, value }));
+}
 
 export function buildZeroSubscriptionPaidOrderMeta(args: {
   pmDetails: ValidatePaymentMethodResult;
@@ -55,6 +72,93 @@ export function buildZeroSubscriptionPaidOrderMeta(args: {
   ];
 }
 
+/**
+ * WC REST order create must include set_paid + renewal meta so payment_complete runs
+ * on create (WooCommerce skips it on later updates when needs_payment() is false for $0).
+ */
+export function applyZeroSubscriptionPaidToWcCreatePayload(
+  payload: WcOrderPayload,
+  args: {
+    pmDetails: ValidatePaymentMethodResult;
+    wcPaymentTokenId: number;
+    transactionId?: string;
+  },
+): WcOrderPayload {
+  const subscriptionMeta = buildZeroSubscriptionPaidOrderMeta({
+    pmDetails: args.pmDetails,
+    wcPaymentTokenId: args.wcPaymentTokenId,
+  });
+  return {
+    ...payload,
+    payment_method: "stripe",
+    payment_method_title: "Credit Card (Stripe)",
+    set_paid: true,
+    transaction_id:
+      args.transactionId ?? ZERO_SUBSCRIPTION_CHECKOUT_TRANSACTION_PREFIX,
+    meta_data: mergeWcOrderMeta(payload.meta_data, subscriptionMeta),
+  };
+}
+
+export async function validateZeroSubscriptionStripeBeforeCreate(args: {
+  userId: number;
+  paymentMethodId: string;
+  stripeClient?: Stripe;
+}): Promise<ValidatePaymentMethodResult> {
+  const expectedCustomerId = await resolveExpectedStripeCustomerId({
+    userId: args.userId,
+  });
+  if (!expectedCustomerId) {
+    throw new Error(
+      "Unable to resolve Stripe customer for $0 subscription checkout. " +
+        "Ensure the account has a saved Stripe card.",
+    );
+  }
+
+  return ensurePaymentMethodAttachedForSubscription(
+    {
+      paymentMethodId: args.paymentMethodId,
+      expectedCustomerId,
+      userId: args.userId,
+    },
+    args.stripeClient,
+  );
+}
+
+export async function finalizeZeroSubscriptionOrderAfterCreate(args: {
+  orderId: number;
+  userId: number;
+  wcPaymentTokenId: number;
+  pmDetails: ValidatePaymentMethodResult;
+  requestId?: string;
+}): Promise<number> {
+  await addWcOrderNote(args.orderId, {
+    note:
+      `$0 subscription order completed with saved payment method ` +
+      `(${args.pmDetails.paymentMethodId}, customer ${args.pmDetails.customerId}, token ${args.wcPaymentTokenId})`,
+    customer_note: false,
+  });
+
+  const linked = await linkSubscriptionPaymentForParentOrder({
+    parentOrderId: args.orderId,
+    userId: args.userId,
+    wcPaymentTokenId: args.wcPaymentTokenId,
+    paymentMethod: "stripe",
+  });
+
+  logJson("info", {
+    msg: "zero_subscription_order_completed",
+    requestId: args.requestId ?? null,
+    orderId: args.orderId,
+    userId: args.userId,
+    paymentMethodId: args.pmDetails.paymentMethodId,
+    stripeCustomerId: args.pmDetails.customerId,
+    wcPaymentTokenId: args.wcPaymentTokenId,
+    subscriptionsLinked: linked,
+  });
+
+  return linked;
+}
+
 export type CompleteZeroSubscriptionOrderPaidArgs = {
   orderId: number;
   userId: number;
@@ -67,7 +171,7 @@ export type CompleteZeroSubscriptionOrderPaidArgs = {
 };
 
 /**
- * Validate Stripe PM, mark WC order paid with renewal meta, and link hy_mieland_subscriptions when present.
+ * Legacy processOrderPayment path: order already exists unpaid — update via WC REST.
  */
 export async function completeZeroSubscriptionOrderPaid(
   args: CompleteZeroSubscriptionOrderPaidArgs,
@@ -120,29 +224,12 @@ export async function completeZeroSubscriptionOrderPaid(
     meta_data,
   });
 
-  await addWcOrderNote(args.orderId, {
-    note:
-      `$0 subscription order completed with saved payment method ` +
-      `(${pmDetails.paymentMethodId}, customer ${pmDetails.customerId}, token ${args.wcPaymentTokenId})`,
-    customer_note: false,
-  });
-
-  const linked = await linkSubscriptionPaymentForParentOrder({
-    parentOrderId: args.orderId,
-    userId: args.userId,
-    wcPaymentTokenId: args.wcPaymentTokenId,
-    paymentMethod: "stripe",
-  });
-
-  logJson("info", {
-    msg: "zero_subscription_order_completed",
-    requestId: args.requestId ?? null,
+  await finalizeZeroSubscriptionOrderAfterCreate({
     orderId: args.orderId,
     userId: args.userId,
-    paymentMethodId: pmDetails.paymentMethodId,
-    stripeCustomerId: pmDetails.customerId,
     wcPaymentTokenId: args.wcPaymentTokenId,
-    subscriptionsLinked: linked,
+    pmDetails,
+    requestId: args.requestId,
   });
 
   return pmDetails;

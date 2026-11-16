@@ -8,6 +8,7 @@ export type WcOrderPayload = {
   payment_method: string;
   payment_method_title?: string;
   set_paid?: boolean;
+  transaction_id?: string;
   customer_id?: number;
   customer_note?: string;
   billing: Record<string, string>;
