@@ -20,10 +20,20 @@ import {
   WP_AUTH_HEADER_NAME,
   WP_REFRESH_HEADER_NAME,
 } from "./auth/wp-session.js";
-import { getProductNodes } from "./repositories/products.js";
+import {
+  createAttachmentLoader,
+  getProductNodes,
+  type AttachmentMedia,
+} from "./repositories/products.js";
 import { loadConfig } from "./config.js";
 import { resolveWpCookiePolicy } from "./auth/cookie-policy.js";
 import { logPaymentTrace } from "./utils/payment-trace.js";
+import { enterRequestLoaders } from "./request-loaders.js";
+
+export {
+  getRequestAttachmentLoader,
+  runWithAttachmentLoader,
+} from "./request-loaders.js";
 
 export {
   isCrossOriginRequest,
@@ -50,6 +60,7 @@ export type AppContext = {
   pendingWpAuthSetCookie: string | null;
   calcMode: "lightweight" | "full";
   productLoader: DataLoader<number, unknown>;
+  attachmentLoader: DataLoader<number, AttachmentMedia | null>;
   req: Request;
 };
 
@@ -213,6 +224,11 @@ export async function buildContext(
   const productLoader = new DataLoader(async (ids: readonly number[]) => {
     return getProductNodes(ids);
   });
+  const attachmentLoader = createAttachmentLoader();
+
+  // Persist loaders for the rest of this GraphQL request so repositories can
+  // batch without threading AppContext through every helper.
+  enterRequestLoaders({ attachmentLoader });
 
   void loadConfig;
   return {
@@ -226,6 +242,7 @@ export async function buildContext(
     pendingWpAuthSetCookie: null,
     calcMode: "lightweight",
     productLoader,
+    attachmentLoader,
     req,
   };
 }

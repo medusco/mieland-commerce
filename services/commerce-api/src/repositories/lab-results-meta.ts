@@ -68,7 +68,11 @@ export async function shapeLabReports(
   const count = Number(meta.reports || 0);
   if (!Number.isFinite(count) || count <= 0) return [];
 
-  const reports: LabReportShape[] = [];
+  const pending: Array<{
+    reportTitle: string;
+    reportSubtitle: string;
+    pdfId: number;
+  }> = [];
   for (let i = 0; i < count; i++) {
     const reportTitle =
       meta[`reports_${i}_report_title`] ??
@@ -82,11 +86,21 @@ export async function shapeLabReports(
       `reports_${i}_pdf_file`,
       `reports_${i}_pdfFile`,
     ]);
+    pending.push({ reportTitle, reportSubtitle, pdfId });
+  }
 
-    const file = pdfId ? await getAttachmentUrl(pdfId) : null;
-    reports.push({
-      reportTitle,
-      reportSubtitle,
+  // Parallel loads batch through the request DataLoader when present.
+  const files = await Promise.all(
+    pending.map((row) =>
+      row.pdfId ? getAttachmentUrl(row.pdfId) : Promise.resolve(null),
+    ),
+  );
+
+  return pending.map((row, index) => {
+    const file = files[index] ?? null;
+    return {
+      reportTitle: row.reportTitle,
+      reportSubtitle: row.reportSubtitle,
       pdfFile: file
         ? {
             node: {
@@ -95,9 +109,8 @@ export async function shapeLabReports(
             },
           }
         : null,
-    });
-  }
-  return reports;
+    };
+  });
 }
 
 type LabManualProductShape = {
