@@ -13,9 +13,27 @@ npm run dev
 
 Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `NEXT_PUBLIC_CONTENT_BACKEND=commerce` at `http://localhost:4000/graphql` for cart, profile, and CMS content (posts, pages, navigation, ACF). Keep `GRAPHQL_ENDPOINT` on WordPress only when you still need WPGraphQL-only fields.
 
+### ACF GraphQL exposure
+
+Field groups with **Show in GraphQL** are loaded from MySQL and cached under `acf:graphql-groups:v10:*` (bump the version in `acf-graphql.ts` when mapping rules change so deploys pick up a fresh schema without a manual Redis flush; process restart still required so Yoga rebuilds SDL).
+
+**Location → GraphQL types** (`locationToGraphqlTypes`):
+
+| ACF location param | GraphQL types |
+|---|---|
+| `post_type` = `page` / `post` / `product` | `Page` / `Post` / `Product` (+ Simple/Variable) |
+| `page` (specific page id) | `Page` (schema); runtime gated by `locationMatchesPage` |
+| `page_template` / `post_template` | `Template_*` only |
+
+`page_type` / `page_parent` are **not** mapped onto `Page` yet (`locationMatchesPage` would treat them as unknown and match every page).
+
+**Explicit `graphql_types` precedence** (unchanged): if the group sets `graphql_types` and `map_graphql_types_from_location_rules` is off, only those types are used; if map-from-location is on, explicit ∪ location-mapped; with no explicit types, location-mapped alone. Location mapping never overrides an explicit allowlist that omits `Page`.
+
+**Page resolve gate:** when a group has a `page` id location rule, `Page.<group>` returns null unless `locationMatchesPage` matches that page (`==` / `!=`, OR of AND-groups). Groups on Page only via explicit types or `post_type=page` still resolve for every page.
+
 ### ACF Post lean meta
 
-When a query selects ACF groups on `Post` (e.g. `seoFields`), commerce loads only those groups’ field meta keys into `_acfMeta` (or full meta for nested types like flexible content / relationships). Plain post lists with no ACF selection skip ACF meta entirely. This is a runtime hydration change only — the groups cache key (`acf:graphql-groups:v9:*`) is unchanged.
+When a query selects ACF groups on `Post` (e.g. `seoFields`), commerce loads only those groups’ field meta keys into `_acfMeta` (or full meta for nested types like flexible content / relationships). Plain post lists with no ACF selection skip ACF meta entirely.
 
 ### ACF flexible content — disabled layouts
 
