@@ -357,6 +357,8 @@ export function orderNeedsFromInfo(
     "isSubscriptionOrder",
   ]);
 
+  const wantsGa4Tracked = hasAny(nodeFields, ["ga4PurchaseTracked"]);
+
   return {
     addresses: hasAny(nodeFields, ["billing", "shipping"]),
     lineItems: nodeFields.some((f) => f.name.value === "lineItems"),
@@ -369,7 +371,8 @@ export function orderNeedsFromInfo(
     meta:
       wantsMcf ||
       hasAny(nodeFields, ["transactionId"]) ||
-      wantsSubscriptionFlags,
+      wantsSubscriptionFlags ||
+      wantsGa4Tracked,
     subscriptionFlags: wantsSubscriptionFlags,
   };
 }
