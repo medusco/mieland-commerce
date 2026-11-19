@@ -1,9 +1,15 @@
+import type { ResultSetHeader } from "mysql2";
 import { query, queryOne, t } from "../db/mysql.js";
 import { findUserById, isEmailVerified } from "../auth/index.js";
 import { getProductNodes, getAttachmentUrl, getPostMeta } from "./products.js";
 import { toGlobalId } from "../utils/index.js";
 import type { OrderListNeeds } from "../utils/selection.js";
 import type { McfTraUpdatesResponse } from "../clients/mieland-wp-bridge.js";
+import {
+  GA4_PURCHASE_TRACKED_META,
+  ga4PurchaseTrackedFromMeta,
+  ga4TrackedMarkWasNew,
+} from "./order-access.js";
 
 type HposOrder = {
   id: number;
@@ -48,8 +54,20 @@ const SUBSCRIPTION_FREQUENCIES = new Set([
   "every_3_months",
 ]);
 
-function isValidSubscriptionFrequency(value: string): boolean {
+export function isValidSubscriptionFrequency(value: string): boolean {
   return SUBSCRIPTION_FREQUENCIES.has(value);
+}
+
+/** Line-item subscription frequency from item meta, or null for one-time lines. */
+export function subscriptionFrequencyFromItemMeta(
+  meta: Record<string, string>,
+): string | null {
+  const raw =
+    meta._subscription_frequency?.trim() ||
+    meta.subscription_frequency?.trim() ||
+    "";
+  if (!raw || !isValidSubscriptionFrequency(raw)) return null;
+  return raw;
 }
 
 function subscriptionFlagsFromOrderMeta(
@@ -316,6 +334,7 @@ async function orderLines(orderId: number, withProducts: boolean) {
       total: money(meta._line_total),
       isBundledItem: isBundledLineItemMeta(meta),
       bundledByLineItemId: bundledByLineItemIdFromMeta(meta),
+      subscriptionFrequency: subscriptionFrequencyFromItemMeta(meta),
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     };
@@ -377,6 +396,7 @@ async function orderLinesMany(orderIds: number[], withProducts: boolean) {
       total: money(meta._line_total),
       isBundledItem: isBundledLineItemMeta(meta),
       bundledByLineItemId: bundledByLineItemIdFromMeta(meta),
+      subscriptionFrequency: subscriptionFrequencyFromItemMeta(meta),
       product: product ? { node: product } : null,
       variation: variation ? { node: variation } : null,
     });
@@ -825,6 +845,7 @@ function leanOrderNode(row: {
     couponLines: { nodes: [] as unknown[] },
     hasSubscriptions: false,
     isSubscriptionOrder: false,
+    ga4PurchaseTracked: false,
   };
 }
 
@@ -985,6 +1006,7 @@ export async function listCustomerOrders(
       node.amazonMcfTrackingCode = mcf.amazonMcfTrackingCode;
       node.amazonMcfTracking = mcf.amazonMcfTracking;
       node.amazonMcfTraNumber = mcf.amazonMcfTraNumber;
+      node.ga4PurchaseTracked = ga4PurchaseTrackedFromMeta(meta);
       if (!node.transactionId) {
         node.transactionId = meta._transaction_id || "";
       }
@@ -1113,6 +1135,7 @@ export async function shapeOrder(
     couponLines: couponLineNodes,
     hasSubscriptions: subscriptionFlags.hasSubscriptions,
     isSubscriptionOrder: subscriptionFlags.isSubscriptionOrder,
+    ga4PurchaseTracked: ga4PurchaseTrackedFromMeta(meta),
   };
 }
 
@@ -1165,6 +1188,7 @@ export function shapeOrderFromWc(wc: Record<string, unknown>) {
     couponLines: { nodes: couponLineNodes },
     hasSubscriptions: subscriptionFlags.hasSubscriptions,
     isSubscriptionOrder: subscriptionFlags.isSubscriptionOrder,
+    ga4PurchaseTracked: false,
   };
 }
 
@@ -1172,9 +1196,13 @@ export async function getOrderById(
   id: number,
   customerId?: number | null,
   needs?: OrderListNeeds,
+  options?: { skipOwnershipCheck?: boolean },
 ) {
   const order = await shapeOrder(id, needs);
   if (!order) return null;
+  // After orderByKey (or similar) has already authorized access, skip the
+  // customer_id ownership filter so guest and key-authorized loads resolve.
+  if (options?.skipOwnershipCheck) return order;
   if (customerId != null && order.databaseId) {
     const row = await queryOne<{ customer_id: number }>(
       `SELECT customer_id FROM ${t("wc_orders")} WHERE id = ?`,
@@ -1198,6 +1226,31 @@ export async function getOrderById(
     }
   }
   return order;
+}
+
+/**
+ * Atomically set `_mieland_ga4_purchase_tracked` in HPOS `wc_orders_meta`
+ * (same table orderMeta reads). Returns true only when this call newly marked
+ * the order; false if already marked. Race-safe via INSERT … SELECT … WHERE NOT EXISTS.
+ */
+export async function markOrderGa4PurchaseTracked(
+  orderId: number,
+): Promise<boolean> {
+  const ts = String(Math.floor(Date.now() / 1000));
+  const result = await query<ResultSetHeader>(
+    `INSERT INTO ${t("wc_orders_meta")} (order_id, meta_key, meta_value)
+     SELECT ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM ${t("wc_orders_meta")}
+       WHERE order_id = ?
+         AND meta_key = ?
+         AND meta_value IS NOT NULL
+         AND meta_value <> ''
+     )`,
+    [orderId, GA4_PURCHASE_TRACKED_META, ts, orderId, GA4_PURCHASE_TRACKED_META],
+  );
+  // No Redis/memory order cache today; meta is read fresh via orderMeta.
+  return ga4TrackedMarkWasNew(result.affectedRows ?? 0);
 }
 
 /**

@@ -26,10 +26,10 @@ Lean Express + GraphQL Yoga service (WooGraphQL / WooCommerce–compatible subse
 ## GraphQL operations
 
 ### Queries
-\`cart\`, \`products\`, \`customer\`, \`order\`, \`loginClients\`, \`mielandSubscriptionSettings\`, \`mielandSubscriptions\`, \`mielandSubscription\`, \`posts\`, \`post\`, \`categories\`, \`pages\`, \`page\`, \`navigation\`, \`labResults\`
+\`cart\`, \`products\`, \`customer\`, \`order\`, \`orderByKey\`, \`loginClients\`, \`mielandSubscriptionSettings\`, \`mielandSubscriptions\`, \`mielandSubscription\`, \`posts\`, \`post\`, \`categories\`, \`pages\`, \`page\`, \`navigation\`, \`labResults\`
 
 ### Mutations
-\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`calculateCartTax\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`createPayPalOrder\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`, \`pauseMielandSubscription\`, \`resumeMielandSubscription\`, \`writeReview\`
+\`addToCart\`, \`removeItemsFromCart\`, \`updateItemQuantities\`, \`updateShippingMethod\`, \`applyCoupon\`, \`removeCoupons\`, \`calculateCartTax\`, \`createOrder\`, \`checkout\`, \`processOrderPayment\`, \`createPayPalOrder\`, \`updateCustomer\`, \`registerCustomer\`, \`sendPasswordResetEmail\`, \`resetUserPassword\`, \`requestPersonalCoupon\`, \`login\`, \`refreshToken\`, \`updateMielandSubscription\`, \`cancelMielandSubscription\`, \`pauseMielandSubscription\`, \`resumeMielandSubscription\`, \`writeReview\`, \`markOrderGa4Tracked\`
 
 \`Cart.totalTax\` / \`calculateCartTax\` preview US sales tax when a complete delivery address is on the cart (\`CART_TAX_PROVIDER=taxcloud\` uses the WordPress TaxCloud bridge; \`woocommerce\` uses WooCommerce tax rate tables in MySQL). WC still recalculates on place order.
 
@@ -301,6 +301,41 @@ Use the **Try it out** examples on \`POST /graphql\`, or open GraphiQL at \`/gra
   }
 }`,
                     variables: { id: "<customer-global-id>" },
+                  },
+                },
+                orderByKey: {
+                  summary: "orderByKey (payment-complete / GA4)",
+                  value: {
+                    query: `query OrderByKey($orderId: Int!, $orderKey: String!, $billingEmail: String) {
+  orderByKey(orderId: $orderId, orderKey: $orderKey, billingEmail: $billingEmail) {
+    databaseId
+    orderNumber
+    orderKey
+    status
+    total
+    ga4PurchaseTracked
+    lineItems {
+      nodes { productId quantity total subscriptionFrequency }
+    }
+  }
+}`,
+                    variables: {
+                      orderId: 123,
+                      orderKey: "wc_order_...",
+                      billingEmail: "guest@example.com",
+                    },
+                  },
+                },
+                markOrderGa4Tracked: {
+                  summary: "markOrderGa4Tracked",
+                  value: {
+                    query: `mutation MarkGa4($orderId: Int!, $orderKey: String) {
+  markOrderGa4Tracked(orderId: $orderId, orderKey: $orderKey)
+}`,
+                    variables: {
+                      orderId: 123,
+                      orderKey: "wc_order_...",
+                    },
                   },
                 },
                 refreshToken: {

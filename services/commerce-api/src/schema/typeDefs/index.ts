@@ -440,6 +440,8 @@ export const typeDefs = /* GraphQL */ `
     isBundledItem: Boolean
     """Parent order line item id from Woo _bundled_by meta."""
     bundledByLineItemId: Int
+    """Subscription cadence from line item meta when valid; null for one-time lines."""
+    subscriptionFrequency: String
     product: LineItemProductEdge
     variation: LineItemVariationEdge
   }
@@ -554,6 +556,8 @@ export const typeDefs = /* GraphQL */ `
     hasSubscriptions: Boolean
     """True when the order was created by subscription renewal (not initial checkout)."""
     isSubscriptionOrder: Boolean
+    """True when GA4 purchase was already marked via markOrderGa4Tracked."""
+    ga4PurchaseTracked: Boolean
   }
 
   type OrderConnection {
@@ -1322,6 +1326,12 @@ export const typeDefs = /* GraphQL */ `
     products(first: Int, where: ProductQueryInput): RootQueryToProductConnection
     customer(id: ID!): Customer
     order(id: ID!, idType: OrderIdTypeEnum): Order
+    """
+    Load an order for the payment-complete / GA4 purchase page by id + order key.
+    Requires an exact orderKey match; customer-owned orders also require that user's JWT.
+    Returns null when authorization fails (no hint which check failed).
+    """
+    orderByKey(orderId: Int!, orderKey: String!, billingEmail: String): Order
     loginClients: [LoginClient]
     mielandSubscriptionSettings: MielandSubscriptionSettings
     mielandSubscriptions(status: String): [MielandSubscription]
@@ -1406,5 +1416,11 @@ export const typeDefs = /* GraphQL */ `
     Creates the review via WC REST and associates it with the authenticated user.
     """
     writeReview(input: WriteReviewInput!): WriteReviewPayload
+    """
+    Mark an order as having fired the storefront GA4 purchase event.
+    Returns true only when newly marked; false if already tracked.
+    Signed-in owner (orderKey optional) or guest with exact orderKey.
+    """
+    markOrderGa4Tracked(orderId: Int!, orderKey: String): Boolean
   }
 `;

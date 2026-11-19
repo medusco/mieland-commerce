@@ -32,7 +32,17 @@ import {
 } from "../../repositories/customers.js";
 import { isEmailVerified } from "../../auth/index.js";
 import { getOrCreatePersonalCoupon } from "../../repositories/coupons.js";
-import { listCustomerOrders, getOrderById, getOrderMcfTraUpdates } from "../../repositories/orders.js";
+import {
+  listCustomerOrders,
+  getOrderById,
+  getOrderMcfTraUpdates,
+  getOrderPaymentContext,
+  markOrderGa4PurchaseTracked,
+} from "../../repositories/orders.js";
+import {
+  authorizeMarkOrderGa4Tracked,
+  authorizeOrderByKey,
+} from "../../repositories/order-access.js";
 import {
   listCustomerPaymentTokens,
   createCustomerPaymentToken,
@@ -48,6 +58,8 @@ import {
 } from "../../utils/selection.js";
 import type { CartAddress } from "../../engine/types.js";
 import { GraphQLError, type GraphQLResolveInfo } from "graphql";
+
+const ORDER_NOT_FOUND = "Order not found";
 
 function truthy(v: unknown): boolean {
   return v === true || v === 1 || v === "1" || v === "true" || v === "yes";
@@ -125,6 +137,47 @@ export const customerResolvers = {
       const userId = requireUser(ctx);
       const id = parseDatabaseId(args.id);
       return getOrderById(id, userId, orderNeedsFromInfo(info, []));
+    },
+    orderByKey: async (
+      _: unknown,
+      args: {
+        orderId: number;
+        orderKey: string;
+        billingEmail?: string | null;
+      },
+      ctx: AppContext,
+      info: GraphQLResolveInfo,
+    ) => {
+      const orderId = Number(args.orderId);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return null;
+      }
+
+      const ctxOrder = await getOrderPaymentContext(orderId);
+      if (!ctxOrder) return null;
+
+      const auth = authorizeOrderByKey({
+        orderKeyProvided: args.orderKey ?? "",
+        orderKeyStored: ctxOrder.orderKey,
+        billingEmailProvided: args.billingEmail,
+        billingEmailStored: ctxOrder.billing?.email ?? null,
+        customerId: ctxOrder.customerId,
+        userId: ctx.userId,
+      });
+      if (!auth.ok) {
+        if (auth.reason === "key_mismatch") {
+          logJson("warn", {
+            msg: "order_by_key_mismatch",
+            orderId,
+            requestId: ctx.requestId,
+          });
+        }
+        return null;
+      }
+
+      return getOrderById(orderId, null, orderNeedsFromInfo(info, []), {
+        skipOwnershipCheck: true,
+      });
     },
     loginClients: async () => listEnabledLoginClients(),
   },
@@ -788,6 +841,39 @@ export const customerResolvers = {
         clientMutationId: input.clientMutationId,
         success,
       };
+    },
+
+    markOrderGa4Tracked: async (
+      _: unknown,
+      args: { orderId: number; orderKey?: string | null },
+      ctx: AppContext,
+    ) => {
+      const orderId = Number(args.orderId);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        throw new Error(ORDER_NOT_FOUND);
+      }
+
+      const ctxOrder = await getOrderPaymentContext(orderId);
+      if (!ctxOrder) throw new Error(ORDER_NOT_FOUND);
+
+      const auth = authorizeMarkOrderGa4Tracked({
+        customerId: ctxOrder.customerId,
+        userId: ctx.userId,
+        orderKeyProvided: args.orderKey,
+        orderKeyStored: ctxOrder.orderKey,
+      });
+      if (!auth.ok) {
+        if (auth.reason === "key_mismatch") {
+          logJson("warn", {
+            msg: "mark_order_ga4_tracked_key_mismatch",
+            orderId,
+            requestId: ctx.requestId,
+          });
+        }
+        throw new Error(ORDER_NOT_FOUND);
+      }
+
+      return markOrderGa4PurchaseTracked(orderId);
     },
   },
 };
