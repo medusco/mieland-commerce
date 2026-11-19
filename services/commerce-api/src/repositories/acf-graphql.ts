@@ -202,6 +202,46 @@ function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] {
   return [...types];
 }
 
+/** ACF field types whose values span multiple postmeta keys (need full meta bag). */
+const ACF_NESTED_META_FIELD_TYPES = new Set([
+  "flexible_content",
+  "repeater",
+  "group",
+  "relationship",
+  "post_object",
+  "page_link",
+  "gallery",
+  "clone",
+]);
+
+/**
+ * Lean postmeta keys (and whether full meta is required) for requested ACF groups
+ * on Post. Uses each field's ACF `name` (meta key). Nested field types force full meta.
+ */
+export function leanMetaPlanForAcfGroups(
+  groups: AcfGraphqlGroup[],
+  requestedGraphqlFieldNames: string[],
+  graphqlType = "Post",
+): { keys: string[]; needsFullMeta: boolean } {
+  const requested = new Set(requestedGraphqlFieldNames.filter(Boolean));
+  const keys = new Set<string>();
+  let needsFullMeta = false;
+  if (!requested.size) return { keys: [], needsFullMeta: false };
+
+  for (const group of groups) {
+    if (!group.graphqlTypes.includes(graphqlType)) continue;
+    if (!requested.has(group.graphqlFieldName)) continue;
+    for (const field of group.fields) {
+      if (!field.name) continue;
+      keys.add(field.name);
+      if (ACF_NESTED_META_FIELD_TYPES.has(field.type)) {
+        needsFullMeta = true;
+      }
+    }
+  }
+  return { keys: [...keys], needsFullMeta };
+}
+
 function fieldGraphqlName(config: Record<string, unknown>, fallbackName: string): string {
   const explicit = String(config.graphql_field_name ?? "").trim();
   if (explicit) return explicit;

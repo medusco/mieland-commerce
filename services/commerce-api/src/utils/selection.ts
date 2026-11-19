@@ -485,6 +485,21 @@ export function productListIsLean(needs: ProductListNeeds): boolean {
   );
 }
 
+/** Built-in Post fields — anything else selected is treated as a possible ACF group. */
+const POST_CORE_FIELD_NAMES = new Set([
+  "databaseId",
+  "id",
+  "slug",
+  "title",
+  "excerpt",
+  "content",
+  "date",
+  "author",
+  "categories",
+  "tags",
+  "featuredImage",
+]);
+
 export type PostHydrateNeeds = {
   excerpt: boolean;
   content: boolean;
@@ -495,6 +510,8 @@ export type PostHydrateNeeds = {
   honeyGuideFeatured: boolean;
   honeyGuideRecommended: boolean;
   shopContentBlocks: boolean;
+  /** GraphQL field names of ACF groups selected on Post (e.g. seoFields, shopFields). */
+  acfGroupFields: string[];
 };
 
 export const FULL_POST_HYDRATE_NEEDS: PostHydrateNeeds = {
@@ -507,6 +524,8 @@ export const FULL_POST_HYDRATE_NEEDS: PostHydrateNeeds = {
   honeyGuideFeatured: true,
   honeyGuideRecommended: true,
   shopContentBlocks: true,
+  // Empty: shopContentBlocks / honeyGuideRecommended already force full meta.
+  acfGroupFields: [],
 };
 
 function postHydrateNeedsFromNames(
@@ -526,6 +545,7 @@ function postHydrateNeedsFromNames(
     honeyGuideRecommended: honeyGuideNames.has("recommendedProducts"),
     shopContentBlocks:
       shopNames.has("contentBlocks") || names.has("shopFields"),
+    acfGroupFields: [...names].filter((name) => !POST_CORE_FIELD_NAMES.has(name)),
   };
 }
 

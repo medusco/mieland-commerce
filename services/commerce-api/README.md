@@ -13,6 +13,10 @@ npm run dev
 
 Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `NEXT_PUBLIC_CONTENT_BACKEND=commerce` at `http://localhost:4000/graphql` for cart, profile, and CMS content (posts, pages, navigation, ACF). Keep `GRAPHQL_ENDPOINT` on WordPress only when you still need WPGraphQL-only fields.
 
+### ACF Post lean meta
+
+When a query selects ACF groups on `Post` (e.g. `seoFields`), commerce loads only those groups’ field meta keys into `_acfMeta` (or full meta for nested types like flexible content / relationships). Plain post lists with no ACF selection skip ACF meta entirely. This is a runtime hydration change only — the groups cache key (`acf:graphql-groups:v9:*`) is unchanged.
+
 ### ACF flexible content — disabled layouts
 
 Commerce omits disabled rows from every `flexible_content` field (`pageBlocks`, `contentLayout`, `contentBlocks`, nested flex inside layouts, etc.).
