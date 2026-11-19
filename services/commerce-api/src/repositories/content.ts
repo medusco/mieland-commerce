@@ -15,6 +15,7 @@ import {
 } from "./acf.js";
 import {
   groupsForGraphqlType,
+  leanMetaPlanForAcfGroups,
   loadAcfGraphqlGroups,
   locationMatchesPage,
   pageTemplateTypenames,
@@ -77,7 +78,12 @@ type PostBatchContext = {
   needs: PostHydrateNeeds;
 };
 
-function metaKeysForPostNeeds(needs: PostHydrateNeeds): string[] {
+/**
+ * Fixed meta keys for known Post selections. ACF group keys are merged in
+ * `loadPostBatchContext` via `leanMetaPlanForAcfGroups` so any group (e.g. seoFields)
+ * is covered without listing every field here.
+ */
+export function metaKeysForPostNeeds(needs: PostHydrateNeeds): string[] {
   const keys = new Set<string>();
   if (needs.featuredImage) keys.add("_thumbnail_id");
   if (needs.honeyGuideFeatured) {
@@ -177,8 +183,20 @@ async function loadPostBatchContext(
   needs: PostHydrateNeeds,
 ): Promise<PostBatchContext> {
   const ids = rows.map((row) => row.ID);
-  const metaKeys = metaKeysForPostNeeds(needs);
-  const needsFullMeta = needs.shopContentBlocks || needs.honeyGuideRecommended;
+  const baseKeys = metaKeysForPostNeeds(needs);
+  let acfKeys: string[] = [];
+  let acfNeedsFullMeta = false;
+  if (needs.acfGroupFields?.length) {
+    const groups = await loadAcfGraphqlGroups();
+    const plan = leanMetaPlanForAcfGroups(groups, needs.acfGroupFields, "Post");
+    acfKeys = plan.keys;
+    acfNeedsFullMeta = plan.needsFullMeta;
+  }
+  const metaKeys = [...new Set([...baseKeys, ...acfKeys])];
+  const needsFullMeta =
+    needs.shopContentBlocks ||
+    needs.honeyGuideRecommended ||
+    acfNeedsFullMeta;
   const taxonomies = [
     ...(needs.categories ? (["category"] as const) : []),
     ...(needs.tags ? (["post_tag"] as const) : []),

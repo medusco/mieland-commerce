@@ -13,6 +13,22 @@ npm run dev
 
 Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `NEXT_PUBLIC_CONTENT_BACKEND=commerce` at `http://localhost:4000/graphql` for cart, profile, and CMS content (posts, pages, navigation, ACF). Keep `GRAPHQL_ENDPOINT` on WordPress only when you still need WPGraphQL-only fields.
 
+### ACF GraphQL exposure
+
+Field groups with **Show in GraphQL** are loaded from MySQL and cached under `acf:graphql-groups:v10:*` (bump the version in `acf-graphql.ts` when mapping rules change so deploys pick up a fresh schema without a manual Redis flush; process restart still required so Yoga rebuilds SDL).
+
+**Location → GraphQL types** (`locationToGraphqlTypes`):
+
+| ACF location param | GraphQL types |
+|---|---|
+| `post_type` = `page` / `post` / `product` | `Page` / `Post` / `Product` (+ Simple/Variable) |
+| `page`, `page_type`, `page_parent` | `Page` |
+| `page_template` / `post_template` | `Template_*` only |
+
+**Explicit `graphql_types` precedence** (unchanged): if the group sets `graphql_types` and `map_graphql_types_from_location_rules` is off, only those types are used; if map-from-location is on, explicit ∪ location-mapped; with no explicit types, location-mapped alone. Location mapping never overrides an explicit allowlist that omits `Page`.
+
+**Post lean meta:** when a query selects ACF groups on `Post` (e.g. `seoFields`), commerce loads only those groups’ field meta keys into `_acfMeta` (or full meta for nested types like flexible content / relationships). Plain post lists with no ACF selection skip ACF meta entirely. `Page` queries already load full page meta, so Page ACF groups resolve once exposed on the type.
+
 ### ACF flexible content — disabled layouts
 
 Commerce omits disabled rows from every `flexible_content` field (`pageBlocks`, `contentLayout`, `contentBlocks`, nested flex inside layouts, etc.).
