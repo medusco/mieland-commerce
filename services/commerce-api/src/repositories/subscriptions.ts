@@ -151,6 +151,27 @@ export async function cancelSubscription(id: number, userId: number) {
  * After parent order payment, bind WC payment token to new hy_mieland_subscriptions rows.
  * WordPress creates rows on payment_complete; this is best-effort when rows already exist.
  */
+/**
+ * Roll back subscription rows created when a $0 parent order should not have completed.
+ */
+export async function cancelSubscriptionsForParentOrder(args: {
+  parentOrderId: number;
+  userId?: number | null;
+}): Promise<number> {
+  const params: SqlParam[] = [args.parentOrderId];
+  let sql = `UPDATE ${t("mieland_subscriptions")}
+     SET status = 'cancelled', cancelled_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP()
+     WHERE parent_order_id = ?`;
+  if (args.userId != null) {
+    sql += ` AND user_id = ?`;
+    params.push(args.userId);
+  }
+  const header = await query<{ affectedRows: number }>(sql, params);
+  return Number(
+    (header as unknown as { affectedRows?: number }).affectedRows ?? 0,
+  );
+}
+
 export async function linkSubscriptionPaymentForParentOrder(args: {
   parentOrderId: number;
   userId: number;

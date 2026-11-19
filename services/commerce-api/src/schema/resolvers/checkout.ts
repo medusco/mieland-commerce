@@ -57,10 +57,12 @@ import {
   wcLineItemsHaveSubscription,
 } from "../../payment/zero-order.js";
 import {
+  abortZeroSubscriptionOnWcTotalMismatch,
   applyZeroSubscriptionPaidToWcCreatePayload,
   completeZeroSubscriptionOrderPaid,
   finalizeZeroSubscriptionOrderAfterCreate,
   isZeroSubscriptionCartCheckout,
+  isZeroSubscriptionCommerceWcTotalMismatch,
   validateZeroSubscriptionStripeBeforeCreate,
   zeroSubscriptionPaymentMethodRequiredError,
 } from "../../payment/zero-subscription-complete.js";
@@ -698,6 +700,22 @@ export const checkoutResolvers = {
         const started = Date.now();
         try {
           const order = await createWcOrder(wcPayload);
+
+          if (
+            isZeroSubscriptionCommerceWcTotalMismatch(
+              zeroSubscriptionCheckout,
+              order.total,
+            )
+          ) {
+            await abortZeroSubscriptionOnWcTotalMismatch({
+              orderId: Number(order.id),
+              userId: userId ?? null,
+              commerceTotal: calculated.total,
+              wcTotal: order.total,
+              requestId: ctx.requestId,
+            });
+          }
+
           logPaymentTrace("info", {
             msg: "checkout_ok",
             requestId: ctx.requestId,
