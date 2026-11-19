@@ -22,10 +22,14 @@ Field groups with **Show in GraphQL** are loaded from MySQL and cached under `ac
 | ACF location param | GraphQL types |
 |---|---|
 | `post_type` = `page` / `post` / `product` | `Page` / `Post` / `Product` (+ Simple/Variable) |
-| `page`, `page_type`, `page_parent` | `Page` |
+| `page` (specific page id) | `Page` (schema); runtime gated by `locationMatchesPage` |
 | `page_template` / `post_template` | `Template_*` only |
 
+`page_type` / `page_parent` are **not** mapped onto `Page` yet (`locationMatchesPage` would treat them as unknown and match every page).
+
 **Explicit `graphql_types` precedence** (unchanged): if the group sets `graphql_types` and `map_graphql_types_from_location_rules` is off, only those types are used; if map-from-location is on, explicit ∪ location-mapped; with no explicit types, location-mapped alone. Location mapping never overrides an explicit allowlist that omits `Page`.
+
+**Page resolve gate:** when a group has a `page` id location rule, `Page.<group>` returns null unless `locationMatchesPage` matches that page (`==` / `!=`, OR of AND-groups). Groups on Page only via explicit types or `post_type=page` still resolve for every page.
 
 ### ACF Post lean meta
 

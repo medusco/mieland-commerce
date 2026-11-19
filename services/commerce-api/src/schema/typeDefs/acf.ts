@@ -1,5 +1,7 @@
 import type { AcfFieldDef, AcfGraphqlGroup } from "../../repositories/acf-graphql.js";
 import {
+  groupHasPageIdLocationRule,
+  locationMatchesPage,
   pageTemplateTypenames,
   registerKnownTemplateTypes,
   shapeAcfGroupFields,
@@ -388,8 +390,17 @@ export function generateAcfResolvers(
   if (pageGroups.length) {
     resolvers.Page = {};
     for (const group of pageGroups) {
-      resolvers.Page[group.graphqlFieldName] = (page: PageRecord) =>
-        shapeAcfGroupFields(page.meta, group);
+      resolvers.Page[group.graphqlFieldName] = (page: PageRecord) => {
+        // Groups on Page only via `page` id location rules must match this instance.
+        // Explicit graphql_types / post_type=page keep shaping for every page.
+        if (
+          groupHasPageIdLocationRule(group) &&
+          !locationMatchesPage(group, page)
+        ) {
+          return null;
+        }
+        return shapeAcfGroupFields(page.meta, group);
+      };
     }
   }
 

@@ -9,6 +9,7 @@ import { createSchema } from "graphql-yoga";
 
 import {
   leanMetaPlanForAcfGroups,
+  locationMatchesPage,
   locationToGraphqlTypes,
   type AcfFieldDef,
   type AcfGraphqlGroup,
@@ -16,7 +17,11 @@ import {
 } from "./acf-graphql.js";
 import { metaKeysForPostNeeds } from "./content.js";
 import type { PostHydrateNeeds } from "../utils/selection.js";
-import { buildAcfSchema } from "../schema/typeDefs/acf.js";
+import type { PageRecord } from "./content.js";
+import {
+  buildAcfSchema,
+  generateAcfResolvers,
+} from "../schema/typeDefs/acf.js";
 import { typeDefs } from "../schema/typeDefs/index.js";
 
 function rule(
@@ -197,9 +202,9 @@ describe("locationToGraphqlTypes", () => {
     assert.deepEqual(types, ["Page"]);
   });
 
-  it("maps page_type and page_parent to Page", () => {
-    assert.ok(locationToGraphqlTypes([[rule("page_type", "front_page")]]).includes("Page"));
-    assert.ok(locationToGraphqlTypes([[rule("page_parent", "10")]]).includes("Page"));
+  it("does not map page_type or page_parent to Page (no runtime match yet)", () => {
+    assert.deepEqual(locationToGraphqlTypes([[rule("page_type", "front_page")]]), []);
+    assert.deepEqual(locationToGraphqlTypes([[rule("page_parent", "10")]]), []);
   });
 
   it("keeps Post when post_type=post applies alongside a page rule", () => {
@@ -221,6 +226,104 @@ describe("locationToGraphqlTypes", () => {
 
   it("still maps post_type=page to Page", () => {
     assert.deepEqual(locationToGraphqlTypes([[rule("post_type", "page")]]), ["Page"]);
+  });
+});
+
+describe("Page shopFields location gate", () => {
+  function pageRecord(databaseId: number): PageRecord {
+    return {
+      databaseId,
+      title: "Shop",
+      slug: "shop",
+      uri: "/shop/",
+      content: "",
+      templateName: "Default",
+      templateFile: "default",
+      meta: {
+        content_blocks: 'a:1:{i:0;s:16:"honey_guide_block";}',
+        content_blocks_0_above_title_text: "Honey Guide",
+        content_blocks_0_title: "Understanding MGO",
+      },
+    };
+  }
+
+  it("resolves shopFields for the matching page id and null for others", async () => {
+    const shopGroup = shopFieldsFixtureFromLocation();
+    assert.ok(locationMatchesPage(shopGroup, { databaseId: 42, templateFile: "default" }));
+    assert.ok(!locationMatchesPage(shopGroup, { databaseId: 99, templateFile: "default" }));
+
+    const resolvers = generateAcfResolvers([shopGroup]);
+    const pageResolver = resolvers.Page?.shopFields as (
+      page: PageRecord,
+    ) => Promise<Record<string, unknown> | null>;
+
+    const matched = await pageResolver(pageRecord(42));
+    assert.ok(matched);
+    assert.ok(Array.isArray(matched.contentBlocks));
+
+    const other = await pageResolver(pageRecord(99));
+    assert.equal(other, null);
+  });
+
+  it("inverts page id match when operator is !=", async () => {
+    const location = [[rule("page", "42", "!=")]];
+    const shopGroup = group({
+      ...shopFieldsFixtureFromLocation(),
+      location,
+      graphqlTypes: locationToGraphqlTypes(location),
+    });
+    assert.ok(!locationMatchesPage(shopGroup, { databaseId: 42, templateFile: "default" }));
+    assert.ok(locationMatchesPage(shopGroup, { databaseId: 99, templateFile: "default" }));
+
+    const resolvers = generateAcfResolvers([shopGroup]);
+    const pageResolver = resolvers.Page?.shopFields as (
+      page: PageRecord,
+    ) => Promise<Record<string, unknown> | null>;
+
+    assert.equal(await pageResolver(pageRecord(42)), null);
+    assert.ok(await pageResolver(pageRecord(99)));
+  });
+
+  it("keeps Post.shopFields resolver behaviour (no page id gate)", async () => {
+    const shopGroup = shopFieldsFixtureFromLocation();
+    const resolvers = generateAcfResolvers([shopGroup]);
+    const postResolver = resolvers.Post?.shopFields as (post: {
+      shopFields?: { contentBlocks: string[] };
+      _acfMeta?: Record<string, string>;
+    }) => unknown;
+
+    const preShaped = { contentBlocks: ["pre"] };
+    assert.equal(postResolver({ shopFields: preShaped }), preShaped);
+
+    const fromMeta = await postResolver({
+      _acfMeta: {
+        content_blocks: 'a:1:{i:0;s:10:"quiz_block";}',
+        content_blocks_0_title: "Quiz",
+      },
+    });
+    assert.ok(fromMeta);
+  });
+
+  it("does not gate Page groups exposed only via post_type=page", async () => {
+    const allPagesGroup = group({
+      graphqlFieldName: "shopFields",
+      graphqlTypes: ["Page"],
+      mapFromLocation: true,
+      location: [[rule("post_type", "page")]],
+      fields: [
+        field({
+          name: "content_blocks",
+          type: "text",
+          graphqlName: "contentBlocks",
+        }),
+      ],
+    });
+    const resolvers = generateAcfResolvers([allPagesGroup]);
+    const pageResolver = resolvers.Page?.shopFields as (
+      page: PageRecord,
+    ) => Promise<Record<string, unknown> | null>;
+    const shaped = await pageResolver(pageRecord(99));
+    assert.ok(shaped);
   });
 });
 
