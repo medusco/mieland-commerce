@@ -3,21 +3,11 @@ import { describe, it } from "node:test";
 
 import {
   leanMetaPlanForAcfGroups,
-  locationToGraphqlTypes,
   type AcfFieldDef,
   type AcfGraphqlGroup,
-  type AcfLocationRule,
 } from "./acf-graphql.js";
 import { metaKeysForPostNeeds } from "./content.js";
 import type { PostHydrateNeeds } from "../utils/selection.js";
-
-function rule(
-  param: string,
-  value: string,
-  operator = "==",
-): AcfLocationRule {
-  return { param, operator, value };
-}
 
 function field(
   partial: Partial<AcfFieldDef> & Pick<AcfFieldDef, "name" | "type" | "graphqlName">,
@@ -44,39 +34,6 @@ function group(
     ...partial,
   };
 }
-
-describe("locationToGraphqlTypes", () => {
-  it("maps page location rule to Page", () => {
-    const types = locationToGraphqlTypes([[rule("page", "42")]]);
-    assert.deepEqual(types, ["Page"]);
-  });
-
-  it("maps page_type and page_parent to Page", () => {
-    assert.ok(locationToGraphqlTypes([[rule("page_type", "front_page")]]).includes("Page"));
-    assert.ok(locationToGraphqlTypes([[rule("page_parent", "10")]]).includes("Page"));
-  });
-
-  it("keeps Post when post_type=post applies alongside a page rule", () => {
-    const types = locationToGraphqlTypes([
-      [rule("page", "42")],
-      [rule("post_type", "post")],
-    ]);
-    assert.ok(types.includes("Page"));
-    assert.ok(types.includes("Post"));
-  });
-
-  it("maps page_template to Template_* without adding Page", () => {
-    const types = locationToGraphqlTypes([
-      [rule("page_template", "templates/shop.php")],
-    ]);
-    assert.ok(types.some((t) => t.startsWith("Template_")));
-    assert.ok(!types.includes("Page"));
-  });
-
-  it("still maps post_type=page to Page", () => {
-    assert.deepEqual(locationToGraphqlTypes([[rule("post_type", "page")]]), ["Page"]);
-  });
-});
 
 describe("leanMetaPlanForAcfGroups + Post lean meta keys", () => {
   const seoGroup = group({

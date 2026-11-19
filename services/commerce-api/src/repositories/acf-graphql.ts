@@ -179,15 +179,7 @@ function templateValueToGraphqlType(value: string): string {
   return `Template_${graphqlFormatTypeName(slug.replace(/[-_]/g, " "))}`;
 }
 
-/**
- * Map ACF location rules to WPGraphQL type names (WPGraphQL-for-ACF style).
- * Page-targeting params (`page`, `page_type`, `page_parent`) expose the group on `Page`.
- * `page_template` / `post_template` map to `Template_*` types only (not `Page`).
- * Combined with `graphql_types` / `map_graphql_types_from_location_rules` in
- * `loadAcfGraphqlGroupsUncached`: explicit types win unless map-from-location is on
- * (then explicit ∪ mapped); with no explicit types, mapped alone is used.
- */
-export function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] {
+function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] {
   const types = new Set<string>();
   for (const andGroup of location) {
     for (const rule of andGroup) {
@@ -197,13 +189,6 @@ export function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] 
       ) {
         types.add(templateFileToGraphqlType(rule.value));
         types.add(templateValueToGraphqlType(rule.value));
-      }
-      if (
-        rule.param === "page" ||
-        rule.param === "page_type" ||
-        rule.param === "page_parent"
-      ) {
-        types.add("Page");
       }
       if (rule.param === "post_type" && rule.value === "page") types.add("Page");
       if (rule.param === "post_type" && rule.value === "post") types.add("Post");
@@ -442,7 +427,7 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v10";
+const ACF_GROUPS_CACHE_VERSION = "v9";
 
 let memoryGroups: {
   key: string;
