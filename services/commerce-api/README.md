@@ -15,7 +15,7 @@ Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `N
 
 ### ACF GraphQL exposure
 
-Field groups with **Show in GraphQL** are loaded from MySQL and cached under `acf:graphql-groups:v11:*` (bump the version in `acf-graphql.ts` when mapping rules change so deploys pick up a fresh schema without a manual Redis flush; process restart still required so Yoga rebuilds SDL).
+Field groups with **Show in GraphQL** are loaded from MySQL and cached under `acf:graphql-groups:v11:*` (bump the version in `acf-graphql.ts` when mapping rules change so deploys pick up a fresh schema without a manual Redis flush). After an ACF field group is saved in WordPress, call `POST /internal/acf-schema/invalidate` with header `X-Mieland-Internal-Secret` (same value as `MIELAND_INTERNAL_REST_SECRET`) so Yoga reloads SDL without a restart.
 
 **Location → GraphQL types** (`locationToGraphqlTypes`):
 

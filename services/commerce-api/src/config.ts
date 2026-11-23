@@ -163,6 +163,11 @@ export type AppConfig = z.infer<typeof envSchema> & {
 
 let cached: AppConfig | null = null;
 
+/** Test-only: config is cached after first load. */
+export function resetConfigCache(): void {
+  cached = null;
+}
+
 function loadDotEnv(): void {
   const path = resolve(process.cwd(), ".env");
   if (!existsSync(path)) return;

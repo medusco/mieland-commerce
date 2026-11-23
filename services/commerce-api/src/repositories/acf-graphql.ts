@@ -644,6 +644,19 @@ function acfGroupsCacheKey(prefix: string): string {
   return `acf:graphql-groups:${ACF_GROUPS_CACHE_VERSION}:${prefix}`;
 }
 
+export async function invalidateAcfGraphqlGroupsCache(): Promise<void> {
+  const cfg = loadConfig();
+  const cacheKey = acfGroupsCacheKey(cfg.MYSQL_TABLE_PREFIX);
+  memoryGroups = null;
+  inflight = null;
+  const redis = getRedis();
+  await redis.del(cacheKey);
+  logJson("info", {
+    msg: "acf_groups_cache_invalidated",
+    cacheKey,
+  });
+}
+
 /** Field-group schema changes rarely; keep longer than catalog product TTL. */
 function acfGroupsTtlSeconds(): number {
   return Math.max(loadConfig().CATALOG_CACHE_TTL_SECONDS, 3600);
