@@ -6,7 +6,7 @@ import {
   getPostMetaMany,
   getProductNode,
 } from "./products.js";
-import { getOption, getOptionsByPrefix } from "./options.js";
+import { getOptions, getOptionsByPrefix } from "./options.js";
 import { navigationLegalLinks, navigationRobotsTxt } from "./navigation-links.js";
 import {
   pickMeta,
@@ -732,24 +732,43 @@ async function buildNavigationFromOptionsMeta(optionMeta: Record<string, string>
   };
 }
 
-export async function getNavigation() {
-  const candidates = ["options_navigation", "navigation", "acf_navigation"];
+/** Candidate option keys for stored navigation JSON (precedence order). */
+export const NAVIGATION_OPTION_CANDIDATES = [
+  "options_navigation",
+  "navigation",
+  "acf_navigation",
+] as const;
+
+/** First candidate with a usable navigation payload (same precedence as getNavigation). */
+export function pickNavigationOption(
+  options: Map<string, unknown>,
+  candidates: readonly string[] = NAVIGATION_OPTION_CANDIDATES,
+): { name: string; value: Record<string, unknown> } | null {
   for (const name of candidates) {
-    const opt = await getOption(name);
+    const opt = options.get(name);
     if (opt && typeof opt === "object" && hasNavigationPayload(opt)) {
-      const shaped = opt as Record<string, unknown>;
-      const optionMeta = optionsToMeta(await getOptionsByPrefix("options_"), "options_");
-      const legal = navigationLegalLinks(optionMeta);
-      return {
-        id: "navigation",
-        ...shaped,
-        termsOfService: legal.termsOfService,
-        privacyPolicy: legal.privacyPolicy,
-        robotsTxt: navigationRobotsTxt(optionMeta),
-        topMenu: normalizeTopMenu(shaped.topMenu),
-        footer: normalizeFooter(shaped.footer),
-      };
+      return { name, value: opt as Record<string, unknown> };
     }
+  }
+  return null;
+}
+
+export async function getNavigation() {
+  const opts = await getOptions([...NAVIGATION_OPTION_CANDIDATES]);
+  const picked = pickNavigationOption(opts);
+  if (picked) {
+    const shaped = picked.value;
+    const optionMeta = optionsToMeta(await getOptionsByPrefix("options_"), "options_");
+    const legal = navigationLegalLinks(optionMeta);
+    return {
+      id: "navigation",
+      ...shaped,
+      termsOfService: legal.termsOfService,
+      privacyPolicy: legal.privacyPolicy,
+      robotsTxt: navigationRobotsTxt(optionMeta),
+      topMenu: normalizeTopMenu(shaped.topMenu),
+      footer: normalizeFooter(shaped.footer),
+    };
   }
 
   const optionMeta = optionsToMeta(await getOptionsByPrefix("options_"), "options_");

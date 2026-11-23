@@ -296,12 +296,12 @@ export async function shapeAcfField(
         }
         return mediaEdge(ids[0]!);
       }
-      const nodes = [];
-      for (const id of ids) {
-        const edge = await mediaEdge(id);
-        if (edge?.node) nodes.push(edge.node);
-      }
-      return { nodes };
+      const edges = await Promise.all(ids.map((id) => mediaEdge(id)));
+      return {
+        nodes: edges
+          .map((edge) => edge?.node)
+          .filter((node): node is NonNullable<typeof node> => Boolean(node)),
+      };
     }
     if (ids.length) return relationshipConnection(parsed);
     return parsed;
