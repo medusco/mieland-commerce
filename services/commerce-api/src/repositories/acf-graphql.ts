@@ -195,6 +195,174 @@ function templateValueToGraphqlType(value: string): string {
  * `loadAcfGraphqlGroupsUncached`: explicit types win unless map-from-location is on
  * (then explicit ∪ mapped); with no explicit types, mapped alone is used.
  */
+const CONTENT_NODE_GRAPHQL_TYPES = new Set([
+  "Page",
+  "Post",
+  "Product",
+  "SimpleProduct",
+  "VariableProduct",
+]);
+
+type RawAcfLayout = {
+  name: string;
+  key?: string;
+  config: Record<string, unknown>;
+};
+
+function parseLayoutsFromFieldConfig(rawFieldContent: string): RawAcfLayout[] {
+  const config = asRecord(parseMaybe(rawFieldContent));
+  const layoutsRaw = config.layouts;
+  const layoutList = Array.isArray(layoutsRaw)
+    ? layoutsRaw
+    : layoutsRaw
+      ? Object.values(asRecord(layoutsRaw))
+      : [];
+  const out: RawAcfLayout[] = [];
+  for (const layout of layoutList) {
+    const l = asRecord(layout);
+    const name = String(l.name ?? "").trim();
+    if (!name) continue;
+    const key = String(l.key ?? "").trim() || undefined;
+    out.push({ name, key, config: l });
+  }
+  return out;
+}
+
+/** Merge layout stubs from the parent field's serialized ACF config (keys may be absent on first parse). */
+function mergeLayoutsFromFieldConfig(field: AcfFieldDef, rawFieldContent: string): void {
+  for (const raw of parseLayoutsFromFieldConfig(rawFieldContent)) {
+    const exists = field.layouts.some(
+      (layout) =>
+        layout.name === raw.name || (raw.key && layout.key === raw.key),
+    );
+    if (exists) continue;
+    field.layouts.push({
+      name: raw.name,
+      key: raw.key,
+      graphqlName: fieldGraphqlName(raw.config, raw.name),
+      subFields: [],
+    });
+  }
+}
+
+function attachOrphanLayoutChildren(
+  field: AcfFieldDef,
+  children: AcfFieldDef[],
+  rawFieldContent: string,
+): void {
+  const configByKey = new Map(
+    parseLayoutsFromFieldConfig(rawFieldContent)
+      .filter((layout) => layout.key)
+      .map((layout) => [layout.key!, layout]),
+  );
+  const orphansByKey = new Map<string, AcfFieldDef[]>();
+  for (const child of children) {
+    const layoutKey = child.parentLayout;
+    if (!layoutKey) continue;
+    if (field.layouts.some((layout) => layout.key === layoutKey)) continue;
+    const list = orphansByKey.get(layoutKey) ?? [];
+    list.push(child);
+    orphansByKey.set(layoutKey, list);
+  }
+  for (const [layoutKey, subFields] of orphansByKey) {
+    const configLayout = configByKey.get(layoutKey);
+    const name = configLayout?.name;
+    if (!name) continue;
+    let layout = field.layouts.find(
+      (entry) => entry.key === layoutKey || entry.name === name,
+    );
+    if (!layout) {
+      layout = {
+        name,
+        key: layoutKey,
+        graphqlName: fieldGraphqlName(configLayout?.config ?? {}, name),
+        subFields: [],
+      };
+      field.layouts.push(layout);
+    }
+    for (const sub of subFields) {
+      if (!layout.subFields.some((existing) => existing.id === sub.id)) {
+        layout.subFields.push(sub);
+      }
+    }
+  }
+}
+
+function postTypesForAcfLocation(location: AcfLocationRule[][]): string[] {
+  const types = new Set<string>();
+  for (const andGroup of location) {
+    for (const rule of andGroup) {
+      if (rule.param !== "post_type" || rule.operator === "!=") continue;
+      if (rule.value) types.add(rule.value);
+    }
+  }
+  return [...types];
+}
+
+export async function discoverFlexLayoutSlugsFromMeta(
+  fieldName: string,
+  postTypes: readonly string[],
+): Promise<string[]> {
+  if (!fieldName || !postTypes.length) return [];
+  const likePattern = `${fieldName}\\_%\\_acf_fc_layout`;
+  const placeholders = postTypes.map(() => "?").join(", ");
+  const rows = await query<{ meta_value: string }[]>(
+    `SELECT DISTINCT pm.meta_value
+     FROM ${t("postmeta")} pm
+     INNER JOIN ${t("posts")} p ON p.ID = pm.post_id
+     WHERE p.post_type IN (${placeholders})
+       AND pm.meta_key LIKE ? ESCAPE '\\\\'
+       AND pm.meta_value <> ''`,
+    [...postTypes, likePattern],
+  );
+  return [...new Set(rows.map((row) => row.meta_value.trim()).filter(Boolean))].sort();
+}
+
+async function augmentFlexibleLayoutsFromDatastore(
+  fields: AcfFieldDef[],
+  postTypes: string[],
+): Promise<void> {
+  for (const field of fields) {
+    if (field.type === "flexible_content") {
+      const discovered = await discoverFlexLayoutSlugsFromMeta(field.name, postTypes);
+      const known = new Set(field.layouts.map((layout) => layout.name));
+      for (const slug of discovered) {
+        if (known.has(slug)) continue;
+        field.layouts.push({
+          name: slug,
+          graphqlName: fieldGraphqlName({}, slug),
+          subFields: [],
+        });
+        known.add(slug);
+      }
+    }
+    if (field.subFields.length) {
+      await augmentFlexibleLayoutsFromDatastore(field.subFields, postTypes);
+    }
+    for (const layout of field.layouts) {
+      if (layout.subFields.length) {
+        await augmentFlexibleLayoutsFromDatastore(layout.subFields, postTypes);
+      }
+    }
+  }
+}
+
+/**
+ * WPGraphQL-for-ACF: explicit `graphql_types` may list Template_* while location
+ * `post_type` rules still register the group on Page / Post / Product.
+ */
+export function resolveAcfGraphqlTypes(
+  explicitTypes: string[],
+  mapFromLocation: boolean,
+  location: AcfLocationRule[][],
+): string[] {
+  const mapped = locationToGraphqlTypes(location);
+  if (!explicitTypes.length) return [...new Set(mapped)];
+  if (mapFromLocation) return [...new Set([...explicitTypes, ...mapped])];
+  const contentMapped = mapped.filter((type) => CONTENT_NODE_GRAPHQL_TYPES.has(type));
+  return [...new Set([...explicitTypes, ...contentMapped])];
+}
+
 export function locationToGraphqlTypes(location: AcfLocationRule[][]): string[] {
   const types = new Set<string>();
   for (const andGroup of location) {
@@ -390,7 +558,9 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   );
 
   const fieldsByParent = new Map<number, AcfFieldDef[]>();
+  const fieldContentById = new Map<number, string>();
   for (const row of fieldRows) {
+    fieldContentById.set(row.ID, row.post_content || "");
     const def = parseFieldConfig(
       row.ID,
       row.post_parent,
@@ -405,7 +575,10 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
   function attachChildren(def: AcfFieldDef): AcfFieldDef {
     const children = (fieldsByParent.get(def.id) ?? []).map(attachChildren);
     if (def.type === "flexible_content") {
+      const raw = fieldContentById.get(def.id) ?? "";
+      mergeLayoutsFromFieldConfig(def, raw);
       attachLayoutChildren(def, children);
+      attachOrphanLayoutChildren(def, children, raw);
       return def;
     }
     if (children.length && !def.subFields.length) {
@@ -423,16 +596,11 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
     const location = parseLocation(config.location);
     const mapFromLocation = asBool(config.map_graphql_types_from_location_rules);
     const explicitTypes = asStringList(config.graphql_types);
-    const mapped = locationToGraphqlTypes(location);
-    const graphqlTypes = [
-      ...new Set(
-        explicitTypes.length
-          ? mapFromLocation
-            ? [...explicitTypes, ...mapped]
-            : explicitTypes
-          : mapped,
-      ),
-    ];
+    const graphqlTypes = resolveAcfGraphqlTypes(
+      explicitTypes,
+      mapFromLocation,
+      location,
+    );
 
     const graphqlFieldName =
       String(config.graphql_field_name ?? "").trim() ||
@@ -451,10 +619,19 @@ async function loadAcfGraphqlGroupsUncached(): Promise<AcfGraphqlGroup[]> {
       fields: topFields,
     });
   }
+
+  for (const group of out) {
+    const postTypes = postTypesForAcfLocation(group.location);
+    await augmentFlexibleLayoutsFromDatastore(
+      group.fields,
+      postTypes.length ? postTypes : ["product", "page", "post"],
+    );
+  }
+
   return out;
 }
 
-const ACF_GROUPS_CACHE_VERSION = "v10";
+const ACF_GROUPS_CACHE_VERSION = "v11";
 
 let memoryGroups: {
   key: string;
