@@ -15,7 +15,7 @@ Requires MySQL (Woo `hy_` tables) and Redis. Point shop `COMMERCE_ENDPOINT` / `N
 
 ### ACF GraphQL exposure
 
-Field groups with **Show in GraphQL** are loaded from MySQL and cached under `acf:graphql-groups:v10:*` (bump the version in `acf-graphql.ts` when mapping rules change so deploys pick up a fresh schema without a manual Redis flush; process restart still required so Yoga rebuilds SDL).
+Field groups with **Show in GraphQL** are loaded from MySQL and cached under `acf:graphql-groups:v11:*` (bump the version in `acf-graphql.ts` when mapping rules change so deploys pick up a fresh schema without a manual Redis flush; process restart still required so Yoga rebuilds SDL).
 
 **Location → GraphQL types** (`locationToGraphqlTypes`):
 
@@ -27,7 +27,9 @@ Field groups with **Show in GraphQL** are loaded from MySQL and cached under `ac
 
 `page_type` / `page_parent` are **not** mapped onto `Page` yet (`locationMatchesPage` would treat them as unknown and match every page).
 
-**Explicit `graphql_types` precedence** (unchanged): if the group sets `graphql_types` and `map_graphql_types_from_location_rules` is off, only those types are used; if map-from-location is on, explicit ∪ location-mapped; with no explicit types, location-mapped alone. Location mapping never overrides an explicit allowlist that omits `Page`.
+**Explicit `graphql_types` precedence**: with no explicit types, location-mapped alone. If map-from-location is on, explicit ∪ all location-mapped types. If map-from-location is **off**, explicit types are used but **`post_type` location rules still union** `Page` / `Post` / `Product` (+ Simple/Variable) so a group can target `Template_*` and products/posts/pages in one ACF group (e.g. `productPageFields` on `Template_ProductDetails` and `SimpleProduct`). `Template_*` and other explicit-only types are unchanged.
+
+Flexible content layouts present in postmeta (`{field}_N_acf_fc_layout`) but missing from the serialized parent field config are merged into the schema on group load (covers new layouts before the field group is re-saved in wp-admin).
 
 **Page resolve gate:** when a group has a `page` id location rule, `Page.<group>` returns null unless `locationMatchesPage` matches that page (`==` / `!=`, OR of AND-groups). Groups on Page only via explicit types or `post_type=page` still resolve for every page.
 

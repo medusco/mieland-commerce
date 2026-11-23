@@ -11,6 +11,7 @@ import {
   leanMetaPlanForAcfGroups,
   locationMatchesPage,
   locationToGraphqlTypes,
+  resolveAcfGraphqlTypes,
   type AcfFieldDef,
   type AcfGraphqlGroup,
   type AcfLocationRule,
@@ -188,6 +189,111 @@ const STOREFRONT_SHOP_PAGE_QUERY = `
             ctaButton {
               title
               url
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+describe("resolveAcfGraphqlTypes", () => {
+  it("unions Product types from post_type=product when explicit types are Template_* only", () => {
+    const location = [
+      [rule("page_template", "templates/product-details.php")],
+      [rule("post_type", "product")],
+    ];
+    const types = resolveAcfGraphqlTypes(
+      ["Template_ProductDetails"],
+      false,
+      location,
+    );
+    assert.ok(types.includes("Template_ProductDetails"));
+    assert.ok(types.includes("Product"));
+    assert.ok(types.includes("SimpleProduct"));
+    assert.ok(types.includes("VariableProduct"));
+    assert.ok(!types.includes("Page"));
+  });
+
+  it("keeps explicit-only behaviour when mapFromLocation is on", () => {
+    const location = [[rule("post_type", "product")]];
+    const types = resolveAcfGraphqlTypes(
+      ["Template_ProductDetails"],
+      true,
+      location,
+    );
+    assert.ok(types.includes("Template_ProductDetails"));
+    assert.ok(types.includes("Product"));
+  });
+});
+
+/** Product Page Fields — storefront mieland-us PR #118. */
+function productPageFieldsFixture(): AcfGraphqlGroup {
+  const location = [
+    [rule("page_template", "templates/product-details.php")],
+    [rule("post_type", "product")],
+  ];
+  return group({
+    id: 9100,
+    title: "Product Page Fields",
+    graphqlFieldName: "productPageFields",
+    mapFromLocation: false,
+    location,
+    graphqlTypes: resolveAcfGraphqlTypes(
+      ["Template_ProductDetails"],
+      false,
+      location,
+    ),
+    fields: [
+      field({
+        id: 9101,
+        name: "content_layout",
+        type: "flexible_content",
+        graphqlName: "contentLayout",
+        layouts: [
+          {
+            name: "sourced_from_wild",
+            key: "layout_sfw",
+            graphqlName: "sourcedFromWild",
+            subFields: [
+              field({ name: "title", type: "text", graphqlName: "title" }),
+            ],
+          },
+          {
+            name: "product_informational_block",
+            key: "layout_pib",
+            graphqlName: "productInformationalBlock",
+            subFields: [
+              field({ name: "title", type: "text", graphqlName: "title" }),
+              field({ name: "description", type: "textarea", graphqlName: "description" }),
+              field({ name: "info_box_title", type: "text", graphqlName: "infoBoxTitle" }),
+              field({ name: "info_box_text", type: "textarea", graphqlName: "infoBoxText" }),
+            ],
+          },
+        ],
+      }),
+    ],
+  });
+}
+
+const STOREFRONT_PRODUCT_PAGE_FIELDS_QUERY = `
+  query GetProductWildSectionCms {
+    products(first: 1, where: { include: [3436], status: "publish" }) {
+      nodes {
+        ... on SimpleProduct {
+          databaseId
+          productPageFields {
+            contentLayout {
+              __typename
+              ... on ProductPageFieldsContentLayoutProductInformationalBlockLayout {
+                title
+                description
+                infoBoxTitle
+                infoBoxText
+              }
+              ... on ProductPageFieldsContentLayoutSourcedFromWildLayout {
+                title
+              }
             }
           }
         }
@@ -394,6 +500,40 @@ describe("leanMetaPlanForAcfGroups + Post lean meta keys", () => {
     const plan = leanMetaPlanForAcfGroups([shopGroup], ["shopFields"], "Post");
     assert.ok(plan.keys.includes("content_blocks"));
     assert.equal(plan.needsFullMeta, true);
+  });
+});
+
+describe("Product Page Fields schema (storefront PR #118)", () => {
+  it("exposes productPageFields on SimpleProduct and ProductInformationalBlock layout", () => {
+    const productPageGroup = productPageFieldsFixture();
+    assert.ok(productPageGroup.graphqlTypes.includes("SimpleProduct"));
+    assert.ok(productPageGroup.graphqlTypes.includes("Template_ProductDetails"));
+
+    const { sdl } = buildAcfSchema([productPageGroup]);
+    assert.match(
+      sdl,
+      /extend type SimpleProduct \{[\s\S]*productPageFields: ProductPageFields/,
+    );
+    assert.match(
+      sdl,
+      /type ProductPageFieldsContentLayoutProductInformationalBlockLayout[\s\S]*infoBoxText: String/,
+    );
+
+    const thumbnailStub = `
+  type ThumbnailFields {
+    productThumbnailImage: ProductThumbnailImage
+  }
+`;
+    const schema: GraphQLSchema = createSchema({
+      typeDefs: [typeDefs, thumbnailStub, sdl],
+    });
+    const document = parse(STOREFRONT_PRODUCT_PAGE_FIELDS_QUERY);
+    const errors = validate(schema, document);
+    assert.deepEqual(
+      errors.map((e) => e.message),
+      [],
+      "storefront productPageFields query must validate",
+    );
   });
 });
 
