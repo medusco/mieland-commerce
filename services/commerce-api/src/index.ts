@@ -8,17 +8,14 @@ import {
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { createYoga, createSchema } from "graphql-yoga";
+import { createYoga } from "graphql-yoga";
 import { useDisableIntrospection } from "@graphql-yoga/plugin-disable-introspection";
 import { GraphQLError } from "graphql";
 import depthLimit from "graphql-depth-limit";
-import { typeDefs } from "./schema/typeDefs/index.js";
 import {
-  buildAcfSchema,
-  generateAcfResolvers,
-  logAcfSchemaBuild,
-} from "./schema/typeDefs/acf.js";
-import { mergeResolvers, resolvers } from "./schema/resolvers/index.js";
+  buildInitialAcfExecutableSchema,
+  createAcfSchemaSwapTarget,
+} from "./schema/acf-runtime-schema.js";
 import {
   buildContext,
   FORCE_LOGOUT_HEADER,
@@ -29,7 +26,6 @@ import {
 import { loadConfig } from "./config.js";
 import { pingMysql, closeMysql } from "./db/mysql.js";
 import { loadAcfGraphqlGroups } from "./repositories/acf-graphql.js";
-import { listPageTemplateFiles } from "./repositories/content.js";
 import { pingRedis, closeRedis } from "./redis/client.js";
 import { createApqPlugin } from "./apq/plugin.js";
 import {
@@ -56,6 +52,7 @@ import {
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./openapi/spec.js";
 import { registerContactRoutes } from "./routes/contact.js";
+import { registerAcfSchemaInvalidateRoutes } from "./routes/acf-schema-invalidate.js";
 
 let cfg: ReturnType<typeof loadConfig>;
 try {
@@ -100,34 +97,26 @@ try {
   });
 }
 
-const acfSchema = buildAcfSchema(acfGroups, await listPageTemplateFiles());
-logAcfSchemaBuild(acfSchema.summary);
-
 let schema;
 try {
-  schema = createSchema<AppContext>({
-    typeDefs: acfSchema.sdl.trim() ? [typeDefs, acfSchema.sdl] : typeDefs,
-    resolvers: mergeResolvers(resolvers, generateAcfResolvers(acfGroups)),
-  });
+  ({ schema } = await buildInitialAcfExecutableSchema(acfGroups));
   logJson("info", {
     msg: "schema_build_ok",
-    mergedAcfSdl: acfSchema.sdl.trim().length > 0,
-    acfSdlLength: acfSchema.summary.sdlLength,
+    acfGroups: acfGroups.length,
   });
 } catch (err) {
   logJson("error", {
     msg: "schema_build_failed",
     err: err instanceof Error ? err.message : String(err),
     acfGroups: acfGroups.length,
-    acfSdlLength: acfSchema.summary.sdlLength,
-    skippedGroups: acfSchema.summary.skippedGroups,
-    emittedTypes: acfSchema.summary.emittedTypes,
   });
   process.exit(1);
 }
 
+const schemaSwap = createAcfSchemaSwapTarget(schema);
+
 const yoga = createYoga<AppContext>({
-  schema,
+  schema: () => schemaSwap.getSchema(),
   graphqlEndpoint: "/graphql",
   landingPage: !cfg.isProd,
   graphiql: !cfg.isProd,
@@ -194,6 +183,7 @@ app.use(
 app.use(endRejectedCorsPreflight);
 
 registerContactRoutes(app);
+registerAcfSchemaInvalidateRoutes(app, schemaSwap);
 
 app.use(express.json({ limit: cfg.MAX_BODY_BYTES }));
 
